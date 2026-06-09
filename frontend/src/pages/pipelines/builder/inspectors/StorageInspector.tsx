@@ -30,8 +30,8 @@ export default function StorageInspector({ config, onChange, readOnly = false, p
       <div className="space-y-3">
         <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-xs">
           <p className="text-emerald-700 font-medium mb-1">📦 存储配置</p>
-          <p className="text-emerald-600">模式: {String(config.storage_mode || 'auto') === 'auto' ? '自动检测' : config.storage_mode}</p>
-          <p className="text-emerald-600">版本: {config.versioning || 'snapshot'}</p>
+          <p className="text-emerald-600">模式: {String(config.storage_mode || 'auto') === 'auto' ? '自动检测' : String(config.storage_mode)}</p>
+          <p className="text-emerald-600">版本: {String(config.versioning || 'snapshot')}</p>
           <p className="text-emerald-600">Schema推断: {schemaOn ? '✅ 启用' : '关闭'}</p>
         </div>
         {runtimeData && (
@@ -42,7 +42,7 @@ export default function StorageInspector({ config, onChange, readOnly = false, p
               {runtimeData.columns.map((col: string, i: number) => (
                 <div key={i} className="flex justify-between text-gray-600">
                   <span>{col}</span>
-                  <span className="text-gray-400">{(runtimeData.sample as any)[col] || '?'}</span>
+                  <span className="text-gray-400">{String((runtimeData.sample as any)[col] || '?')}</span>
                 </div>
               ))}
             </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { apiClientV2 } from '@/api/client'
 import { Search, Loader2 } from 'lucide-react'
 import OntologySearchBox from '@/components/search/OntologySearchBox'
@@ -9,6 +10,18 @@ interface GraphData {
   nodes: Array<{ id: string; labels: string[]; properties: Record<string, unknown> }>
   edges: Array<{ id: string; source: string; target: string; type: string }>
   neo4j_available: boolean
+}
+
+interface GraphQuality {
+  quality_score: number
+  isolated_node_count: number
+  duplicate_display_name_count: number
+  orphan_relation_count: number
+}
+
+interface IntegrationStatus {
+  neo4j: { available: boolean }
+  chroma: { available: boolean; entity_count: number }
 }
 
 type QueryMode = 'natural' | 'cypher'
@@ -35,6 +48,7 @@ function nodeColor(labels: string[]): string {
 
 export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
+  const { i18n } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
 
@@ -45,11 +59,20 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
   const [query, setQuery] = useState('')
   const [queryLoading, setQueryLoading] = useState(false)
   const [queryResult, setQueryResult] = useState<unknown[]>([])
+  const [quality, setQuality] = useState<GraphQuality | null>(null)
+  const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null)
 
   useEffect(() => {
-    apiClientV2.get(`/ontologies/${ontologyId}/graph?limit=300`)
-      .then((res: any) => setGraphData(res))
-      .catch(() => setGraphData({ nodes: [], edges: [], neo4j_available: false }))
+    Promise.all([
+      apiClientV2.get(`/ontologies/${ontologyId}/graph?limit=300`).catch(() => ({ nodes: [], edges: [], neo4j_available: false })),
+      apiClientV2.get(`/ontologies/${ontologyId}/graph/quality`).catch(() => null),
+      apiClientV2.get(`/ontologies/${ontologyId}/integrations/status`).catch(() => null),
+    ])
+      .then(([graph, q, status]: any[]) => {
+        setGraphData(graph)
+        setQuality(q)
+        setIntegrations(status)
+      })
       .finally(() => setLoading(false))
   }, [ontologyId])
 
@@ -84,7 +107,10 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
 
     const cytoscapeNodes = visibleNodes.map(n => {
       const color = nodeColor(n.labels)
-      const label = String(n.properties?.name_cn || n.properties?.name || n.labels[0] || n.id).slice(0, 20)
+      const localizedName = i18n.language?.startsWith('zh')
+        ? (n.properties?.name_cn || n.properties?.display_name || n.properties?.name)
+        : (n.properties?.name_en || n.properties?.display_name || n.properties?.name_cn || n.properties?.name)
+      const label = String(localizedName || n.labels[0] || n.id).slice(0, 20)
       const labelLen = label.length
       const size = labelLen > 8 ? 88 : labelLen > 5 ? 72 : 60
       return {
@@ -198,7 +224,8 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
 
     // 双击节点 → 跳转实体详情页
     cy.on('dblclick', 'node', evt => {
-      const nid = evt.target.data().id
+      const nodeData = evt.target.data()
+      const nid = nodeData.entityId || nodeData.id
       if (nid) navigate(`/ontologies/${ontologyId}/entities/${nid}`)
     })
 
@@ -208,7 +235,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       cy.destroy()
       cyRef.current = null
     }
-  }, [graphData, hideIsolated, ontologyId, navigate])
+  }, [graphData, hideIsolated, ontologyId, navigate, i18n.language])
 
   const handleQuery = async () => {
     if (!query.trim()) return
@@ -264,6 +291,22 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
         </span>
         <span>节点 {nodes.length}</span>
         <span>边 {edges.length}</span>
+        {quality && (
+          <>
+            <span className={`px-2 py-1 rounded-full border ${quality.quality_score >= 0.8 ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+              图质量 {(quality.quality_score * 100).toFixed(0)}%
+            </span>
+            <span>重复名 {quality.duplicate_display_name_count}</span>
+            <span>孤立 {quality.isolated_node_count}</span>
+            <span>孤儿关系 {quality.orphan_relation_count}</span>
+          </>
+        )}
+        {integrations && (
+          <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${integrations.chroma.available ? 'border-green-200 bg-green-50 text-green-700' : 'border-gray-200 bg-gray-50'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${integrations.chroma.available ? 'bg-green-500' : 'bg-gray-300'}`} />
+            {integrations.chroma.available ? `Chroma ${integrations.chroma.entity_count}` : 'Chroma 未连接'}
+          </span>
+        )}
         {isolatedCount > 0 && (
           <button
             onClick={() => setHideIsolated(h => !h)}

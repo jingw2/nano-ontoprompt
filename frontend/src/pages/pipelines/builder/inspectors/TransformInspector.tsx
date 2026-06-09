@@ -22,7 +22,7 @@ const PATH_OPS_MAP: Record<string, typeof AVAILABLE_OPS> = {
   unstructured: AVAILABLE_OPS.filter(o => o.path === 'C'), wide_table: AVAILABLE_OPS.filter(o => o.path === 'WIDE'),
 }
 
-export default function TransformInspector({ config, onChange, nodeId, readOnly = false, pipelineId }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void; nodeId: string; readOnly?: boolean }) {
+export default function TransformInspector({ config, onChange, readOnly = false, pipelineId }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void; nodeId?: string; readOnly?: boolean; pipelineId?: string }) {
   const currentPath = String(config.path || 'auto')
   const steps = (config.steps || []) as Array<{ op: string; params?: Record<string, unknown> }>
   const [showCatalog, setShowCatalog] = useState(false)
@@ -49,7 +49,7 @@ export default function TransformInspector({ config, onChange, nodeId, readOnly 
         <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-xs">
           <p className="text-amber-700 font-medium mb-1">⚙️ 转换配置</p>
           <p className="text-amber-600">路径: {currentPath === 'auto' ? '自动检测' : currentPath === 'structured' ? 'Path A · 结构化' : currentPath === 'semi_structured' ? 'Path B · 半结构化' : currentPath === 'unstructured' ? 'Path C · 非结构化' : '宽表拆分'}</p>
-          <p className="text-amber-600">引擎: {config.engine || 'pandas'}</p>
+          <p className="text-amber-600">引擎: {String(config.engine || 'pandas')}</p>
           <p className="text-amber-600">步骤: {steps.length} 个</p>
           {steps.length > 0 && (<div className="mt-1 space-y-0.5">{steps.map((s: any, i: number) => (<p key={i} className="text-amber-500">{i + 1}. {AVAILABLE_OPS.find(o => o.op === s.op)?.label || s.op}</p>))}</div>)}
         </div>

@@ -9,6 +9,19 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
 
+function parseLinkedEntities(value: unknown): string[] {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value || '[]')
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
 export default function LogicTab({ ontologyId }: { ontologyId: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -90,38 +103,48 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r: any) => (
-                <tr key={r.id} className="border-b hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium">{r.name_cn}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate">{r.formula || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.description || '—'}</td>
-                  <td className="px-4 py-3">
-                    {(typeof r.linked_entities === 'string' ? (() => { try {{ return JSON.parse(r.linked_entities || '[]'); }} catch {{ return []; }} })() : (r.linked_entities || [])).map((e: string) => (
-                      <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
-                    ))}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || '—'}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs px-1.5 py-0.5 rounded border ${
-                      r.status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
-                      r.status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                      'bg-gray-50 text-gray-600'
-                    }`}>{r.status || 'draft'}</span>
-                  </td>
-                  <td className="px-4 py-3 w-28"><ConfidenceBar value={r.confidence} /></td>
-                  <td className="px-4 py-3 text-center">
-                    <button onClick={() => toggleMut.mutate(r.id)} className="text-gray-500 hover:text-black">
-                      {r.enabled !== false ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
-                    </button>
-                  </td>
-                  <td className="px-4 py-3 text-right space-x-2">
-                    <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)} className="text-blue-500"><Pencil size={14} /></button>
-                    <button onClick={() => deleteMut.mutate(r.id)} className="text-red-500"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((r: any) => {
+                const linkedEntities = parseLinkedEntities(r.linked_entities)
+                const status = r.status || 'draft'
+                const enabled = r.enabled !== false
+                return (
+                  <tr key={r.id} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium">{r.name_cn || r.name || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate">{r.formula || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.description || '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || 'rule'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {linkedEntities.map((e: string) => (
+                          <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                        status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                        status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                        'bg-gray-50 text-gray-600'
+                      }`}>{status}</span>
+                    </td>
+                    <td className="px-4 py-3 w-28"><ConfidenceBar value={r.confidence} /></td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => toggleMut.mutate(r.id)} className="text-gray-500 hover:text-black">
+                        {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right space-x-2">
+                      <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)}
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800">
+                        <Pencil size={14} /> 查看/编辑
+                      </button>
+                      <button onClick={() => deleteMut.mutate(r.id)} className="text-red-500"><Trash2 size={14} /></button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

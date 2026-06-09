@@ -43,6 +43,8 @@ def _seed_db():
         with engine.connect() as conn:
             for stmt in [
                 "ALTER TABLE extraction_tasks ADD COLUMN validation_report TEXT",
+                "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
+                "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
                 "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'simple_llm'",
                 "ALTER TABLE v2_pipelines ADD COLUMN domain VARCHAR(100) DEFAULT '通用'",
                 "ALTER TABLE v2_pipelines ADD COLUMN description TEXT DEFAULT ''",

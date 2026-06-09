@@ -20,7 +20,7 @@ interface Props {
 }
 
 export default function CuratedReviewView({ datasetId, reviewId, data, onComplete }: Props) {
-  const [rows, setRows] = useState(data.map((r, i) => ({ ...r, __idx__: i })))
+  const [rows, setRows] = useState<Array<Record<string, string | number>>>(data.map((r, i) => ({ ...r, __idx__: i })))
   const [pendingEdits, setPendingEdits] = useState<RowEdit[]>([])
   const [saving, setSaving] = useState(false)
   const [notes, setNotes] = useState('')
@@ -56,7 +56,7 @@ export default function CuratedReviewView({ datasetId, reviewId, data, onComplet
   const handleDecision = async (action: 'approve' | 'reject') => {
     if (pendingEdits.length > 0) await saveEdits()
     await apiClient.post(`/api/v2/curated/reviews/${reviewId}/${action}?notes=${encodeURIComponent(notes)}`)
-    onComplete(action)
+    onComplete(action === 'approve' ? 'approved' : 'rejected')
   }
 
   return (

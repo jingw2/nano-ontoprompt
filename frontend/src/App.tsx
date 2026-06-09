@@ -16,6 +16,10 @@ import SettingsPage from '@/pages/settings/SettingsPage'
 import PipelinesLayout from '@/pages/pipelines/PipelinesLayout'
 import PipelineListPage from '@/pages/pipelines/PipelineListPage'
 import PipelineBuilderPage from '@/pages/pipelines/builder/PipelineBuilderPage'
+import ConnectionsTab from '@/pages/pipelines/connections/ConnectionsTab'
+import DatasetsTab from '@/pages/pipelines/datasets/DatasetsTab'
+import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
+import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -37,6 +41,10 @@ export default function App() {
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
           <Route path="/pipelines" element={<ProtectedRoute><PipelinesLayout /></ProtectedRoute>}>
             <Route index element={<PipelineListPage />} />
+            <Route path="connections" element={<ConnectionsTab />} />
+            <Route path="datasets" element={<DatasetsTab />} />
+            <Route path="transforms" element={<TransformsTab />} />
+            <Route path="curated" element={<CuratedTab />} />
           </Route>
           <Route path="/pipelines/:pipelineId" element={<ProtectedRoute><PipelineBuilderPage /></ProtectedRoute>} />
           <Route path="/ontologies" element={<ProtectedRoute><OntologyListPage /></ProtectedRoute>} />

@@ -1,15 +1,18 @@
 """PRD v1.1 Ontology Logic & Actions API"""
 from __future__ import annotations
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
 from app.database import SessionLocal
+from app.deps import get_current_user
+from app.models.user import User
 from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine
 from app.models.v2.action import OntologyActionType, OntologyActionRun
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 def get_db():
     db = SessionLocal()
@@ -32,6 +35,18 @@ class LogicRuleCreate(BaseModel):
     enabled: bool = True
 
 
+class LogicReviewRequest(BaseModel):
+    enabled: Optional[bool] = None
+    status: Optional[str] = None
+    severity: Optional[str] = None
+    notes: str = ""
+
+
+class LogicTestRequest(BaseModel):
+    row: dict = {}
+    parameters: dict = {}
+
+
 @router.get("/{ontology_id}/logic")
 def list_logic_rules(ontology_id: str, logic_type: str = "", db: Session = Depends(get_db)):
     q = db.query(OntologyLogicRule).filter(OntologyLogicRule.ontology_id == ontology_id)
@@ -40,7 +55,9 @@ def list_logic_rules(ontology_id: str, logic_type: str = "", db: Session = Depen
     rules = q.order_by(OntologyLogicRule.created_at.desc()).all()
     return [{"id": r.id, "name": r.name, "logic_type": r.logic_type, "description": r.description,
              "target_entity_type": r.target_entity_type, "severity": r.severity, "enabled": r.enabled,
-             "status": r.status, "version": r.version, "created_at": r.created_at.isoformat() if r.created_at else None}
+             "status": r.status, "version": r.version, "expression": r.expression,
+             "source_type": r.source_type, "source_ref": r.source_ref,
+             "created_at": r.created_at.isoformat() if r.created_at else None}
             for r in rules]
 
 
@@ -70,6 +87,41 @@ def update_logic_rule(ontology_id: str, rule_id: str, body: LogicRuleCreate, db:
     return {"id": rule.id, "status": "updated"}
 
 
+@router.post("/{ontology_id}/logic/{rule_id}/review")
+def review_logic_rule(ontology_id: str, rule_id: str, body: LogicReviewRequest, db: Session = Depends(get_db)):
+    rule = db.query(OntologyLogicRule).filter(
+        OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
+    ).first()
+    if not rule:
+        raise HTTPException(404, "Logic rule not found")
+    if body.enabled is not None:
+        rule.enabled = body.enabled
+    if body.severity is not None:
+        rule.severity = body.severity
+    if body.status is not None:
+        if body.status not in ("draft", "reviewed", "disabled", "published"):
+            raise HTTPException(400, "Invalid logic status")
+        rule.status = body.status
+    if body.notes:
+        ref = dict(rule.source_ref or {})
+        ref["review_notes"] = body.notes
+        ref["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        rule.source_ref = ref
+    rule.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": rule.id, "enabled": rule.enabled, "status": rule.status, "severity": rule.severity}
+
+
+@router.post("/{ontology_id}/logic/{rule_id}/test")
+def test_logic_rule(ontology_id: str, rule_id: str, body: LogicTestRequest, db: Session = Depends(get_db)):
+    rule = db.query(OntologyLogicRule).filter(
+        OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
+    ).first()
+    if not rule:
+        raise HTTPException(404, "Logic rule not found")
+    return {"rule_id": rule.id, **_evaluate_logic_rule(rule, body.row or {}, body.parameters or {})}
+
+
 @router.delete("/{ontology_id}/logic/{rule_id}")
 def delete_logic_rule(ontology_id: str, rule_id: str, db: Session = Depends(get_db)):
     rule = db.query(OntologyLogicRule).filter(
@@ -79,6 +131,29 @@ def delete_logic_rule(ontology_id: str, rule_id: str, db: Session = Depends(get_
         raise HTTPException(404, "Logic rule not found")
     db.delete(rule); db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/{ontology_id}/logic/publish")
+def publish_logic_rules_v2(ontology_id: str, db: Session = Depends(get_db)):
+    from app.models.logic import LogicRule as LogicRuleV1
+
+    rules = db.query(OntologyLogicRule).filter(
+        OntologyLogicRule.ontology_id == ontology_id,
+        OntologyLogicRule.status != "published",
+        OntologyLogicRule.enabled == True,  # noqa: E712
+    ).all()
+    for rule in rules:
+        rule.status = "published"
+        rule.updated_at = datetime.now(timezone.utc)
+
+    v1_rules = db.query(LogicRuleV1).filter(
+        LogicRuleV1.ontology_id == ontology_id,
+        LogicRuleV1.status != "published",
+    ).all()
+    for rule in v1_rules:
+        rule.status = "published"
+    db.commit()
+    return {"published_v2": len(rules), "published_v1": len(v1_rules), "status": "published"}
 
 
 # ── Logic: Discovery ────────────────────────────────────────────
@@ -171,6 +246,19 @@ class ActionTypeCreate(BaseModel):
     enabled: bool = True
 
 
+class ActionRunRequest(BaseModel):
+    target_object_id: Optional[str] = None
+    parameters: dict = {}
+
+
+class ActionReviewRequest(BaseModel):
+    enabled: Optional[bool] = None
+    status: Optional[str] = None
+    permission_rules: Optional[list] = None
+    submission_criteria: Optional[list] = None
+    notes: str = ""
+
+
 @router.get("/{ontology_id}/actions")
 def list_action_types(ontology_id: str, category: str = "", db: Session = Depends(get_db)):
     q = db.query(OntologyActionType).filter(OntologyActionType.ontology_id == ontology_id)
@@ -180,6 +268,9 @@ def list_action_types(ontology_id: str, category: str = "", db: Session = Depend
     return [{"id": a.id, "name": a.name, "action_category": a.action_category,
              "description": a.description, "target_entity_type": a.target_entity_type,
              "enabled": a.enabled, "status": a.status, "version": a.version,
+             "parameters": a.parameters, "submission_criteria": a.submission_criteria,
+             "effects": a.effects, "side_effects": a.side_effects,
+             "permission_rules": a.permission_rules, "backed_by_function": a.backed_by_function,
              "created_at": a.created_at.isoformat() if a.created_at else None} for a in actions]
 
 
@@ -194,6 +285,36 @@ def create_action_type(ontology_id: str, body: ActionTypeCreate, db: Session = D
     )
     db.add(act); db.commit(); db.refresh(act)
     return {"id": act.id, "name": act.name, "status": act.status}
+
+
+@router.post("/{ontology_id}/actions/{action_id}/review")
+def review_action_type(ontology_id: str, action_id: str, body: ActionReviewRequest, db: Session = Depends(get_db)):
+    act = db.query(OntologyActionType).filter(
+        OntologyActionType.id == action_id, OntologyActionType.ontology_id == ontology_id
+    ).first()
+    if not act:
+        raise HTTPException(404, "Action type not found")
+    if body.enabled is not None:
+        act.enabled = body.enabled
+    if body.status is not None:
+        if body.status not in ("draft", "reviewed", "disabled", "published"):
+            raise HTTPException(400, "Invalid action status")
+        act.status = body.status
+    if body.permission_rules is not None:
+        act.permission_rules = body.permission_rules
+    if body.submission_criteria is not None:
+        act.submission_criteria = body.submission_criteria
+    if body.notes:
+        side_effects = list(act.side_effects or [])
+        side_effects.append({
+            "type": "review_note",
+            "notes": body.notes,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        act.side_effects = side_effects
+    act.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": act.id, "enabled": act.enabled, "status": act.status}
 
 
 @router.post("/{ontology_id}/actions/discover")
@@ -263,6 +384,29 @@ def delete_action_type(ontology_id: str, action_id: str, db: Session = Depends(g
     return {"status": "deleted"}
 
 
+@router.post("/{ontology_id}/actions/publish")
+def publish_actions_v2(ontology_id: str, db: Session = Depends(get_db)):
+    from app.models.action import Action as ActionV1
+
+    actions = db.query(OntologyActionType).filter(
+        OntologyActionType.ontology_id == ontology_id,
+        OntologyActionType.status != "published",
+        OntologyActionType.enabled == True,  # noqa: E712
+    ).all()
+    for action in actions:
+        action.status = "published"
+        action.updated_at = datetime.now(timezone.utc)
+
+    v1_actions = db.query(ActionV1).filter(
+        ActionV1.ontology_id == ontology_id,
+        ActionV1.status != "published",
+    ).all()
+    for action in v1_actions:
+        action.status = "published"
+    db.commit()
+    return {"published_v2": len(actions), "published_v1": len(v1_actions), "status": "published"}
+
+
 # ── Action Runs ─────────────────────────────────────────────────
 
 @router.get("/{ontology_id}/action-runs")
@@ -273,3 +417,213 @@ def list_action_runs(ontology_id: str, limit: int = 20, db: Session = Depends(ge
     return [{"id": r.id, "action_type_id": r.action_type_id, "status": r.status,
              "target_object_id": r.target_object_id, "error": r.error,
              "started_at": r.started_at.isoformat() if r.started_at else None} for r in runs]
+
+
+@router.post("/{ontology_id}/actions/{action_id}/run")
+def run_action_type(
+    ontology_id: str,
+    action_id: str,
+    body: ActionRunRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.entity import Entity
+    from app.models.relation import Relation
+
+    action = db.query(OntologyActionType).filter(
+        OntologyActionType.id == action_id,
+        OntologyActionType.ontology_id == ontology_id,
+    ).first()
+    if not action:
+        raise HTTPException(404, "Action type not found")
+    if not action.enabled:
+        raise HTTPException(400, "Action type is disabled")
+    if action.status != "published":
+        raise HTTPException(400, "Action type must be published before runtime execution")
+
+    criteria_errors = _validate_action_submission(action, body.parameters or {}, body.target_object_id, db, ontology_id)
+    if criteria_errors:
+        raise HTTPException(400, {"errors": criteria_errors})
+
+    run = OntologyActionRun(
+        action_type_id=action.id,
+        ontology_id=ontology_id,
+        target_object_id=body.target_object_id,
+        parameters=body.parameters or {},
+        status="running",
+        executed_by=getattr(current_user, "id", None),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    before_snapshot = {}
+    after_snapshot = {}
+    side_effect_results = []
+    try:
+        params = body.parameters or {}
+        for effect in action.effects or []:
+            effect_name = effect.get("action")
+            if effect_name == "set_property":
+                target_id = body.target_object_id or params.get("target_id")
+                prop = effect.get("property")
+                if not target_id or not prop:
+                    raise ValueError("set_property requires target_object_id and effect.property")
+                entity = db.query(Entity).filter(
+                    Entity.id == target_id,
+                    Entity.ontology_id == ontology_id,
+                ).first()
+                if not entity:
+                    raise ValueError(f"Target entity not found: {target_id}")
+                before_snapshot[target_id] = dict(entity.properties or {})
+                props = dict(entity.properties or {})
+                props[str(prop)] = params.get(str(prop))
+                entity.properties = props
+                entity.updated_at = datetime.now(timezone.utc)
+                after_snapshot[target_id] = props
+                side_effect_results.append({"action": effect_name, "target_id": target_id, "property": prop})
+
+            elif effect_name == "create_object":
+                data = dict(params.get("data") or {})
+                entity_type = effect.get("entity_type") or action.target_entity_type or "Object"
+                entity_id = str(uuid.uuid4())
+                entity = Entity(
+                    id=entity_id,
+                    ontology_id=ontology_id,
+                    name_cn=str(data.get("display_name") or data.get("name") or f"{entity_type} {entity_id[:8]}")[:200],
+                    name_en=entity_type,
+                    type=entity_type,
+                    properties=data,
+                    confidence=1.0,
+                )
+                db.add(entity)
+                after_snapshot[entity_id] = data
+                side_effect_results.append({"action": effect_name, "entity_id": entity_id, "entity_type": entity_type})
+
+            elif effect_name in ("merge_relationship", "delete_relationship"):
+                source_id = params.get("source_id")
+                target_id = params.get("target_id")
+                rel_type = effect.get("relation_type")
+                if not source_id or not target_id or not rel_type:
+                    raise ValueError(f"{effect_name} requires source_id, target_id and relation_type")
+                if effect_name == "merge_relationship":
+                    relation = Relation(
+                        id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ontology_id}:{source_id}:{rel_type}:{target_id}:action")),
+                        ontology_id=ontology_id,
+                        source_entity=source_id,
+                        target_entity=target_id,
+                        type=rel_type,
+                        properties={"source": "action_runtime", "action_type_id": action.id},
+                        confidence=1.0,
+                    )
+                    db.merge(relation)
+                    side_effect_results.append({"action": effect_name, "relation_type": rel_type})
+                else:
+                    deleted = db.query(Relation).filter(
+                        Relation.ontology_id == ontology_id,
+                        Relation.source_entity == source_id,
+                        Relation.target_entity == target_id,
+                        Relation.type == rel_type,
+                    ).delete()
+                    side_effect_results.append({"action": effect_name, "relation_type": rel_type, "deleted": deleted})
+
+            else:
+                side_effect_results.append({"action": effect_name or "unknown", "status": "skipped"})
+
+        run.status = "completed"
+        run.before_snapshot = before_snapshot
+        run.after_snapshot = after_snapshot
+        run.side_effect_results = side_effect_results
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"run_id": run.id, "status": run.status, "side_effect_results": side_effect_results}
+    except Exception as e:
+        db.rollback()
+        db.add(run)
+        run.status = "failed"
+        run.error = str(e)
+        run.before_snapshot = before_snapshot or None
+        run.after_snapshot = after_snapshot or None
+        run.side_effect_results = side_effect_results or None
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(400, {"run_id": run.id, "error": str(e)})
+
+
+def _evaluate_logic_rule(rule: OntologyLogicRule, row: dict, parameters: dict) -> dict:
+    expr = dict(rule.expression or {})
+    op = str(expr.get("operator") or expr.get("op") or "").lower()
+    field = expr.get("field") or expr.get("column") or expr.get("property")
+    value = row.get(field) if field else None
+
+    if not op and rule.logic_type in ("mapping", "inference", "automation"):
+        return {"status": "skipped", "passed": None, "reason": f"{rule.logic_type} rule is declarative"}
+    if not op and expr.get("missing_count") is not None:
+        return {"status": "completed", "passed": int(expr.get("missing_count") or 0) == 0}
+    if not op:
+        return {"status": "skipped", "passed": None, "reason": "No executable operator configured"}
+
+    expected = expr.get("value", parameters.get(str(field)) if field else None)
+    try:
+        if op in ("required", "non_empty"):
+            passed = value not in (None, "")
+        elif op in ("equals", "eq"):
+            passed = str(value) == str(expected)
+        elif op in ("not_equals", "ne"):
+            passed = str(value) != str(expected)
+        elif op in ("gt", "gte", "lt", "lte"):
+            left = float(value)
+            right = float(expected)
+            passed = {
+                "gt": left > right,
+                "gte": left >= right,
+                "lt": left < right,
+                "lte": left <= right,
+            }[op]
+        elif op == "in":
+            choices = expected if isinstance(expected, list) else []
+            passed = value in choices or str(value) in {str(v) for v in choices}
+        else:
+            return {"status": "skipped", "passed": None, "reason": f"Unsupported operator: {op}"}
+        return {"status": "completed", "passed": bool(passed), "operator": op, "field": field}
+    except Exception as e:
+        return {"status": "failed", "passed": False, "error": str(e), "operator": op, "field": field}
+
+
+def _validate_action_submission(action: OntologyActionType, params: dict, target_object_id: str | None,
+                                db: Session, ontology_id: str) -> list[dict]:
+    from app.models.entity import Entity
+
+    errors: list[dict] = []
+    for item in action.parameters or []:
+        if not isinstance(item, dict) or not item.get("required"):
+            continue
+        name = item.get("name")
+        if name and params.get(str(name)) in (None, ""):
+            errors.append({"type": "missing_parameter", "parameter": name})
+
+    for criterion in action.submission_criteria or []:
+        if not isinstance(criterion, dict):
+            continue
+        ctype = str(criterion.get("type") or "").lower()
+        if not ctype and criterion.get("logic_type"):
+            continue
+        if ctype == "required_target" and not target_object_id and not params.get("target_id"):
+            errors.append({"type": ctype, "message": "target_object_id is required"})
+        elif ctype == "entity_exists":
+            entity_id = target_object_id or params.get("target_id")
+            if not entity_id or not db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first():
+                errors.append({"type": ctype, "message": "target entity does not exist"})
+        elif ctype == "field_equals":
+            field = criterion.get("field")
+            expected = criterion.get("value")
+            entity_id = target_object_id or params.get("target_id")
+            entity = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first() if entity_id else None
+            actual = (entity.properties or {}).get(field) if entity and field else None
+            if str(actual) != str(expected):
+                errors.append({"type": ctype, "field": field, "expected": expected, "actual": actual})
+        elif ctype == "required_param":
+            name = criterion.get("name")
+            if name and params.get(str(name)) in (None, ""):
+                errors.append({"type": ctype, "parameter": name})
+    return errors

@@ -38,6 +38,30 @@ const TOOLS = [
   { type: 'output', label: '输出', desc: '输出 Curated Dataset' },
 ]
 
+const TYPE_ORDER: Record<string, number> = { connector: 0, storage: 1, transform: 2, output: 3 }
+
+function layoutDefinitionNodes(rawNodes: any[]) {
+  const used = new Set<string>()
+  const hasOverlap = rawNodes.some(n => {
+    const p = n.position
+    if (!p) return true
+    const key = `${Math.round(p.x)}:${Math.round(p.y)}`
+    if (used.has(key)) return true
+    used.add(key)
+    return false
+  })
+  const sorted = [...rawNodes].sort((a, b) => (TYPE_ORDER[a.type] ?? 99) - (TYPE_ORDER[b.type] ?? 99))
+  return rawNodes.map((n, index) => {
+    const layoutIndex = sorted.findIndex(s => s.id === n.id)
+    return {
+      id: n.id,
+      type: n.type,
+      position: hasOverlap ? { x: 120 + layoutIndex * 240, y: 180 + (index % 2) * 20 } : n.position,
+      data: { label: n.label || '', config: n.config || {} },
+    }
+  })
+}
+
 interface SelectedNodeData {
   id: string; type: string; label: string; config: Record<string, unknown>
 }
@@ -49,8 +73,8 @@ export default function PipelineBuilderPage() {
   const inspectorRef = useRef<HTMLDivElement>(null)
   const reactFlowInstanceRef = useRef<any>(null)
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [selectedNode, setSelectedNode] = useState<SelectedNodeData | null>(null)
   const [pipeline, setPipeline] = useState<Pipeline | null>(null)
   const [loading, setLoading] = useState(true)
@@ -84,15 +108,13 @@ export default function PipelineBuilderPage() {
         const lastRun = Array.isArray(runs) && runs.length > 0 ? runs[runs.length - 1] : null
         if (lastRun) {
           pipelinesApi.getRun(lastRun.id).catch(() => {}).then((detail: any) => {
-            const cid = detail?.stats?.curated_dataset_id
-            if (cid) setNodes(nds => nds.map(n => n.type === 'output' ? { ...n, data: { ...n.data, config: { ...(n.data as any).config || {}, curated_dataset_id: cid } } } : n))
+            const curatedIds = detail?.stats?.curated_dataset_ids || []
+            const cid = detail?.stats?.curated_dataset_id || curatedIds[0]
+            if (cid) setNodes(nds => nds.map(n => n.type === 'output' ? { ...n, data: { ...n.data, config: { ...(n.data as any).config || {}, curated_dataset_id: cid, curated_dataset_ids: curatedIds } } } : n))
           })
         }
         const def = pl.definition || { nodes: [], edges: [] }
-        setNodes((def.nodes as any[] || []).map((n: any) => ({
-          id: n.id, type: n.type, position: n.position || { x: 100, y: 200 },
-          data: { label: n.label || '', config: n.config || {} },
-        })))
+        setNodes(layoutDefinitionNodes(def.nodes as any[] || []))
         setEdges((def.edges as any[] || []).map((e: any) => ({
           id: e.id, source: e.source, target: e.target, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed },
         })))
@@ -126,15 +148,16 @@ export default function PipelineBuilderPage() {
       const result = await pipelinesApi.runSync(pipelineId)
       const nodeStatus = (result as any).stats?.node_status || {}
       const runSucceeded = (result as any).status === 'success'
-      const curatedId = (result as any).stats?.curated_dataset_id || ''
+      const curatedIds = (result as any).stats?.curated_dataset_ids || []
+      const curatedId = (result as any).stats?.curated_dataset_id || curatedIds[0] || ''
       setNodes(nds => nds.map(n => {
-        const base = { ...n.data, status: nodeStatus[n.id] || (runSucceeded ? 'success' : 'failed') }
-        if (n.type === 'output' && curatedId) base.config = { ...((base as any).config || {}), curated_dataset_id: curatedId }
+        const base: any = { ...n.data, status: nodeStatus[n.id] || (runSucceeded ? 'success' : 'failed') }
+        if (n.type === 'output' && curatedId) base.config = { ...((base as any).config || {}), curated_dataset_id: curatedId, curated_dataset_ids: curatedIds }
         return { ...n, data: base }
       }))
       setSelectedNode(prev => {
         if (!prev || prev.type !== 'output' || !curatedId) return prev
-        return { ...prev, config: { ...prev.config, curated_dataset_id: curatedId } }
+        return { ...prev, config: { ...prev.config, curated_dataset_id: curatedId, curated_dataset_ids: curatedIds } }
       })
       const pl = await pipelinesApi.get(pipelineId); setPipeline(pl)
     } catch { setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, status: 'failed' } }))) }

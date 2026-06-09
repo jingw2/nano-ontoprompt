@@ -7,7 +7,66 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import type { ModelConfig } from '@/types/ontology'
 import { Trash2, TestTube2, Plus, Pencil, X, Loader2 } from 'lucide-react'
 
-const USAGE_TAGS = ['VLM提取', '结构化提取', '宽表分析', 'Ontology Mapping', 'NL-to-Cypher']
+const CONFIG_TYPES = [
+  { value: 'llm', label: 'LLM配置' },
+  { value: 'ocr', label: 'OCR配置' },
+  { value: 'other', label: '其他配置' },
+]
+
+const PROVIDERS: Record<string, Array<{ value: string; label: string }>> = {
+  llm: [
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'anthropic', label: 'Anthropic' },
+    { value: 'compatible', label: 'OpenAI-Compatible' },
+  ],
+  ocr: [
+    { value: 'easyocr', label: 'EasyOCR' },
+    { value: 'paddleocr', label: 'PaddleOCR' },
+    { value: 'tesseract', label: 'Tesseract' },
+    { value: 'external_api', label: 'External OCR API' },
+  ],
+  other: [
+    { value: 'custom', label: 'Custom' },
+    { value: 'local_service', label: 'Local Service' },
+    { value: 'http_api', label: 'HTTP API' },
+  ],
+}
+
+const USAGE_TAGS = ['VLM提取', '结构化提取', '宽表分析', 'Ontology Mapping', 'NL-to-Cypher', 'OCR文字提取']
+
+function modelList(text?: string) {
+  return text ? text.split('\n').map((s: string) => s.trim()).filter(Boolean) : []
+}
+
+function parseOptions(text?: string) {
+  if (!text?.trim()) return {}
+  return JSON.parse(text)
+}
+
+function buildPayload(data: any, usageTags: string[]) {
+  const options = {
+    ...parseOptions(data.options_json),
+    usage_tags: usageTags,
+    ...(data.config_type === 'ocr' ? {
+      enabled: data.ocr_enabled === 'true',
+      lang: data.ocr_lang || 'ch',
+      device: data.ocr_device || 'cpu',
+    } : {}),
+  }
+  return {
+    name: data.name,
+    config_type: data.config_type || 'llm',
+    provider: data.provider,
+    api_key: data.api_key,
+    api_base: data.api_base,
+    models: modelList(data.models_str),
+    options,
+  }
+}
+
+function typeLabel(type?: string) {
+  return CONFIG_TYPES.find(t => t.value === (type || 'llm'))?.label || 'LLM配置'
+}
 
 export default function ModelsPage() {
   const { t } = useTranslation()
@@ -16,16 +75,16 @@ export default function ModelsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ModelConfig | null>(null)
   const [testResult, setTestResult] = useState<Record<string, string>>({})
   const [formTags, setFormTags] = useState<string[]>([])
-  const { register, handleSubmit, reset, watch } = useForm<any>()
+  const { register, handleSubmit, reset, watch, setValue: setCreateValue } = useForm<any>({
+    defaultValues: { config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' },
+  })
 
   const { data: models = [], isLoading } = useQuery({
     queryKey: ['models'], queryFn: () => modelApi.list() as any,
   })
 
   const createMut = useMutation({
-    mutationFn: (data: any) => modelApi.create({
-      ...data, models: data.models_str ? data.models_str.split('\n').map((s: string) => s.trim()).filter(Boolean) : [], usage_tags: formTags,
-    }),
+    mutationFn: (data: any) => modelApi.create(buildPayload(data, formTags)),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); setShowCreate(false); reset(); setFormTags([]) },
   })
 
@@ -36,34 +95,44 @@ export default function ModelsPage() {
 
   const testMut = useMutation({
     mutationFn: (id: string) => modelApi.test(id),
-    onSuccess: (res: any, id) => setTestResult(prev => ({ ...prev, [id]: '✅ 连接成功' })),
+    onSuccess: (res: any, id) => {
+      const data = res?.data || res
+      setTestResult(prev => ({ ...prev, [id]: data?.ok === false ? `未启用：${data.response || ''}` : '连接成功' }))
+    },
     onError: (err: any, id) => setTestResult(prev => ({ ...prev, [id]: `❌ ${err?.detail || '连接失败'}` })),
   })
 
   // ── 编辑 ──
   const [editTarget, setEditTarget] = useState<ModelConfig | null>(null)
   const [editTags, setEditTags] = useState<string[]>([])
-  const { register: regEdit, handleSubmit: handleEditSubmit, setValue } = useForm<any>()
+  const { register: regEdit, handleSubmit: handleEditSubmit, setValue, watch: watchEdit } = useForm<any>()
 
   const updateMut = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => modelApi.update(id, {
-      ...data, models: data.models_str ? data.models_str.split('\n').map((s: string) => s.trim()).filter(Boolean) : [], usage_tags: editTags,
-    }),
+    mutationFn: ({ id, data }: { id: string; data: any }) => modelApi.update(id, buildPayload(data, editTags)),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); setEditTarget(null); setEditTags([]) },
   })
 
   const openEdit = (m: ModelConfig) => {
-    setEditTarget(m); setEditTags((m as any).usage_tags || [])
-    setValue('name', m.name); setValue('provider', m.provider)
+    const options = m.options || {}
+    setEditTarget(m); setEditTags((options.usage_tags as string[]) || [])
+    setValue('name', m.name); setValue('config_type', m.config_type || 'llm'); setValue('provider', m.provider)
     setValue('api_base', m.api_base || '')
     setValue('models_str', (m.models || []).join('\n'))
+    setValue('ocr_enabled', options.enabled ? 'true' : 'false')
+    setValue('ocr_lang', String(options.lang || 'ch'))
+    setValue('ocr_device', String(options.device || 'cpu'))
+    setValue('options_json', JSON.stringify(
+      Object.fromEntries(Object.entries(options).filter(([k]) => !['usage_tags', 'lang', 'device'].includes(k))),
+      null,
+      2,
+    ))
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold">{t('model.title')}</h2>
-        <button onClick={() => { setShowCreate(true); reset(); setFormTags([]) }}
+        <button onClick={() => { setShowCreate(true); reset({ config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' }); setFormTags([]) }}
           className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-lg text-sm">
           <Plus size={14} /> {t('model.create')}
         </button>
@@ -76,25 +145,25 @@ export default function ModelsPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="font-semibold">{m.name}</h3>
-                  <p className="text-sm text-gray-500">{m.provider}{m.api_base ? ` · ${m.api_base}` : ''}</p>
+                  <p className="text-sm text-gray-500">{typeLabel(m.config_type)} · {m.provider}{m.api_base ? ` · ${m.api_base}` : ''}</p>
                   {m.models?.length > 0 && (
                     <div className="flex gap-1 mt-2 flex-wrap">
                       {m.models.map(mn => <span key={mn} className="bg-gray-100 text-gray-700 text-xs px-2 py-0.5 rounded">{mn}</span>)}
                     </div>
                   )}
-                  {((m as any).usage_tags || []).length > 0 && (
+                  {((m.options?.usage_tags as string[]) || []).length > 0 && (
                     <div className="flex gap-1 flex-wrap mt-1">
-                      {((m as any).usage_tags || []).map((tag: string) => (
+                      {((m.options?.usage_tags as string[]) || []).map((tag: string) => (
                         <span key={tag} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{tag}</span>
                       ))}
                     </div>
                   )}
-                  {testResult[m.id] && <p className={`text-xs mt-1 ${testResult[m.id].startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>{testResult[m.id]}</p>}
+                  {testResult[m.id] && <p className={`text-xs mt-1 ${testResult[m.id].startsWith('连接成功') ? 'text-green-600' : 'text-amber-600'}`}>{testResult[m.id]}</p>}
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => testMut.mutate(m.id)} disabled={testMut.isPending} className="p-1.5 border rounded hover:bg-gray-50" title="测试连接"><TestTube2 size={14} /></button>
-                  <button onClick={() => openEdit(m)} className="p-1.5 border rounded hover:bg-gray-50 text-blue-600" title="编辑"><Pencil size={14} /></button>
-                  <button onClick={() => setDeleteTarget(m)} className="p-1.5 border rounded hover:bg-gray-50 text-red-500"><Trash2 size={14} /></button>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => testMut.mutate(m.id)} disabled={testMut.isPending} className="inline-flex items-center gap-1 px-2.5 py-1.5 border rounded text-xs hover:bg-gray-50 disabled:opacity-50"><TestTube2 size={13} />测试</button>
+                  <button onClick={() => openEdit(m)} className="inline-flex items-center gap-1 px-2.5 py-1.5 border rounded text-xs hover:bg-gray-50 text-blue-600"><Pencil size={13} />编辑</button>
+                  <button onClick={() => setDeleteTarget(m)} className="inline-flex items-center gap-1 px-2.5 py-1.5 border rounded text-xs hover:bg-gray-50 text-red-500"><Trash2 size={13} />删除</button>
                 </div>
               </div>
             </div>
@@ -106,9 +175,9 @@ export default function ModelsPage() {
       </div>
 
       {/* 新建弹窗 */}
-      {showCreate && <ModelFormModal title="新建模型" onClose={() => setShowCreate(false)} onSubmit={d => createMut.mutate(d)}
+      {showCreate && <ModelFormModal title="新建模型" onClose={() => setShowCreate(false)} onSubmit={(d: any) => createMut.mutate(d)}
         isPending={createMut.isPending} formTags={formTags} setFormTags={setFormTags} register={register}
-        handleSubmit={handleSubmit} reset={reset} />}
+        handleSubmit={handleSubmit} configType={watch('config_type') || 'llm'} setValue={setCreateValue} />}
 
       {/* 编辑弹窗 */}
       {editTarget && (
@@ -121,16 +190,34 @@ export default function ModelsPage() {
             <form onSubmit={handleEditSubmit(d => updateMut.mutate({ id: editTarget.id, data: d }))} className="space-y-3">
               <div><label className="block text-sm font-medium mb-1">名称 *</label>
                 <input {...regEdit('name', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+              <div><label className="block text-sm font-medium mb-1">配置分类 *</label>
+                <select {...regEdit('config_type', { required: true, onChange: e => setValue('provider', PROVIDERS[e.target.value]?.[0]?.value || 'custom') })} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  {CONFIG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select></div>
               <div><label className="block text-sm font-medium mb-1">Provider *</label>
                 <select {...regEdit('provider', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="compatible">OpenAI-Compatible</option>
+                  {(PROVIDERS[watchEdit('config_type') || 'llm'] || PROVIDERS.llm).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select></div>
               <div><label className="block text-sm font-medium mb-1">API Base</label>
                 <input {...regEdit('api_base')} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium mb-1">模型名（每行一个）</label>
                 <textarea {...regEdit('models_str')} rows={3} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" /></div>
+              {(watchEdit('config_type') || 'llm') === 'ocr' && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div><label className="block text-sm font-medium mb-1">启用运行</label>
+                    <select {...regEdit('ocr_enabled')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                      <option value="false">关闭</option><option value="true">开启</option>
+                    </select></div>
+                  <div><label className="block text-sm font-medium mb-1">OCR语言</label>
+                    <input {...regEdit('ocr_lang')} placeholder="ch" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+                  <div><label className="block text-sm font-medium mb-1">设备</label>
+                    <select {...regEdit('ocr_device')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                      <option value="cpu">CPU</option><option value="gpu">GPU</option>
+                    </select></div>
+                </div>
+              )}
+              <div><label className="block text-sm font-medium mb-1">高级参数 JSON</label>
+                <textarea {...regEdit('options_json')} rows={3} placeholder={'{\"timeout\": 30}'} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" /></div>
               <div><label className="text-xs text-gray-500 mb-2 block">用途标签</label>
                 <div className="flex flex-wrap gap-2">
                   {USAGE_TAGS.map(tag => {
@@ -157,7 +244,7 @@ export default function ModelsPage() {
 }
 
 /** 新建模型表单弹窗 */
-function ModelFormModal({ title, onClose, onSubmit, isPending, formTags, setFormTags, register, handleSubmit, reset }: any) {
+function ModelFormModal({ title, onClose, onSubmit, isPending, formTags, setFormTags, register, handleSubmit, configType, setValue }: any) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-lg shadow-lg p-6 w-[480px]" onClick={e => e.stopPropagation()}>
@@ -165,9 +252,13 @@ function ModelFormModal({ title, onClose, onSubmit, isPending, formTags, setForm
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
           <div><label className="block text-sm font-medium mb-1">名称 *</label>
             <input {...register('name', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div><label className="block text-sm font-medium mb-1">配置分类 *</label>
+            <select {...register('config_type', { required: true, onChange: (e: any) => setValue('provider', PROVIDERS[e.target.value]?.[0]?.value || 'custom') })} className="w-full border rounded-lg px-3 py-2 text-sm">
+              {CONFIG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select></div>
           <div><label className="block text-sm font-medium mb-1">Provider *</label>
             <select {...register('provider', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="compatible">OpenAI-Compatible</option>
+              {(PROVIDERS[configType] || PROVIDERS.llm).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select></div>
           <div><label className="block text-sm font-medium mb-1">API Key</label>
             <input {...register('api_key')} type="password" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
@@ -175,6 +266,22 @@ function ModelFormModal({ title, onClose, onSubmit, isPending, formTags, setForm
             <input {...register('api_base')} placeholder="https://api.openai.com/v1" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
           <div><label className="block text-sm font-medium mb-1">模型名（每行一个）</label>
             <textarea {...register('models_str')} rows={3} placeholder="gpt-4o&#10;gpt-4o-mini" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" /></div>
+          {configType === 'ocr' && (
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className="block text-sm font-medium mb-1">启用运行</label>
+                <select {...register('ocr_enabled')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="false">关闭</option><option value="true">开启</option>
+                </select></div>
+              <div><label className="block text-sm font-medium mb-1">OCR语言</label>
+                <input {...register('ocr_lang')} placeholder="ch" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+              <div><label className="block text-sm font-medium mb-1">设备</label>
+                <select {...register('ocr_device')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="cpu">CPU</option><option value="gpu">GPU</option>
+                </select></div>
+            </div>
+          )}
+          <div><label className="block text-sm font-medium mb-1">高级参数 JSON</label>
+            <textarea {...register('options_json')} rows={3} placeholder={'{\"timeout\": 30}'} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" /></div>
           <div><label className="text-xs text-gray-500 mb-2 block">用途标签</label>
             <div className="flex flex-wrap gap-2">{[...USAGE_TAGS].map(tag => {
               const sel = formTags.includes(tag)

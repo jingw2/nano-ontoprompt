@@ -11,6 +11,7 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 function OutputNode({ data, selected }: NodeProps) {
   const label = (data as any).label || '输出'
   const status = (data as any).status || 'idle'
+  const count = ((data as any).config?.curated_dataset_ids || []).length
 
   return (
     <div className={`px-3 py-2 rounded-xl border-2 shadow-sm bg-white text-xs min-w-[120px] relative ${
@@ -30,7 +31,7 @@ function OutputNode({ data, selected }: NodeProps) {
         <Database size={13} className="text-purple-500" />
         <span className="font-medium text-purple-700">{label}</span>
       </div>
-      <p className="text-gray-400 mt-0.5">Curated Dataset</p>
+      <p className="text-gray-400 mt-0.5">{count > 1 ? `${count} Curated Datasets` : 'Curated Dataset'}</p>
     </div>
   )
 }

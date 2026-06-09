@@ -9,25 +9,28 @@ export default function OutputInspector({
   onChange: (key: string, value: unknown) => void
   readOnly?: boolean
 }) {
-  const curatedId = (config as any).curated_dataset_id
-  const [preview, setPreview] = useState<any[] | null>(null)
+  const curatedIds = ((config as any).curated_dataset_ids as string[] | undefined) || ((config as any).curated_dataset_id ? [(config as any).curated_dataset_id] : [])
+  const [previews, setPreviews] = useState<Record<string, any[]>>({})
   const [previewLoading, setPreviewLoading] = useState(false)
   const [modalData, setModalData] = useState<{ title: string; rows: any[] } | null>(null)
-  const [datasetInfo, setDatasetInfo] = useState<{ name: string; rows: number; version_no: number } | null>(null)
+  const [datasetInfo, setDatasetInfo] = useState<Record<string, { name: string; rows: number; version_no: number }>>({})
 
   useEffect(() => {
-    if (!curatedId) return; setPreviewLoading(true)
-    Promise.all([
-      apiClientV2.get(`/curated/${curatedId}`).catch(() => null),
-      apiClientV2.get(`/datasets/${curatedId}/versions`).catch(() => null),
-    ]).then(([info, versions]: any) => {
-      if (info) setDatasetInfo({ name: info.name || '', rows: info.row_count || 0, version_no: versions?.[0]?.version_no || 1 })
-      if (versions && versions.length > 0) {
-        apiClientV2.get(`/datasets/${curatedId}/versions/${versions[0].version_no}/preview?limit=10000`)
-          .then((d: any) => setPreview(Array.isArray(d) ? d : [])).catch(() => {})
-      }
+    if (curatedIds.length === 0) return
+    setPreviewLoading(true)
+    Promise.all(curatedIds.map(async id => {
+      const info: any = await apiClientV2.get(`/curated/${id}`).catch(() => null)
+      const versions: any = await apiClientV2.get(`/datasets/${id}/versions`).catch(() => null)
+      const versionNo = versions?.[0]?.version_no || 1
+      const rows: any = versions?.length
+        ? await apiClientV2.get(`/datasets/${id}/versions/${versionNo}/preview?limit=10000`).catch(() => [])
+        : []
+      return { id, info, versionNo, rows: Array.isArray(rows) ? rows : [] }
+    })).then(results => {
+      setDatasetInfo(Object.fromEntries(results.map(r => [r.id, { name: r.info?.name || r.id, rows: r.info?.row_count || r.rows.length, version_no: r.versionNo }])))
+      setPreviews(Object.fromEntries(results.map(r => [r.id, r.rows])))
     }).finally(() => setPreviewLoading(false))
-  }, [curatedId])
+  }, [curatedIds.join('|')])
 
   if (!readOnly) {
     return (
@@ -39,19 +42,16 @@ export default function OutputInspector({
     )
   }
 
-  if (!curatedId) {
+  if (curatedIds.length === 0) {
     return <div className="text-center py-8 text-gray-400 text-xs">尚未运行，暂无数据</div>
   }
 
   return (
     <div className="space-y-3">
-      {/* Dataset Info */}
-      {datasetInfo && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-xs text-green-700 font-medium mb-1"><Database size={12} />{datasetInfo.name}</div>
-          <p className="text-xs text-green-600">行数: {datasetInfo.rows} · v{datasetInfo.version_no}</p>
-        </div>
-      )}
+      <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+        <div className="flex items-center gap-1.5 text-xs text-green-700 font-medium mb-1"><Database size={12} />Curated Dataset(s)</div>
+        <p className="text-xs text-green-600">{curatedIds.length} 张结构化输出表</p>
+      </div>
 
       {/* Loading */}
       {previewLoading && (
@@ -59,26 +59,29 @@ export default function OutputInspector({
       )}
 
       {/* Table Card */}
-      {!previewLoading && preview && preview.length > 0 && (
-        <div>
+      {!previewLoading && curatedIds.map(id => {
+        const rows = previews[id] || []
+        const info = datasetInfo[id]
+        return (
+        <div key={id}>
           <p className="text-xs text-gray-500 mb-2 font-medium">结构化数据表</p>
           <button
-            onClick={() => setModalData({ title: datasetInfo?.name || 'Curated Dataset', rows: preview })}
+            onClick={() => setModalData({ title: info?.name || 'Curated Dataset', rows })}
             className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-gray-400 hover:bg-gray-50 transition-colors text-left"
           >
             <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center shrink-0">
               <Table2 size={14} className="text-green-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-800">{datasetInfo?.name || '数据集'}</p>
-              <p className="text-xs text-gray-400">{preview.length} 行 · {preview.length > 0 ? Object.keys(preview[0]).length : 0} 列</p>
+              <p className="text-sm font-medium text-gray-800 truncate">{info?.name || '数据集'}</p>
+              <p className="text-xs text-gray-400">{rows.length} 行 · {rows.length > 0 ? Object.keys(rows[0]).length : 0} 列 · v{info?.version_no || 1}</p>
             </div>
           </button>
         </div>
-      )}
+      )})}
 
       {/* Empty state */}
-      {!previewLoading && (!preview || preview.length === 0) && (
+      {!previewLoading && curatedIds.length > 0 && Object.values(previews).every(rows => rows.length === 0) && (
         <div className="text-center py-4 text-gray-400 text-xs">暂无数据</div>
       )}
 

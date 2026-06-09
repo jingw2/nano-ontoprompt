@@ -52,11 +52,28 @@ def test_ontology_link_mapping_model_tablename():
     assert OntologyLinkMapping.__tablename__ == "v2_ontology_link_mappings"
 
 
-def test_all_11_tables_registered():
-    """Base.metadata에 v2 테이블 11개가 모두 등록되어 있는지 확인"""
+def test_all_v2_tables_registered():
+    """Base.metadata에 v2 테이블이 모두 등록되어 있는지 확인"""
     from app.database import Base
-    v2_tables = [t for t in Base.metadata.tables.keys() if t.startswith("v2_")]
-    assert len(v2_tables) == 11, f"Expected 11 v2 tables, got {len(v2_tables)}: {v2_tables}"
+    v2_tables = {t for t in Base.metadata.tables.keys() if t.startswith("v2_")}
+    assert v2_tables == {
+        "v2_connections",
+        "v2_datasets",
+        "v2_dataset_versions",
+        "v2_media_items",
+        "v2_pipelines",
+        "v2_pipeline_versions",
+        "v2_pipeline_runs",
+        "v2_curated_datasets",
+        "v2_curated_reviews",
+        "v2_curated_row_edits",
+        "v2_ontology_logic_rules",
+        "v2_ontology_state_machines",
+        "v2_ontology_action_types",
+        "v2_ontology_action_runs",
+        "v2_ontology_mappings",
+        "v2_ontology_link_mappings",
+    }
 
 
 def test_connection_kind_enum_values():

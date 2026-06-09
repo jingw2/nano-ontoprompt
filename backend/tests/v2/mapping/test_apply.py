@@ -88,3 +88,118 @@ def test_create_mapping_saves_to_db():
     )
     db.add.assert_called_once()
     db.commit.assert_called_once()
+
+
+def test_create_mapping_persists_primary_key_column():
+    db = MagicMock()
+    db.add = MagicMock()
+    db.commit = MagicMock()
+    db.refresh = MagicMock()
+    svc = MappingService(db)
+
+    mapping = svc.create_mapping(
+        ontology_id="ont-1",
+        curated_dataset_id="ds-1",
+        entity_class="Order",
+        field_mapping={"order_id": "order_id"},
+        primary_key_column="order_id",
+    )
+
+    assert mapping.field_mapping["__primary_key__"] == "order_id"
+
+
+def test_display_name_uses_order_line_identity():
+    svc = MappingService(MagicMock())
+    mapping = make_mapping_obj()
+    row = {"order_id": "PO-2024-0001", "items.sku": "STL-001", "供应商名称": "天钢原材料有限公司"}
+
+    assert svc._display_name(mapping, row, "__row_hash__", 0) == "PO-2024-0001 / STL-001"
+
+
+def test_display_name_uses_inventory_transaction_identity():
+    svc = MappingService(MagicMock())
+    mapping = make_mapping_obj()
+    row = {"日期": "2026-03-08", "物料编码": "MAT001", "操作类型": "出库", "所在仓库": "仓库C"}
+
+    assert svc._display_name(mapping, row, "__row_hash__", 11) == "2026-03-08 / MAT001 / 出库 / 仓库C #12"
+
+
+def test_display_name_uses_supplier_code_before_name_only():
+    svc = MappingService(MagicMock())
+    mapping = make_mapping_obj()
+    row = {"供应商ID": "SUP001", "供应商名称": "天钢原材料有限公司"}
+
+    assert svc._display_name(mapping, row, "供应商ID", 0) == "SUP001 / 天钢原材料有限公司"
+
+
+def test_normalize_mapping_adds_property_metadata():
+    mapping = make_mapping_obj({"order_id": "order_id"})
+    svc = MappingService(make_db(mapping))
+
+    svc._normalize_mapping(mapping, [
+        {"order_id": "O-1", "amount": "12.5", "created_at": "2026-01-01", "markdown_text": "raw"},
+    ])
+
+    props = {p["column"]: p for p in mapping.field_mapping["__properties__"]}
+    assert props["amount"]["type"] == "float"
+    assert props["created_at"]["type"] == "timestamp"
+    assert props["markdown_text"]["hidden"] is True
+
+
+def test_rows_to_entities_skips_hidden_technical_properties():
+    mapping = make_mapping_obj({
+        "order_id": "order_id",
+        "markdown_text": "markdown_text",
+        "__primary_key__": "order_id",
+        "__properties__": [
+            {"column": "order_id", "property": "order_id", "hidden": False},
+            {"column": "markdown_text", "property": "markdown_text", "hidden": True},
+        ],
+    })
+    svc = MappingService(MagicMock())
+
+    entities = svc._rows_to_entities(mapping, [{"order_id": "O-1", "markdown_text": "large raw text"}])
+
+    assert entities[0]["order_id"] == "O-1"
+    assert "markdown_text" not in entities[0]
+
+
+def test_rows_to_entities_uses_row_instance_names():
+    mapping = OntologyMapping(
+        id="map-supplier",
+        ontology_id="ont-1",
+        curated_dataset_id="ds-1",
+        entity_class="Supplier",
+        field_mapping={
+            "供应商ID": "supplier_id",
+            "供应商名称": "supplier_name",
+            "__primary_key__": "供应商ID",
+        },
+        status="draft",
+        confidence=0.9,
+    )
+    svc = MappingService(MagicMock())
+
+    entities = svc._rows_to_entities(mapping, [{"供应商ID": "SUP001", "供应商名称": "天钢原材料有限公司"}])
+
+    assert entities[0]["display_name"] == "SUP001 / 天钢原材料有限公司"
+    assert entities[0]["name_cn"] == "SUP001 / 天钢原材料有限公司"
+    assert entities[0]["name_en"] == "SUP001 / 天钢原材料有限公司"
+    assert entities[0]["name_en"] != mapping.entity_class
+
+
+def test_display_name_uses_route_c_record_identity_before_filename():
+    svc = MappingService(MagicMock())
+    mapping = make_mapping_obj()
+    row = {
+        "filename": "supply_chain_strategy.md",
+        "source_file": "supply_chain_strategy.md",
+        "record_id": "supply_chain_strategy.md:section:2",
+        "row_type": "section",
+        "section_index": 2,
+        "section_title": "供应商风险管理",
+    }
+
+    assert svc._display_name(mapping, row, "__row_hash__", 1) == (
+        "supply_chain_strategy.md / 供应商风险管理 #2"
+    )

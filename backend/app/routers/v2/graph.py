@@ -1,14 +1,24 @@
 """v2 Graph API — Neo4j 기반"""
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from app.deps import get_current_user
+from app.database import SessionLocal
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def get_neo4j():
     from app.services.v2.graph.neo4j_service import Neo4jService
     return Neo4jService()
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 class CypherRequest(BaseModel):
@@ -26,6 +36,72 @@ def get_graph(ontology_id: str, limit: int = 200, label_filter: str | None = Non
     data["neo4j_available"] = True
     svc.close()
     return data
+
+
+@router.get("/{ontology_id}/graph/quality")
+def graph_quality(ontology_id: str):
+    from app.models.entity import Entity
+    from app.models.relation import Relation
+    from collections import Counter
+
+    db = SessionLocal()
+    try:
+        entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
+        relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+        entity_ids = {e.id for e in entities}
+        connected_ids = {r.source_entity for r in relations} | {r.target_entity for r in relations}
+        orphan_relations = [
+            r.id for r in relations
+            if r.source_entity not in entity_ids or r.target_entity not in entity_ids
+        ]
+        isolated = [e.id for e in entities if e.id not in connected_ids]
+        names = [e.name_cn for e in entities if e.name_cn]
+        duplicate_names = {name: count for name, count in Counter(names).items() if count > 1}
+        object_types = Counter(e.type or "Entity" for e in entities)
+        relation_types = Counter(r.type or "RELATED" for r in relations)
+        node_count = len(entities)
+        edge_count = len(relations)
+        duplicate_name_instances = sum(duplicate_names.values())
+        quality_score = 1.0
+        if node_count:
+            quality_score -= min(0.4, len(isolated) / node_count * 0.4)
+            quality_score -= min(0.25, duplicate_name_instances / node_count * 0.25)
+        if edge_count:
+            quality_score -= min(0.25, len(orphan_relations) / edge_count * 0.25)
+        return {
+            "ontology_id": ontology_id,
+            "node_count": node_count,
+            "edge_count": edge_count,
+            "isolated_node_count": len(isolated),
+            "orphan_relation_count": len(orphan_relations),
+            "duplicate_display_name_count": duplicate_name_instances,
+            "object_type_counts": dict(object_types),
+            "relation_type_counts": dict(relation_types),
+            "relation_density": round(edge_count / node_count, 4) if node_count else 0,
+            "quality_score": round(max(0.0, quality_score), 4),
+            "samples": {
+                "isolated_node_ids": isolated[:10],
+                "orphan_relation_ids": orphan_relations[:10],
+                "duplicate_display_names": dict(list(duplicate_names.items())[:10]),
+            },
+        }
+    finally:
+        db.close()
+
+
+@router.get("/{ontology_id}/integrations/status")
+def integration_status(ontology_id: str):
+    neo = get_neo4j()
+    neo_available = neo.available
+    if neo_available:
+        neo.close()
+    from app.services.v2.vector.chroma_service import ChromaService
+    chroma = ChromaService()
+    return {
+        "ontology_id": ontology_id,
+        "neo4j": {"available": neo_available},
+        "chroma": {"available": chroma.available, "entity_count": chroma.count(ontology_id)},
+    }
 
 
 @router.post("/{ontology_id}/graph/cypher")

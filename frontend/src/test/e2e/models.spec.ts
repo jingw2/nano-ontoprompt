@@ -46,4 +46,12 @@ test.describe('Model Config Management', () => {
     const options = await select.locator('option').allTextContents()
     expect(options.some(o => o.toLowerCase().includes('openai'))).toBeTruthy()
   })
+
+  test('ocr config exposes EasyOCR provider', async ({ page }) => {
+    await page.click('button:has-text("添加模型")')
+    await page.locator('select').first().selectOption('ocr')
+    const providerSelect = page.locator('select').nth(1)
+    const options = await providerSelect.locator('option').allTextContents()
+    expect(options).toContain('EasyOCR')
+  })
 })

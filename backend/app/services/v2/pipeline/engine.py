@@ -10,6 +10,11 @@ def execute_route_a(ctx: PipelineContext, data: list[dict]) -> tuple[list[dict],
     steps = [SchemaInferenceStep(), CleansingStep()]
     for step in steps:
         data = step.run(ctx, data)
+    wide_spec = ctx.spec.get("wide_table_split", {})
+    if wide_spec.get("enabled") or wide_spec.get("split_config"):
+        from app.services.v2.pipeline.steps.wide_table_split import WideTableSplitStep
+
+        data = WideTableSplitStep().run(ctx, data)
     ctx.rows_out = len(data)
     return data, ctx
 

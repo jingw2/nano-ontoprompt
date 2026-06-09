@@ -2,6 +2,8 @@
 from __future__ import annotations
 import logging
 import uuid as _uuid
+import json
+import re
 from sqlalchemy.orm import Session
 from app.models.v2.mapping import OntologyMapping
 
@@ -18,6 +20,9 @@ class MappingService:
     def create_mapping(self, ontology_id: str, curated_dataset_id: str, entity_class: str,
                        field_mapping: dict, primary_key_column: str | None = None,
                        confidence: float = 1.0) -> OntologyMapping:
+        field_mapping = dict(field_mapping or {})
+        if primary_key_column and "__primary_key__" not in field_mapping:
+            field_mapping["__primary_key__"] = primary_key_column
         mapping = OntologyMapping(
             ontology_id=ontology_id, curated_dataset_id=curated_dataset_id,
             entity_class=entity_class, field_mapping=field_mapping,
@@ -35,14 +40,8 @@ class MappingService:
         mapping = self._db.query(OntologyMapping).filter(OntologyMapping.id == mapping_id).first()
         if not mapping:
             raise ValueError(f"Mapping {mapping_id} not found")
-        # PRD: Auto-infer Property Mapping from columns
-        if data and len((mapping.field_mapping or {}).keys()) <= 1:
-            inferred = dict(mapping.field_mapping or {})
-            for col in data[0].keys():
-                if col not in inferred:
-                    inferred[col] = col
-            mapping.field_mapping = inferred
-            self._db.commit()
+        if data:
+            self._normalize_mapping(mapping, data)
         entities = self._rows_to_entities(mapping, data)
         neo4j_count = self._write_neo4j(mapping.entity_class, entities)
         v1_count = self._write_v1_entities(mapping, entities)
@@ -75,46 +74,23 @@ class MappingService:
                 logger.warning(f"读取数据集 {m.curated_dataset_id} 失败: {e}")
                 continue
 
-            # PRD: Auto-infer Property Mapping from columns if not set
-            if rows and len((m.field_mapping or {}).keys()) <= 1:
-                sample = rows[0]
-                inferred_fm = dict(m.field_mapping or {})
-                for col in list(sample.keys()):
-                    if col not in inferred_fm:
-                        # Auto-infer type and create property name
-                        val = sample[col]
-                        ptype = 'string'
-                        if isinstance(val, (int, float)) and not isinstance(val, bool):
-                            ptype = 'number'
-                        elif isinstance(val, str):
-                            if any(kw in col for kw in ('date','time','日期','时间','created','updated')):
-                                ptype = 'timestamp'
-                        inferred_fm[col] = col  # PRD: column name → property name
-                m.field_mapping = inferred_fm
-                self._db.commit()
+            if rows:
+                self._normalize_mapping(m, rows)
 
             entities = self._rows_to_entities(m, rows)
             neo4j_count = self._write_neo4j(m.entity_class, entities)
             v1_count = self._write_v1_entities(m, entities)
 
-            pk_col = (m.field_mapping or {}).get("__primary_key__")
-            # 如果 PK 列不存在，自动使用第一个列（或包含 id 的列）
-            if not pk_col or (rows and pk_col not in rows[0]):
-                if rows:
-                    cols = list(rows[0].keys())
-                    # 优先找含 id 的列
-                    id_cols = [c for c in cols if 'id' in c.lower() and c.lower() != 'width']
-                    pk_col = id_cols[0] if id_cols else cols[0]
-                else:
-                    pk_col = pk_col or "id"
+            pk_col = (m.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(rows)
             entity_id_map = {
-                str(row.get(pk_col, "")) if pk_col else "": e["id"]
+                self._row_identity_value(row, pk_col): e["id"]
                 for row, e in zip(rows, entities)
             }
             mapping_meta[m.id] = {
                 "entity_class": m.entity_class, "pk_col": pk_col,
                 "rows": rows, "entity_id_map": entity_id_map,
                 "columns": list(rows[0].keys()) if rows else [],
+                "property_mappings": (m.field_mapping or {}).get("__properties__", []),
             }
             m.status = "applied"
             entity_results.append({"mapping_id": m.id, "entity_class": m.entity_class,
@@ -129,7 +105,11 @@ class MappingService:
         link_results = self._process_link_mappings(ontology_id, mapping_meta)
         relation_results.extend(link_results)
 
-        # Phase 3: 写入 ChromaDB
+        # Phase 3: Logic / Action Discovery
+        logic_result = self._discover_logic_rules(ontology_id, mappings, mapping_meta, relation_results)
+        action_result = self._discover_action_types(ontology_id, mappings, mapping_meta, relation_results, logic_result)
+
+        # Phase 4: 写入 ChromaDB
         chroma_count = 0
         try:
             from app.services.v2.vector.chroma_service import ChromaService
@@ -151,9 +131,15 @@ class MappingService:
             "ontology_id": ontology_id,
             "entity_mappings": entity_results,
             "relations_written": relation_results,
+            "logic_discovery": logic_result,
+            "action_discovery": action_result,
             "chroma_entities_written": chroma_count,
             "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results),
             "total_relations": sum(r.get("count", 0) for r in relation_results),
+            "total_logic": logic_result.get("total_v2", 0),
+            "total_actions": action_result.get("total_v2", 0),
+            "review_required": True,
+            "publish_status": "draft",
         }
 
     # ── Relation 推断 ───────────────────────────────────────────────
@@ -162,6 +148,7 @@ class MappingService:
                                    mapping_meta: dict) -> list[dict]:
         from app.models.entity import Entity
         from app.models.relation import Relation
+        from app.models.v2.mapping import OntologyLinkMapping
 
         results = []
         m_list = [m for m in mappings if m.id in mapping_meta]
@@ -187,14 +174,16 @@ class MappingService:
 
                 for fk_col, rel_type in fk_candidates:
                     written = 0
+                    src_values: list[str] = []
+                    tgt_values: list[str] = []
                     for row in src_meta["rows"]:
                         fk_val = str(row.get(fk_col, ""))
                         if not fk_val:
                             continue
                         src_pk_col = src_meta["pk_col"]
-                        src_pk_val = str(row.get(src_pk_col, "")) if src_pk_col else ""
+                        src_pk_val = self._row_identity_value(row, src_pk_col)
                         src_eid = src_meta["entity_id_map"].get(src_pk_val)
-                        tgt_eid = tgt_id_map.get(fk_val)
+                        tgt_eid = tgt_id_map.get(self._lookup_identity_value(tgt_pk_col, fk_val))
                         if not src_eid or not tgt_eid:
                             continue
                         src_exists = self._db.query(Entity).filter(Entity.id == src_eid).first()
@@ -202,34 +191,366 @@ class MappingService:
                         if not src_exists or not tgt_exists:
                             continue
                         rel = Relation(
-                            id=str(_uuid.uuid4()), ontology_id=ontology_id,
+                            id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, rel_type, "fk_inference"),
+                            ontology_id=ontology_id,
                             source_entity=src_eid, target_entity=tgt_eid,
                             type=rel_type, properties={"fk_column": fk_col, "source": "fk_inference"},
                             confidence=0.85,
                         )
                         self._db.merge(rel)
+                        src_values.append(src_eid)
+                        tgt_values.append(tgt_eid)
                         written += 1
                     if written:
+                        cardinality = self._infer_cardinality(src_values, tgt_values)
+                        inferred_link = self._upsert_inferred_link_mapping(
+                            ontology_id=ontology_id,
+                            src_dataset_id=src_m.curated_dataset_id,
+                            tgt_dataset_id=tgt_m.curated_dataset_id,
+                            relation_type=rel_type,
+                            src_key=fk_col,
+                            tgt_key=tgt_pk_col,
+                            model=OntologyLinkMapping,
+                        )
+                        for rel in self._db.query(Relation).filter(
+                            Relation.ontology_id == ontology_id,
+                            Relation.type == rel_type,
+                        ).all():
+                            props = dict(rel.properties or {})
+                            if props.get("source") == "fk_inference" and props.get("fk_column") == fk_col:
+                                props["cardinality"] = cardinality
+                                rel.properties = props
                         self._db.commit()
                         self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_class, rel_type)
                         results.append({"src": src_meta["entity_class"], "tgt": tgt_class,
-                                        "rel_type": rel_type, "fk_col": fk_col, "count": written})
+                                        "rel_type": rel_type, "fk_col": fk_col, "count": written,
+                                        "cardinality": cardinality,
+                                        "link_mapping_id": inferred_link.id if inferred_link else None,
+                                        "link_mapping_status": inferred_link.status if inferred_link else None})
         return results
+
+    def _upsert_inferred_link_mapping(
+        self,
+        ontology_id: str,
+        src_dataset_id: str | None,
+        tgt_dataset_id: str | None,
+        relation_type: str,
+        src_key: str,
+        tgt_key: str,
+        model,
+    ):
+        if not src_dataset_id or not tgt_dataset_id:
+            return None
+        existing = self._db.query(model).filter(
+            model.ontology_id == ontology_id,
+            model.src_dataset_id == src_dataset_id,
+            model.tgt_dataset_id == tgt_dataset_id,
+            model.relation_type == relation_type,
+            model.src_key == src_key,
+            model.tgt_key == tgt_key,
+        ).first()
+        if existing:
+            if existing.status not in ("active", "inferred"):
+                existing.status = "inferred"
+            return existing
+        link = model(
+            ontology_id=ontology_id,
+            src_dataset_id=src_dataset_id,
+            tgt_dataset_id=tgt_dataset_id,
+            relation_type=relation_type,
+            src_key=src_key,
+            tgt_key=tgt_key,
+            status="inferred",
+        )
+        self._db.add(link)
+        return link
 
     # ── 工具方法 ─────────────────────────────────────────────────────
 
+    def _normalize_mapping(self, mapping: OntologyMapping, rows: list[dict]) -> None:
+        if not rows:
+            return
+        sample = rows[0]
+        field_map = dict(mapping.field_mapping or {})
+        for col in sample.keys():
+            if col == "content":
+                continue
+            if col not in field_map:
+                field_map[col] = col
+        pk_col = field_map.get("__primary_key__")
+        if (
+            not pk_col
+            or (pk_col != "__row_hash__" and (pk_col not in sample or not self._is_unique_col(rows, pk_col)))
+        ):
+            field_map["__primary_key__"] = self._choose_pk_col(rows)
+        field_map["__properties__"] = self._property_metadata(rows, field_map)
+        if field_map != (mapping.field_mapping or {}):
+            mapping.field_mapping = field_map
+            self._db.commit()
+
+    def _property_metadata(self, rows: list[dict], field_map: dict) -> list[dict]:
+        if not rows:
+            return []
+        sample = rows[0]
+        existing = {
+            item.get("column"): item
+            for item in field_map.get("__properties__", [])
+            if isinstance(item, dict) and item.get("column")
+        }
+        technical_cols = {
+            "content", "storage_uri", "markdown_text", "structured_extraction_error",
+            "structured_extraction_ok", "extraction_strategy", "extraction_method",
+            "source_dataset_id",
+        }
+        result = []
+        for col in sample.keys():
+            if col == "content":
+                continue
+            current = dict(existing.get(col) or {})
+            result.append({
+                "column": col,
+                "property": field_map.get(col, col),
+                "type": current.get("type") or self._infer_property_type(rows, col),
+                "hidden": bool(current.get("hidden", col in technical_cols or col.startswith("__"))),
+                "technical": bool(current.get("technical", col in technical_cols or col.startswith("__"))),
+                "confidence": float(current.get("confidence", 0.85)),
+                "description": current.get("description", ""),
+            })
+        return result
+
+    def _property_metadata_by_column(self, field_map: dict) -> dict:
+        return {
+            item.get("column"): item
+            for item in (field_map or {}).get("__properties__", [])
+            if isinstance(item, dict) and item.get("column")
+        }
+
+    def _infer_property_type(self, rows: list[dict], col: str) -> str:
+        from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+
+        for row in rows[:20]:
+            value = row.get(col)
+            if value not in (None, ""):
+                return SchemaInferenceStep._infer_type(str(value).strip())
+        return "string"
+
+    def _choose_pk_col(self, rows: list[dict]) -> str:
+        if not rows:
+            return "id"
+        cols = [c for c in rows[0].keys() if c != "content"]
+
+        id_like_cols = []
+        for col in cols:
+            lower = col.lower()
+            if lower == "id" or lower.endswith("_id") or col.endswith("ID") or "id" in lower:
+                id_like_cols.append(col)
+        for col in id_like_cols:
+            if self._is_unique_col(rows, col):
+                return col
+        for preferred in ("filename", "source_file", "source_dataset_id", "order_id", "订单号", "供应商ID"):
+            if preferred in cols and self._is_unique_col(rows, preferred):
+                return preferred
+        for col in cols:
+            if self._is_unique_col(rows, col):
+                return col
+        return "__row_hash__"
+
+    def _is_unique_col(self, rows: list[dict], col: str) -> bool:
+        values = [str(row.get(col, "")).strip() for row in rows]
+        return bool(values) and all(values) and len(set(values)) == len(values)
+
+    def _row_hash(self, row: dict) -> str:
+        return json.dumps(
+            {k: v for k, v in row.items() if k != "content"},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+
+    def _row_identity_value(self, row: dict, pk_col: str | None) -> str:
+        if pk_col and pk_col != "__row_hash__" and row.get(pk_col) not in (None, ""):
+            return f"{pk_col}:{row.get(pk_col)}"
+        return f"row_hash:{self._row_hash(row)}"
+
+    def _lookup_identity_value(self, pk_col: str | None, value: str) -> str:
+        if pk_col and pk_col != "__row_hash__":
+            return f"{pk_col}:{value}"
+        return value
+
+    def _stable_row_id(self, mapping: OntologyMapping, row: dict, pk_col: str | None) -> str:
+        identity = self._row_identity_value(row, pk_col)
+        return str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{mapping.ontology_id}:{mapping.entity_class}:{identity}"))
+
+    def _stable_relation_id(self, ontology_id: str, src_eid: str, tgt_eid: str, rel_type: str, source: str) -> str:
+        return str(_uuid.uuid5(
+            _uuid.NAMESPACE_URL,
+            f"{ontology_id}:{src_eid}:{rel_type}:{tgt_eid}:{source}",
+        ))
+
+    def _infer_cardinality(self, source_ids: list[str], target_ids: list[str]) -> str:
+        if not source_ids or not target_ids:
+            return "unknown"
+        source_unique = len(set(source_ids)) == len(source_ids)
+        target_unique = len(set(target_ids)) == len(target_ids)
+        if source_unique and target_unique:
+            return "one_to_one"
+        if source_unique and not target_unique:
+            return "many_to_one"
+        if not source_unique and target_unique:
+            return "one_to_many"
+        return "many_to_many"
+
+    def _has_display_value(self, value) -> bool:
+        if value in (None, ""):
+            return False
+        try:
+            return value == value
+        except Exception:
+            return True
+
+    def _join_display_parts(self, row: dict, cols: tuple[str, ...], min_parts: int = 1) -> str | None:
+        parts = []
+        for col in cols:
+            value = row.get(col)
+            if self._has_display_value(value):
+                parts.append(str(value))
+        if len(parts) >= min_parts:
+            return " / ".join(parts)
+        return None
+
+    def _display_name(self, mapping: OntologyMapping, row: dict, pk_col: str | None, index: int) -> str:
+        row_type = str(row.get("row_type") or "")
+        source_file = row.get("source_file") or row.get("filename")
+        if row_type == "rule":
+            condition = str(row.get("condition") or "").strip()
+            suffix = f" #{row.get('rule_index')}" if row.get("rule_index") not in (None, "") else ""
+            return f"{source_file or mapping.entity_class} / Rule{suffix}: {condition[:80]}".strip()
+        if row_type == "table_row":
+            section = row.get("section_title") or "Table"
+            table_idx = row.get("table_index") or 1
+            row_idx = row.get("table_row_index") or index + 1
+            return f"{source_file or mapping.entity_class} / {section} / T{table_idx}R{row_idx}"
+        if row_type == "section":
+            section = row.get("section_title") or "Section"
+            section_idx = row.get("section_index") or index + 1
+            return f"{source_file or mapping.entity_class} / {section} #{section_idx}"
+        if row.get("record_id") not in (None, "") and pk_col == "__row_hash__":
+            return str(row.get("record_id"))
+
+        for cols in (
+            ("order_id", "items.sku"),
+            ("order_id", "items.name"),
+            ("订单号", "物料编码"),
+        ):
+            label = self._join_display_parts(row, cols, min_parts=2)
+            if label:
+                return label
+
+        inventory_label = self._join_display_parts(row, ("日期", "物料编码", "操作类型", "所在仓库"), min_parts=3)
+        if inventory_label:
+            return f"{inventory_label} #{index + 1}"
+
+        supplier_label = self._join_display_parts(row, ("供应商ID", "供应商名称"), min_parts=2)
+        if supplier_label:
+            return supplier_label
+
+        if pk_col and pk_col != "__row_hash__" and pk_col in row and self._has_display_value(row.get(pk_col)):
+            return str(row.get(pk_col))
+
+        candidates = []
+        for col in row.keys():
+            lower = col.lower()
+            if any(token in lower for token in ("name", "title")) or any(token in col for token in ("名称", "标题", "文件名")):
+                candidates.append(col)
+        for col in (
+            pk_col,
+            "order_id", "订单号", "运单号", "供应商ID", "物料编码",
+            "filename", "source_file",
+        ):
+            if col and col != "__row_hash__" and col in row:
+                candidates.append(col)
+        for col in candidates:
+            value = row.get(col)
+            if value not in (None, ""):
+                return str(value)
+        return f"{mapping.entity_class} #{index + 1}"
+
+    def _first_value(self, row: dict, cols: list[str]) -> str | None:
+        for col in cols:
+            if not col or col == "__row_hash__" or col not in row:
+                continue
+            value = row.get(col)
+            if self._has_display_value(value):
+                return str(value)
+        return None
+
+    def _identity_columns(self, row: dict, pk_col: str | None) -> list[str]:
+        cols = list(row.keys())
+        result: list[str] = []
+        if pk_col:
+            result.append(pk_col)
+        for col in cols:
+            lower = col.lower()
+            if (
+                lower == "id"
+                or lower.endswith("_id")
+                or col.endswith("ID")
+                or "编号" in col
+                or "编码" in col
+                or col in ("订单号", "运单号", "单号")
+            ):
+                result.append(col)
+        return list(dict.fromkeys(result))
+
+    def _name_columns(self, row: dict) -> list[str]:
+        result: list[str] = []
+        for col in row.keys():
+            lower = col.lower()
+            if any(token in lower for token in ("name", "title")) or any(token in col for token in ("名称", "姓名", "标题")):
+                result.append(col)
+        return result
+
+    def _has_cjk(self, value: str | None) -> bool:
+        return bool(value and re.search(r"[\u4e00-\u9fff]", value))
+
+    def _instance_names(self, mapping: OntologyMapping, row: dict, pk_col: str | None, index: int) -> dict[str, str]:
+        """Return row-instance names. These must describe the record, not the schema/table."""
+        display = self._display_name(mapping, row, pk_col, index)
+        id_value = self._first_value(row, self._identity_columns(row, pk_col))
+        name_value = self._first_value(row, self._name_columns(row))
+
+        if not self._has_cjk(display):
+            en = display
+        elif id_value and name_value and id_value != name_value and not self._has_cjk(name_value):
+            en = f"{id_value} / {name_value}"
+        else:
+            en = display
+
+        return {
+            "display_name": display,
+            "name_cn": str(display)[:200],
+            "name_en": str(en)[:200],
+        }
+
     def _rows_to_entities(self, mapping: OntologyMapping, rows: list[dict]) -> list[dict]:
         field_map = mapping.field_mapping or {}
-        pk_col = field_map.get("__primary_key__")
+        pk_col = field_map.get("__primary_key__") or self._choose_pk_col(rows)
+        property_meta = self._property_metadata_by_column(field_map)
         entities = []
-        for row in rows:
+        for index, row in enumerate(rows):
             props: dict = {"ontology_id": mapping.ontology_id}
             for col, prop in field_map.items():
                 if col.startswith("__"):
                     continue
+                if property_meta.get(col, {}).get("hidden"):
+                    continue
                 if col in row:
                     props[prop] = row[col]
-            props["id"] = str(row[pk_col]) if pk_col and pk_col in row else str(_uuid.uuid4())
+            props["id"] = self._stable_row_id(mapping, row, pk_col if pk_col in row else None)
+            props["source_id"] = props["id"]
+            props.update(self._instance_names(mapping, row, pk_col, index))
+            props["name"] = props["name_cn"]
+            props["object_type"] = mapping.entity_class
             entities.append(props)
         return entities
 
@@ -239,12 +560,12 @@ class MappingService:
         try:
             for props in entities:
                 eid = props["id"]
-                name_cn = next((str(v) for k, v in props.items()
-                               if k not in ("id", "ontology_id") and v), mapping.entity_class)
+                name_cn = props.get("name_cn") or props.get("display_name") or eid
+                name_en = props.get("name_en") or props.get("display_name") or eid
                 other = {k: v for k, v in props.items() if k not in ("id", "ontology_id")}
                 self._db.merge(Entity(
                     id=eid, ontology_id=mapping.ontology_id,
-                    name_cn=str(name_cn)[:200], name_en=mapping.entity_class,
+                    name_cn=str(name_cn)[:200], name_en=str(name_en)[:200],
                     type=mapping.entity_class, properties=other,
                     confidence=mapping.confidence or 0.85,
                 ))
@@ -254,6 +575,360 @@ class MappingService:
             logger.warning(f"v1 entities 写入失败: {e}")
             self._db.rollback()
         return count
+
+    # ── Logic / Action Discovery ───────────────────────────────────
+
+    def _upsert_v2_logic(self, ontology_id: str, name: str, logic_type: str, description: str,
+                         target_entity_type: str | None, expression: dict, source_type: str,
+                         severity: str = "info") -> bool:
+        from app.models.v2.logic import OntologyLogicRule
+
+        exists = self._db.query(OntologyLogicRule).filter(
+            OntologyLogicRule.ontology_id == ontology_id,
+            OntologyLogicRule.name == name,
+        ).first()
+        if exists:
+            exists.logic_type = logic_type
+            exists.description = description
+            exists.target_entity_type = target_entity_type
+            exists.expression = expression
+            exists.source_type = source_type
+            exists.severity = severity
+            return False
+        self._db.add(OntologyLogicRule(
+            ontology_id=ontology_id,
+            name=name,
+            logic_type=logic_type,
+            description=description,
+            target_entity_type=target_entity_type,
+            expression=expression,
+            source_type=source_type,
+            severity=severity,
+            status="draft",
+            enabled=True,
+        ))
+        return True
+
+    def _upsert_v1_logic(self, ontology_id: str, name: str, logic_type: str, description: str,
+                         linked_entities: list[str] | None = None, confidence: float = 0.85) -> bool:
+        from app.models.logic import LogicRule
+
+        exists = self._db.query(LogicRule).filter(
+            LogicRule.ontology_id == ontology_id,
+            LogicRule.name_cn == name,
+        ).first()
+        if exists:
+            exists.description = description
+            exists.formula = logic_type
+            exists.linked_entities = linked_entities or []
+            return False
+        self._db.add(LogicRule(
+            id=str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{ontology_id}:logic:{name}")),
+            ontology_id=ontology_id,
+            name_cn=name,
+            name_en=name.replace(" ", "_").replace(":_", "_"),
+            description=description,
+            formula=logic_type,
+            confidence=confidence,
+            enabled=True,
+            status="draft",
+            linked_entities=linked_entities or [],
+        ))
+        return True
+
+    def _discover_logic_rules(self, ontology_id: str, mappings: list[OntologyMapping],
+                              mapping_meta: dict, relation_results: list[dict]) -> dict:
+        created_v2 = 0
+        created_v1 = 0
+
+        for m in mappings:
+            meta = mapping_meta.get(m.id)
+            if not meta:
+                continue
+            field_map = m.field_mapping or {}
+            pk_col = meta.get("pk_col")
+            mapping_name = f"Mapping Rule: {m.entity_class}"
+            desc = f"{m.entity_class} object type is built from curated dataset {m.curated_dataset_id}."
+            expr = {
+                "curated_dataset_id": m.curated_dataset_id,
+                "primary_key": pk_col,
+                "field_mapping": field_map,
+                "property_mappings": meta.get("property_mappings", []),
+                "row_count": len(meta.get("rows", [])),
+            }
+            created_v2 += int(self._upsert_v2_logic(
+                ontology_id, mapping_name, "mapping", desc, m.entity_class, expr, "mapping", "info",
+            ))
+            created_v1 += int(self._upsert_v1_logic(
+                ontology_id, mapping_name, "mapping", desc, [m.entity_class], 0.9,
+            ))
+
+            for col in meta.get("columns", []):
+                if col == "content":
+                    continue
+                values = [row.get(col) for row in meta.get("rows", [])]
+                missing = sum(1 for v in values if v in (None, ""))
+                if missing:
+                    name = f"Validation Rule: {m.entity_class}.{col} completeness"
+                    description = f"Validate completeness for {m.entity_class}.{col}; missing rows: {missing}."
+                    created_v2 += int(self._upsert_v2_logic(
+                        ontology_id, name, "validation", description, m.entity_class,
+                        {"column": col, "missing_count": missing, "row_count": len(values)},
+                        "schema_quality", "warning",
+                    ))
+                    created_v1 += int(self._upsert_v1_logic(
+                        ontology_id, name, "validation", description, [m.entity_class], 0.8,
+                    ))
+
+            typed_properties = [
+                {"property": item.get("property"), "column": item.get("column"), "type": item.get("type")}
+                for item in meta.get("property_mappings", [])
+                if isinstance(item, dict) and not item.get("hidden")
+            ]
+            if typed_properties:
+                name = f"Schema Rule: {m.entity_class} property types"
+                description = f"Schema contract for {m.entity_class} properties inferred from curated dataset columns."
+                created_v2 += int(self._upsert_v2_logic(
+                    ontology_id, name, "validation", description, m.entity_class,
+                    {"properties": typed_properties, "primary_key": pk_col},
+                    "schema", "info",
+                ))
+                created_v1 += int(self._upsert_v1_logic(
+                    ontology_id, name, "validation", description, [m.entity_class], 0.84,
+                ))
+
+            state_cols = [
+                col for col in meta.get("columns", [])
+                if any(token in col.lower() for token in ("status", "state")) or any(token in col for token in ("状态", "阶段"))
+            ]
+            for col in state_cols:
+                states = sorted({str(row.get(col)) for row in meta.get("rows", []) if row.get(col) not in (None, "")})
+                if states:
+                    name = f"State Rule: {m.entity_class}.{col}"
+                    description = f"State property discovered on {m.entity_class}.{col}: {', '.join(states[:8])}."
+                    created_v2 += int(self._upsert_v2_logic(
+                        ontology_id, name, "state", description, m.entity_class,
+                        {"state_property": col, "states": states}, "state_detection", "info",
+                    ))
+                    created_v1 += int(self._upsert_v1_logic(
+                        ontology_id, name, "state", description, [m.entity_class], 0.82,
+                    ))
+
+        for rel in relation_results:
+            if not rel.get("count"):
+                continue
+            name = f"Inference Rule: {rel.get('src')} -> {rel.get('tgt')} via {rel.get('rel_type')}"
+            description = f"Infer link type {rel.get('rel_type')} from {rel.get('src')} to {rel.get('tgt')}."
+            created_v2 += int(self._upsert_v2_logic(
+                ontology_id, name, "inference", description, rel.get("src"),
+                {"src": rel.get("src"), "tgt": rel.get("tgt"), "rel_type": rel.get("rel_type"),
+                 "fk_col": rel.get("fk_col"), "src_key": rel.get("src_key"), "tgt_key": rel.get("tgt_key")},
+                "relation_inference", "info",
+            ))
+            created_v1 += int(self._upsert_v1_logic(
+                ontology_id, name, "inference", description, [rel.get("src"), rel.get("tgt")], 0.85,
+            ))
+
+        automation_name = "Automation Rule: Approved curated dataset triggers mapping sync"
+        automation_desc = "When a curated dataset is approved, incremental ontology mapping can upsert objects, links, vectors, logic and actions."
+        created_v2 += int(self._upsert_v2_logic(
+            ontology_id, automation_name, "automation", automation_desc, None,
+            {"trigger": "curated_review.approved", "effect": "mapping_resync"},
+            "workflow", "info",
+        ))
+        created_v1 += int(self._upsert_v1_logic(
+            ontology_id, automation_name, "automation", automation_desc, [], 0.86,
+        ))
+
+        self._db.commit()
+        from app.models.v2.logic import OntologyLogicRule
+        from app.models.logic import LogicRule
+        return {
+            "created_v2": created_v2,
+            "created_v1": created_v1,
+            "total_v2": self._db.query(OntologyLogicRule).filter(OntologyLogicRule.ontology_id == ontology_id).count(),
+            "total_v1": self._db.query(LogicRule).filter(LogicRule.ontology_id == ontology_id).count(),
+        }
+
+    def _upsert_v2_action(self, ontology_id: str, name: str, category: str, description: str,
+                          target_entity_type: str | None, parameters: list, effects: list,
+                          criteria: list | None = None) -> bool:
+        from app.models.v2.action import OntologyActionType
+
+        exists = self._db.query(OntologyActionType).filter(
+            OntologyActionType.ontology_id == ontology_id,
+            OntologyActionType.name == name,
+        ).first()
+        if exists:
+            exists.action_category = category
+            exists.description = description
+            exists.target_entity_type = target_entity_type
+            exists.parameters = parameters
+            exists.effects = effects
+            exists.submission_criteria = criteria
+            return False
+        self._db.add(OntologyActionType(
+            ontology_id=ontology_id,
+            name=name,
+            action_category=category,
+            description=description,
+            target_entity_type=target_entity_type,
+            parameters=parameters,
+            submission_criteria=criteria,
+            effects=effects,
+            permission_rules=[{"role": "admin"}],
+            status="draft",
+            enabled=True,
+        ))
+        return True
+
+    def _upsert_v1_action(self, ontology_id: str, name: str, category: str, description: str,
+                          linked_entities: list[str] | None = None, linked_logic_ids: list[str] | None = None,
+                          confidence: float = 0.82) -> bool:
+        from app.models.action import Action
+
+        exists = self._db.query(Action).filter(
+            Action.ontology_id == ontology_id,
+            Action.name_cn == name,
+        ).first()
+        function_name = name.lower().replace(" ", "_").replace(":", "").replace("-", "_")
+        function_code = (
+            f"def {function_name}(context: dict) -> dict:\n"
+            f"    return {{'status': 'queued', 'action': '{name}', 'context': context}}\n"
+        )
+        if exists:
+            exists.description = description
+            exists.execution_rule = category
+            exists.linked_entities = linked_entities or []
+            exists.linked_logic_ids = linked_logic_ids or []
+            exists.function_code = function_code
+            return False
+        self._db.add(Action(
+            id=str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{ontology_id}:action:{name}")),
+            ontology_id=ontology_id,
+            name_cn=name,
+            name_en=function_name,
+            description=description,
+            execution_rule=category,
+            function_code=function_code,
+            linked_entities=linked_entities or [],
+            linked_logic_ids=linked_logic_ids or [],
+            confidence=confidence,
+            enabled=True,
+            status="draft",
+        ))
+        return True
+
+    def _discover_action_types(self, ontology_id: str, mappings: list[OntologyMapping],
+                               mapping_meta: dict,
+                               relation_results: list[dict], logic_result: dict) -> dict:
+        created_v2 = 0
+        created_v1 = 0
+
+        for m in mappings:
+            meta = mapping_meta.get(m.id, {})
+            for verb, category, effect in (
+                ("Create", "crud", "create_object"),
+                ("Update", "crud", "update_object"),
+            ):
+                name = f"{verb} {m.entity_class}"
+                description = f"{verb} object records for {m.entity_class}."
+                created_v2 += int(self._upsert_v2_action(
+                    ontology_id, name, category, description, m.entity_class,
+                    [{"name": "data", "type": "object", "required": True}],
+                    [{"action": effect, "entity_type": m.entity_class}],
+                    [{"logic_type": "validation", "target_entity_type": m.entity_class}],
+                ))
+                created_v1 += int(self._upsert_v1_action(
+                    ontology_id, name, category, description, [m.entity_class], [], 0.84,
+                ))
+
+            visible_props = [
+                item for item in meta.get("property_mappings", [])
+                if isinstance(item, dict) and not item.get("hidden")
+            ]
+            state_props = [
+                item for item in visible_props
+                if any(token in str(item.get("column", "")).lower() for token in ("status", "state"))
+                or any(token in str(item.get("column", "")) for token in ("状态", "阶段"))
+            ]
+            for item in state_props:
+                prop = item.get("property") or item.get("column")
+                name = f"Change {m.entity_class} {prop}"
+                description = f"Change state property {prop} on {m.entity_class}."
+                created_v2 += int(self._upsert_v2_action(
+                    ontology_id, name, "state_transition", description, m.entity_class,
+                    [{"name": "target_id", "type": "object_ref", "required": True},
+                     {"name": str(prop), "type": "string", "required": True}],
+                    [{"action": "set_property", "property": prop}],
+                    [{"logic_type": "state", "target_entity_type": m.entity_class}],
+                ))
+                created_v1 += int(self._upsert_v1_action(
+                    ontology_id, name, "state_transition", description, [m.entity_class], [], 0.82,
+                ))
+
+            timestamp_props = [
+                item for item in visible_props
+                if item.get("type") == "timestamp" or any(token in str(item.get("column", "")).lower() for token in ("date", "time", "_at"))
+            ]
+            for item in timestamp_props[:3]:
+                prop = item.get("property") or item.get("column")
+                name = f"Update {m.entity_class} {prop}"
+                description = f"Update timestamp property {prop} on {m.entity_class}."
+                created_v2 += int(self._upsert_v2_action(
+                    ontology_id, name, "crud", description, m.entity_class,
+                    [{"name": "target_id", "type": "object_ref", "required": True},
+                     {"name": str(prop), "type": "timestamp", "required": True}],
+                    [{"action": "set_property", "property": prop}],
+                ))
+                created_v1 += int(self._upsert_v1_action(
+                    ontology_id, name, "crud", description, [m.entity_class], [], 0.8,
+                ))
+
+        seen_rel_actions: set[str] = set()
+        for rel in relation_results:
+            if not rel.get("count"):
+                continue
+            for verb, effect in (("Link", "merge_relationship"), ("Unlink", "delete_relationship")):
+                name = f"{verb} {rel.get('src')} to {rel.get('tgt')}"
+                if name in seen_rel_actions:
+                    continue
+                seen_rel_actions.add(name)
+                description = f"{verb} {rel.get('rel_type')} relation between {rel.get('src')} and {rel.get('tgt')}."
+                created_v2 += int(self._upsert_v2_action(
+                    ontology_id, name, "link", description, rel.get("src"),
+                    [{"name": "source_id", "type": "object_ref", "required": True},
+                     {"name": "target_id", "type": "object_ref", "required": True}],
+                    [{"action": effect, "relation_type": rel.get("rel_type")}],
+                ))
+                created_v1 += int(self._upsert_v1_action(
+                    ontology_id, name, "link", description, [rel.get("src"), rel.get("tgt")], [], 0.83,
+                ))
+
+        for name, category, desc in (
+            ("Review Curated Mapping Candidate", "review", "Review and approve generated mapping, logic and action candidates."),
+            ("Repair Data Quality Issue", "repair", "Fix missing, duplicated or invalid mapped object properties."),
+            ("Sync Approved Object to External System", "writeback", "Write approved object changes back to an external system."),
+        ):
+            created_v2 += int(self._upsert_v2_action(
+                ontology_id, name, category, desc, None,
+                [{"name": "target_id", "type": "string", "required": False}],
+                [{"action": category}],
+            ))
+            created_v1 += int(self._upsert_v1_action(
+                ontology_id, name, category, desc, [], [], 0.78,
+            ))
+
+        self._db.commit()
+        from app.models.v2.action import OntologyActionType
+        from app.models.action import Action
+        return {
+            "created_v2": created_v2,
+            "created_v1": created_v1,
+            "total_v2": self._db.query(OntologyActionType).filter(OntologyActionType.ontology_id == ontology_id).count(),
+            "total_v1": self._db.query(Action).filter(Action.ontology_id == ontology_id).count(),
+            "logic_total_v2": logic_result.get("total_v2", 0),
+        }
 
     def _write_neo4j(self, entity_class: str, entities: list[dict]) -> int:
         try:
@@ -333,8 +1008,10 @@ class MappingService:
                         rel_type = f"HAS_{max(set(prefixes), key=prefixes.count)}"
                         candidates.append((col, rel_type))
 
-        # 策略 4: LLM 辅助语义 FK 检测（前面策略没匹配时触发）
-        if not candidates and src_cols:
+        # 策略 4: LLM 辅助语义 FK 检测（默认关闭，避免构建时被外部服务阻塞）
+        import os
+        llm_fk_enabled = os.getenv("ENABLE_LLM_FK_DETECTION", "").lower() in ("1", "true", "yes")
+        if llm_fk_enabled and not candidates and src_cols:
             try:
                 llm_candidates = self._llm_detect_fk(src_cols, tgt_entity_class, tgt_dataset_name)
                 candidates.extend(llm_candidates)
@@ -407,24 +1084,39 @@ class MappingService:
                 v = str(row.get(link.tgt_key, "")).strip()
                 if v: tgt_val_to_eid[v] = eid
             written = 0
+            src_values: list[str] = []
+            tgt_values: list[str] = []
             for row, (src_pk_val, src_eid) in zip(src_meta["rows"], src_meta["entity_id_map"].items()):
                 src_val = str(row.get(link.src_key, "")).strip()
                 if not src_val or not src_eid: continue
                 tgt_eid = tgt_val_to_eid.get(src_val)
                 if not tgt_eid: continue
+                src_values.append(src_eid)
+                tgt_values.append(tgt_eid)
                 rel = Relation(
-                    id=str(_uuid.uuid4()), ontology_id=ontology_id,
+                    id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type, "link_mapping"),
+                    ontology_id=ontology_id,
                     source_entity=src_eid, target_entity=tgt_eid,
                     type=link.relation_type,
                     properties={"mapping_type": "link_mapping", "src_key": link.src_key, "tgt_key": link.tgt_key},
                     confidence=0.9,
                 )
                 self._db.merge(rel); written += 1
+            cardinality = self._infer_cardinality(src_values, tgt_values)
             if written:
+                for rel in self._db.query(Relation).filter(
+                    Relation.ontology_id == ontology_id,
+                    Relation.type == link.relation_type,
+                ).all():
+                    props = dict(rel.properties or {})
+                    if props.get("mapping_type") == "link_mapping" and props.get("src_key") == link.src_key and props.get("tgt_key") == link.tgt_key:
+                        props["cardinality"] = cardinality
+                        rel.properties = props
                 self._db.commit()
                 self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
-                results.append({"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
-                                "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
-                                "count": written})
                 logger.info("Link: " + src_meta["entity_class"] + "-[" + str(link.relation_type) + "]->" + tgt_meta["entity_class"] + " " + str(written) + "条")
+            results.append({"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
+                            "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                            "count": written, "cardinality": cardinality,
+                            "warning": None if written else "No rows matched this link mapping"})
         return results

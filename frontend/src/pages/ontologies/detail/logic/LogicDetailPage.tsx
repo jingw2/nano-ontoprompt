@@ -3,8 +3,9 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { ontologyApi } from '@/api/ontologies'
+import { apiClient } from '@/api/client'
 import ConfidenceBar from '@/components/ConfidenceBar'
-import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check } from 'lucide-react'
+import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check, ToggleLeft, ToggleRight } from 'lucide-react'
 import type { LogicRule, Action, Entity } from '@/types/ontology'
 
 function ChipEditor({
@@ -110,6 +111,14 @@ export default function LogicDetailPage() {
     },
   })
 
+  const toggleMut = useMutation({
+    mutationFn: () => apiClient.post(`/ontologies/${oid}/logic/${lid}/toggle`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['logic-rule', oid, lid] })
+      qc.invalidateQueries({ queryKey: ['logic', oid] })
+    },
+  })
+
   // Patch an action's linked_logic_ids (for bidirectional action linking)
   const updateActionLinkMut = useMutation({
     mutationFn: ({ aid, linked_logic_ids }: { aid: string; linked_logic_ids: string[] }) =>
@@ -200,6 +209,11 @@ export default function LogicDetailPage() {
             </>
           ) : (
             <>
+              <button onClick={() => toggleMut.mutate()} disabled={toggleMut.isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                {rule.enabled !== false ? <ToggleRight size={14} className="text-green-600" /> : <ToggleLeft size={14} />}
+                {rule.enabled !== false ? '已启用' : '已禁用'}
+              </button>
               <button onClick={startEdit}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
                 <Pencil size={14} /> 编辑
@@ -255,6 +269,14 @@ export default function LogicDetailPage() {
               <div>
                 <p className="text-xs text-gray-500 mb-1">版本</p>
                 <p className="text-sm font-mono">{rule.version}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">状态</p>
+                <span className={`inline-flex text-xs px-1.5 py-0.5 rounded border ${
+                  rule.status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                  rule.status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                  'bg-gray-50 text-gray-600'
+                }`}>{rule.status || 'draft'}</span>
               </div>
               <div>
                 <p className="text-xs text-gray-500 mb-1">置信度</p>

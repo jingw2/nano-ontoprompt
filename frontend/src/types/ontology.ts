@@ -43,6 +43,8 @@ export interface LogicRule {
   formula?: string
   confidence: number
   version: string
+  enabled?: boolean
+  status?: string
   linked_entities: string[]
   created_at: string
   updated_at: string
@@ -87,9 +89,11 @@ export interface Prompt {
 export interface ModelConfig {
   id: string
   name: string
+  config_type: 'llm' | 'ocr' | 'other'
   provider: string
   api_base?: string
   models: string[]
+  options?: Record<string, unknown>
   created_by: string
   created_at: string
   updated_at: string

@@ -6,11 +6,12 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
 from app.database import SessionLocal
+from app.deps import get_current_user
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 # 确保 Dataset 模型先导入以解析 FK
 import app.models.v2.dataset  # noqa: F401
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def get_db():

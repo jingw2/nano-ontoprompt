@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
-import { apiClient } from '@/api/client'
+import { apiClientV2 } from '@/api/client'
 import { DOMAINS } from '@/types/ontology'
 import { Zap, GitBranch, ArrowLeft, ArrowRight, Loader2, CheckSquare, Square, CheckCircle, XCircle } from 'lucide-react'
 
@@ -12,6 +12,8 @@ type Step = 'select_mode' | 'fill_info' | 'select_datasets' | 'mapping_config' |
 
 interface CuratedDataset {
   id: string; name: string; status: string; row_count: number | null; quality_score: number | null
+  columns?: string[]
+  sample_rows?: Record<string, unknown>[]
 }
 interface MappingSuggestion {
   entity_class: string; entity_class_cn: string; primary_key_column: string
@@ -53,6 +55,7 @@ export default function OntologyCreateWizard() {
   const [phaseStatus, setPhaseStatus] = useState<string[]>(Array(9).fill('pending'))
   const [buildResult, setBuildResult] = useState<any>(null)
   const [buildError, setBuildError] = useState('')
+  const [readyForReview, setReadyForReview] = useState(false)
 
   const createMut = useMutation({
     mutationFn: () => ontologyApi.create({ name, domain, description: desc, build_mode: mode }),
@@ -68,7 +71,7 @@ export default function OntologyCreateWizard() {
   useEffect(() => {
     if (step !== 'select_datasets') return
     setDatasetsLoading(true)
-    apiClient.get('/api/v2/curated')
+    apiClientV2.get('/curated')
       .then((res: any) => setDatasets(Array.isArray(res) ? res : []))
       .catch(() => setDatasets([]))
       .finally(() => setDatasetsLoading(false))
@@ -86,7 +89,7 @@ export default function OntologyCreateWizard() {
       const ds = datasets.find(d => d.id === dsId)
       if (!ds) continue
       try {
-        const res: any = await apiClient.post(`/api/v2/ontologies/${createdOntologyId}/mappings/suggest`, {
+        const res: any = await apiClientV2.post(`/ontologies/${createdOntologyId}/mappings/suggest`, {
           dataset_name: ds.name, columns: ds.columns || [], sample_rows: ds.sample_rows || [], ontology_domain: domain,
         })
         next[dsId] = res
@@ -99,12 +102,12 @@ export default function OntologyCreateWizard() {
 
   const handleStartBuild = async () => {
     if (!createdOntologyId) return
-    setStep('building'); setPhaseStatus(Array(9).fill('pending'))
+    setStep('building'); setPhaseStatus(Array(9).fill('pending')); setReadyForReview(false)
 
     for (const [dsId, sug] of Object.entries(suggestions)) {
       const fmap: Record<string, string> = { __primary_key__: sug.primary_key_column }
       for (const fm of sug.field_mappings) fmap[fm.column_name] = fm.property_name
-      await apiClient.post(`/api/v2/ontologies/${createdOntologyId}/mappings`, {
+      await apiClientV2.post(`/ontologies/${createdOntologyId}/mappings`, {
         curated_dataset_id: dsId, entity_class: sug.entity_class, field_mapping: fmap, confidence: 1.0,
       }).catch(() => {})
     }
@@ -117,19 +120,13 @@ export default function OntologyCreateWizard() {
     // 阶段 3: build-all (Relation + Neo4j + ChromaDB)
     try {
       setPhaseStatus(['done', 'done', 'running', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending'])
-      const res: any = await apiClient.post(`/api/v2/ontologies/${createdOntologyId}/mappings/build-all`)
+      const res: any = await apiClientV2.post(`/ontologies/${createdOntologyId}/mappings/build-all`)
       setBuildResult(res)
-      // 模拟 Logic/Action Discovery (阶段 4-6) + 发布 (阶段 9)
       await sleep(300)
       setPhaseStatus(['done', 'done', 'done', 'running', 'pending', 'pending', 'pending', 'pending', 'pending']); setCurrentPhase(3); await sleep(500)
       setPhaseStatus(['done', 'done', 'done', 'done', 'running', 'pending', 'pending', 'pending', 'pending']); setCurrentPhase(4); await sleep(500)
-      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'running', 'pending', 'pending', 'pending']); setCurrentPhase(5); await sleep(400)
-      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'done', 'running', 'pending', 'pending']); setCurrentPhase(6); await sleep(400)
-      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'running', 'pending']); setCurrentPhase(7); await sleep(400)
-      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'running']); setCurrentPhase(8); await sleep(600)
-      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']); setCurrentPhase(9)
-      await sleep(500)
-      navigate(`/ontologies/${createdOntologyId}?tab=info`)
+      setPhaseStatus(['done', 'done', 'done', 'done', 'done', 'running', 'done', 'done', 'pending']); setCurrentPhase(5)
+      setReadyForReview(true)
     } catch (e: any) {
       setPhaseStatus(['done', 'done', 'failed', 'idle', 'idle', 'idle', 'idle', 'idle', 'idle'])
       setBuildError(e?.message || e?.detail || '构建失败')
@@ -309,6 +306,20 @@ export default function OntologyCreateWizard() {
                     {sug.field_mappings.length > 6 && <p className="text-xs text-gray-400">+ {sug.field_mappings.length - 6} 个字段...</p>}
                   </div>
                 )}
+                <div className="border-t pt-3 mt-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                  <div className="bg-blue-50 border border-blue-100 rounded-lg p-2">
+                    <p className="font-medium text-blue-700">Link Type 推断</p>
+                    <p className="text-blue-600 mt-1">基于外键、值模式和手动 Link Mapping 生成，并推断 cardinality。</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg p-2">
+                    <p className="font-medium text-amber-700">Logic Discovery</p>
+                    <p className="text-amber-600 mt-1">从 mapping、schema 质量、状态列和关系生成 draft 规则。</p>
+                  </div>
+                  <div className="bg-purple-50 border border-purple-100 rounded-lg p-2">
+                    <p className="font-medium text-purple-700">Action Discovery</p>
+                    <p className="text-purple-600 mt-1">从 Object Type、Link Type、Review、Repair 和 Writeback 生成 draft 动作。</p>
+                  </div>
+                </div>
               </div>
             )
           })}
@@ -364,6 +375,26 @@ export default function OntologyCreateWizard() {
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
             <p className="text-xs text-red-600">{buildError}</p>
             <button onClick={() => navigate(`/ontologies/${createdOntologyId}?tab=info`)} className="text-xs text-blue-600 hover:underline mt-2">查看本体</button>
+          </div>
+        )}
+        {readyForReview && (
+          <div className="mt-4 p-4 bg-white border rounded-xl">
+            <p className="text-sm font-medium text-gray-800">已生成待审核定义</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Object / Link 已写入，Logic 与 Actions 以 draft 状态生成。请进入详情页审核启用状态，再分别发布 Logic / Actions。
+            </p>
+            {buildResult && (
+              <div className="grid grid-cols-4 gap-2 mt-3 text-xs">
+                <div className="bg-gray-50 rounded p-2"><p className="text-gray-400">Objects</p><p className="font-semibold">{buildResult.total_entities || 0}</p></div>
+                <div className="bg-gray-50 rounded p-2"><p className="text-gray-400">Links</p><p className="font-semibold">{buildResult.total_relations || 0}</p></div>
+                <div className="bg-gray-50 rounded p-2"><p className="text-gray-400">Logic</p><p className="font-semibold">{buildResult.total_logic || 0}</p></div>
+                <div className="bg-gray-50 rounded p-2"><p className="text-gray-400">Actions</p><p className="font-semibold">{buildResult.total_actions || 0}</p></div>
+              </div>
+            )}
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => navigate(`/ontologies/${createdOntologyId}?tab=logic`)} className="px-4 py-2 bg-black text-white rounded-lg text-sm">审核 Logic</button>
+              <button onClick={() => navigate(`/ontologies/${createdOntologyId}?tab=actions`)} className="px-4 py-2 border rounded-lg text-sm">审核 Actions</button>
+            </div>
           </div>
         )}
       </div>

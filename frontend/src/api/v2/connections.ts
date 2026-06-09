@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/client'
+import { apiClientV2 } from '@/api/client'
 
 export interface Connection {
   id: string
@@ -14,11 +14,11 @@ export interface ConnectionCreate {
 }
 
 const connectionsApi = {
-  list: () => apiClient.get<Connection[]>('/api/v2/connections').then(r => r.data),
-  get: (id: string) => apiClient.get<Connection>(`/api/v2/connections/${id}`).then(r => r.data),
-  create: (body: ConnectionCreate) => apiClient.post<Connection>('/api/v2/connections', body).then(r => r.data),
-  test: (id: string) => apiClient.post(`/api/v2/connections/${id}/test`).then(r => r.data),
-  delete: (id: string) => apiClient.delete(`/api/v2/connections/${id}`),
+  list: () => apiClientV2.get<Connection[]>('/connections'),
+  get: (id: string) => apiClientV2.get<Connection>(`/connections/${id}`),
+  create: (body: ConnectionCreate) => apiClientV2.post<Connection>('/connections', body),
+  test: (id: string) => apiClientV2.post(`/connections/${id}/test`),
+  delete: (id: string) => apiClientV2.delete(`/connections/${id}`),
 }
 
 export default connectionsApi

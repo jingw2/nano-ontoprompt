@@ -1,9 +1,10 @@
 """v2 Search API — 키워드/시맨틱 통합 검색"""
 from __future__ import annotations
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from app.deps import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 class SearchRequest(BaseModel):

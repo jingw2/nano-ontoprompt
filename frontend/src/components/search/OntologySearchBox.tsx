@@ -73,21 +73,20 @@ export default function OntologySearchBox({ ontologyId }: { ontologyId: string }
 
       {results.length > 0 && (
         <div className="border rounded-lg divide-y max-h-48 overflow-auto">
-          {results.map(r => (
-            <div key={r.id} className="p-2 hover:bg-gray-50">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">
-                  {String(r.metadata?.name_cn || r.id)}
-                </span>
-                {r.score !== undefined && (
-                  <span className="text-xs text-gray-400">{(r.score * 100).toFixed(0)}%</span>
-                )}
+          {results.map(r => {
+            const name = String(r.metadata?.name_cn || r.id)
+            const entityType = r.metadata?.entity_type ? String(r.metadata.entity_type) : ''
+            const score = r.score !== undefined ? (r.score * 100).toFixed(0) : null
+            return (
+              <div key={r.id} className="p-2 hover:bg-gray-50">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{name}</span>
+                  {score !== null && <span className="text-xs text-gray-400">{score}%</span>}
+                </div>
+                {entityType && <span className="text-xs text-blue-500">{entityType}</span>}
               </div>
-              {r.metadata?.entity_type && (
-                <span className="text-xs text-blue-500">{String(r.metadata.entity_type)}</span>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

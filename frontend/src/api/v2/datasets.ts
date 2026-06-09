@@ -1,13 +1,13 @@
-import { apiClient } from '@/api/client'
+import { apiClientV2 } from '@/api/client'
 
 export interface Dataset { id: string; name: string; kind: string }
 
 const datasetsApi = {
-  list: (kind?: string) => apiClient.get<Dataset[]>('/api/v2/datasets', { params: kind ? { kind } : {} }).then(r => r.data),
-  get: (id: string) => apiClient.get<Dataset>(`/api/v2/datasets/${id}`).then(r => r.data),
-  versions: (id: string) => apiClient.get(`/api/v2/datasets/${id}/versions`).then(r => r.data),
+  list: (kind?: string) => apiClientV2.get<Dataset[]>('/datasets', { params: kind ? { kind } : {} }),
+  get: (id: string) => apiClientV2.get<Dataset>(`/datasets/${id}`),
+  versions: (id: string) => apiClientV2.get(`/datasets/${id}/versions`),
   preview: (id: string, versionNo: number, limit = 100) =>
-    apiClient.get(`/api/v2/datasets/${id}/versions/${versionNo}/preview`, { params: { limit } }).then(r => r.data),
+    apiClientV2.get(`/datasets/${id}/versions/${versionNo}/preview`, { params: { limit } }),
 }
 
 export default datasetsApi

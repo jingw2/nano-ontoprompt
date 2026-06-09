@@ -19,10 +19,12 @@ def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current
     config = ModelConfig(
         id=str(uuid.uuid4()),
         name=body.name,
+        config_type=body.config_type or "llm",
         provider=body.provider,
         api_base=body.api_base,
         api_key_encrypted=encrypt(body.api_key or ""),
         models=body.models,
+        options=body.options or {},
         created_by=current_user.id,
     )
     db.add(config); db.commit(); db.refresh(config)
@@ -42,12 +44,18 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
         raise HTTPException(404, "Not found")
     if body.name is not None:
         c.name = body.name
+    if body.config_type is not None:
+        c.config_type = body.config_type
+    if body.provider is not None:
+        c.provider = body.provider
     if body.api_key is not None:
         c.api_key_encrypted = encrypt(body.api_key)
     if body.api_base is not None:
         c.api_base = body.api_base
     if body.models is not None:
         c.models = body.models
+    if body.options is not None:
+        c.options = body.options
     db.commit(); db.refresh(c)
     return {"data": ModelConfigOut.model_validate(c).model_dump()}
 
@@ -64,6 +72,34 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
     if not c:
         raise HTTPException(404, "Not found")
     try:
+        if (c.config_type or "llm") == "ocr":
+            if c.provider == "easyocr":
+                import os
+                enabled = os.getenv("ENABLE_OCR", "").lower() in ("1", "true", "yes") or bool((c.options or {}).get("enabled"))
+                if not enabled:
+                    return {"data": {"ok": False, "response": "EasyOCR is configured but disabled. Enable it in OCR model config or set ENABLE_OCR=1."}}
+                import easyocr  # noqa: F401
+                return {"data": {"ok": True, "response": "EasyOCR import ok"}}
+            if c.provider == "paddleocr":
+                import os
+                enabled = (
+                    os.getenv("ENABLE_OCR", "").lower() in ("1", "true", "yes")
+                    or os.getenv("ENABLE_PADDLEOCR", "").lower() in ("1", "true", "yes")
+                    or bool((c.options or {}).get("enabled"))
+                )
+                if not enabled:
+                    return {"data": {"ok": False, "response": "PaddleOCR is configured but disabled. Enable it in OCR model config or set ENABLE_OCR=1."}}
+                from paddleocr import PaddleOCR  # noqa: F401
+                return {"data": {"ok": True, "response": "PaddleOCR import ok"}}
+            if c.provider == "external_api":
+                if not c.api_base:
+                    raise HTTPException(400, "External OCR requires API Base")
+                return {"data": {"ok": True, "response": "External OCR endpoint configured"}}
+            return {"data": {"ok": True, "response": f"OCR provider configured: {c.provider}"}}
+
+        if (c.config_type or "llm") != "llm":
+            return {"data": {"ok": True, "response": f"Config type configured: {c.config_type}"}}
+
         api_key = decrypt(c.api_key_encrypted or "")
         if c.provider == "anthropic":
             import anthropic

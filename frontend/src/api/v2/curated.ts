@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/client'
+import { apiClientV2 } from '@/api/client'
 
 export interface CuratedDataset {
   id: string
@@ -8,12 +8,12 @@ export interface CuratedDataset {
 }
 
 const curatedApi = {
-  list: () => apiClient.get<CuratedDataset[]>('/api/v2/curated').then(r => r.data),
-  get: (id: string) => apiClient.get<CuratedDataset>(`/api/v2/curated/${id}`).then(r => r.data),
-  preview: (id: string) => apiClient.get(`/api/v2/curated/${id}/preview`).then(r => r.data),
-  quality: (id: string) => apiClient.get(`/api/v2/curated/${id}/quality`).then(r => r.data),
+  list: () => apiClientV2.get<CuratedDataset[]>('/curated'),
+  get: (id: string) => apiClientV2.get<CuratedDataset>(`/curated/${id}`),
+  preview: (id: string) => apiClientV2.get(`/curated/${id}/preview`),
+  quality: (id: string) => apiClientV2.get(`/curated/${id}/quality`),
   review: (id: string, action: 'approve' | 'reject', notes = '') =>
-    apiClient.post(`/api/v2/curated/${id}/review?action=${action}&notes=${encodeURIComponent(notes)}`).then(r => r.data),
+    apiClientV2.post(`/curated/${id}/review?action=${action}&notes=${encodeURIComponent(notes)}`),
 }
 
 export default curatedApi

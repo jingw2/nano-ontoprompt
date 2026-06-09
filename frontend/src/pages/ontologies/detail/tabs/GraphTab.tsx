@@ -196,7 +196,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
           style: {
             'label': 'data(label)',
             'font-size': '11px',
-            'font-weight': '500',
+            'font-weight': 500,
             'color': '#1f2937',
             'line-color': 'data(edgeColor)',
             'target-arrow-color': 'data(edgeColor)',
@@ -206,7 +206,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
             'text-background-color': '#ffffff',
             'text-background-opacity': 0.92,
             'text-background-padding': '3px',
-            'text-border-width': '1px',
+            'text-border-width': 1,
             'text-border-color': '#d1d5db',
             'text-border-opacity': 1,
             'width': 1.8,
