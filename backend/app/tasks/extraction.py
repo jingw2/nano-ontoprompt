@@ -6,6 +6,10 @@ celery_app = Celery("ontoprompt", broker=settings.redis_url, backend=settings.re
 celery_app.conf.task_publish_retry = False
 celery_app.conf.broker_connection_timeout = 3
 
+from app.models import (  # noqa: F401
+    user, ontology, file, prompt, model_config,
+    entity, logic as logic_model, action, relation, extraction_task, rules_config,
+)
 
 # ── Confidence calibration (Fix 5) ─────────────────────────────────────────
 def _calibrate_confidence(result: dict) -> dict:
@@ -429,6 +433,7 @@ def run_extraction(self, task_id: str):
         db.commit()
 
     except Exception as e:
+        db.rollback()
         task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
         if task:
             task.status = "failed"
