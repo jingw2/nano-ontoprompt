@@ -174,6 +174,7 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
           qc.invalidateQueries({ queryKey: ['entities', ontology.id] })
           qc.invalidateQueries({ queryKey: ['logic', ontology.id] })
           qc.invalidateQueries({ queryKey: ['actions', ontology.id] })
+          qc.invalidateQueries({ queryKey: ['graph', ontology.id] })
         }
       } catch {
         setTimeout(poll, 3000)

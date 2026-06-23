@@ -424,6 +424,30 @@ def run_extraction(self, task_id: str):
         if project:
             project.status = "created"
 
+        import logging
+        try:
+            from app.services.v2.graph.neo4j_service import Neo4jService
+            neo = Neo4jService()
+            if neo.available:
+                all_entities = db.query(Entity).filter(Entity.ontology_id == task.ontology_id).all()
+                all_relations = db.query(Relation).filter(Relation.ontology_id == task.ontology_id).all()
+                batch = [{
+                    "id": e.id, "ontology_id": task.ontology_id,
+                    "name_cn": e.name_cn or "", "name": e.name_cn or "",
+                    "name_en": e.name_en or "", "type": e.type or "",
+                    "description": e.description or "", "confidence": e.confidence or 1.0,
+                    "version": e.version or "v0.1",
+                } for e in all_entities]
+                neo.batch_upsert_entities("OntologyEntity", batch, key_field="id")
+                for r in all_relations:
+                    rel_type = (r.type or "RELATED").upper().replace(" ", "_").replace("-", "_")
+                    neo.upsert_relation("OntologyEntity", r.source_entity, "OntologyEntity", r.target_entity,
+                                        rel_type, props={"ontology_id": task.ontology_id, "confidence": r.confidence or 1.0})
+                neo.close()
+                logging.getLogger(__name__).info(f"Neo4j sync: {len(batch)} entities, {len(all_relations)} relations")
+        except Exception as neo_err:
+            logging.getLogger(__name__).warning(f"Neo4j sync after extraction failed (non-fatal): {neo_err}")
+
         task.status   = "completed"
         task.progress = {"stage": "done", "pct": 100}
         db.commit()

@@ -37,6 +37,8 @@ def get_graph(ontology_id: str, limit: int = 200, label_filter: str | None = Non
     except Exception:
         # 共享 driver 缓存期间 Neo4j 宕机 → 回退 SQLite 而非 500
         return _sqlite_graph_data(ontology_id, limit=limit, label_filter=label_filter)
+    if not data.get("nodes"):
+        return _sqlite_graph_data(ontology_id, limit=limit, label_filter=label_filter)
     data["neo4j_available"] = True
     svc.close()
     return data
