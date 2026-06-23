@@ -10,14 +10,15 @@
 """
 
 import csv
+import os
 import sys
 import time
 import argparse
 import requests
 
-API_BASE = "http://localhost:8000/api/v1"
-USERNAME = "admin"
-PASSWORD = "changeme123"
+API_BASE = os.getenv("API_BASE", "http://localhost:8000/api/v1")
+USERNAME = os.getenv("ONTOLOGY_USERNAME", "admin")
+PASSWORD = os.getenv("ONTOLOGY_PASSWORD", "changeme123")
 
 # CSV type → OntoPrompt entity type
 TYPE_MAP = {
@@ -131,7 +132,7 @@ def import_entities(csv_path: str, ontology_id: str, dry_run: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv",      default="/Users/pengaiqing/git/nano-ontoprompt/snomed_mental_health.csv")
+    parser.add_argument("--csv",      default=os.path.join(os.path.dirname(__file__), "snomed_mental_health.csv"))
     parser.add_argument("--ontology", default="o-medical-001")
     parser.add_argument("--dry-run",  action="store_true", help="只打印不写入")
     args = parser.parse_args()

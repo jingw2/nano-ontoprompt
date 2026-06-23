@@ -12,6 +12,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    # 外部端口 6380 避免与宿主机本地 redis 冲突; 容器内仍用 6379
     ports: ["6380:6379"]
 
   backend:
