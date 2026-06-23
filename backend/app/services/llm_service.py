@@ -131,6 +131,7 @@ def _call_llm(provider: str, api_key: str, api_base: str | None, model: str, mes
         return resp.choices[0].message.content or ""
 
 
+
 def _parse_response(raw: str) -> dict:
     if not raw:
         raise ValueError("Empty LLM response")

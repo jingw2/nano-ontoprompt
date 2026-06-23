@@ -1,3 +1,6 @@
+
+from app.tasks.celery_app import celery_app
+
 from celery import Celery
 from app.config import settings
 
@@ -100,6 +103,7 @@ def _merge_extraction_results(results: list[dict]) -> dict:
     }
 
 
+
 # ── Confidence calibration (Fix 5) ─────────────────────────────────────────
 def _calibrate_confidence(result: dict) -> dict:
     """Adjust LLM-generated confidence scores using objective completeness signals."""
@@ -155,6 +159,15 @@ def _calibrate_confidence(result: dict) -> dict:
         action["confidence"] = round(max(0.30, min(0.98, base + adj)), 3)
 
     return result
+
+
+def _resolve_name_abbr(e_data: dict, props: dict) -> str | None:
+    abbr = e_data.get("name_abbr") or e_data.get("abbreviation")
+    if not abbr and isinstance(props, dict):
+        abbr = props.pop("abbreviation", None) or props.pop("abbr", None)
+    if isinstance(abbr, str) and abbr.strip():
+        return abbr.strip()
+    return None
 
 
 def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
@@ -213,6 +226,7 @@ def _fuzzy_resolve_entity(name: str, name_to_id: dict) -> str | None:
 
 @celery_app.task(bind=True)
 def run_extraction(self, task_id: str):
+    import app.models  # noqa: F401 — register all tables for FK resolution
     from app.database import SessionLocal
     from app.models.extraction_task import ExtractionTask
     from app.models.file import UploadedFile
@@ -236,6 +250,8 @@ def run_extraction(self, task_id: str):
         task.status = "running"
         task.progress = {"stage": "loading files", "pct": 10}
         db.commit()
+
+        from app.services.document_service import combine_converted_files
 
         files = db.query(UploadedFile).filter(UploadedFile.ontology_id == task.ontology_id).all()
         if not files:
@@ -371,21 +387,29 @@ def run_extraction(self, task_id: str):
             props = e_data.get("properties") or e_data.get("attributes") or e_data.get("attrs") or {}
             if not isinstance(props, dict):
                 props = {}
+            name_abbr = _resolve_name_abbr(e_data, props)
 
             if name_cn in existing_ent_map:
-                # Upsert: update fields that improved
                 ent = existing_ent_map[name_cn]
-                if e_data.get("type"):        ent.type        = e_data["type"]
+                # Always allow LLM to enrich description, properties, name_en, name_abbr
                 if e_data.get("description"): ent.description = e_data["description"]
                 if props:                     ent.properties  = props
                 if e_data.get("name_en"):     ent.name_en     = e_data["name_en"]
+                if name_abbr:                 ent.name_abbr   = name_abbr
+                if e_data.get("type"):        ent.type        = e_data["type"]
                 ent.confidence = e_data.get("confidence", ent.confidence)
+                # Protect authoritative SNOMED fields — never overwrite once set
+                if e_data.get("snomed_id") and not ent.snomed_id:
+                    ent.snomed_id = e_data["snomed_id"]
+                if e_data.get("canonical_id") and not ent.canonical_id:
+                    ent.canonical_id = e_data["canonical_id"]
                 eid = ent.id
             else:
                 eid = str(uuid.uuid4())
                 ent = Entity(
                     id=eid, ontology_id=task.ontology_id,
-                    name_cn=name_cn, name_en=e_data.get("name_en"),
+                    name_cn=name_cn, name_en=e_data.get("name_en"), name_abbr=name_abbr,
+                    snomed_id=e_data.get("snomed_id"), canonical_id=e_data.get("canonical_id"),
                     type=e_data.get("type"), description=e_data.get("description"),
                     properties=props, confidence=e_data.get("confidence", 0.85),
                 )

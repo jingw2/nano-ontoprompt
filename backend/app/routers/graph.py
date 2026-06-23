@@ -41,6 +41,7 @@ def get_graph(ontology_id: str, limit: int = 300, db: Session = Depends(get_db),
                 "id": e.id,
                 "label": e.name_cn or e.name_en or e.id,
                 "name_en": e.name_en,
+                "name_abbr": e.name_abbr,
                 "type": e.type,
                 "confidence": e.confidence,
             }

@@ -6,6 +6,7 @@ import { ontologyApi } from '@/api/ontologies'
 import ConfidenceBar from '@/components/ConfidenceBar'
 import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check } from 'lucide-react'
 import type { Entity, LogicRule, Action } from '@/types/ontology'
+import { parseEntityDisplay } from '@/utils/entityDisplay'
 
 interface GraphNode { data: { id: string; label: string; type?: string } }
 interface GraphEdge { data: { id: string; source: string; target: string; label?: string } }
@@ -173,6 +174,8 @@ export default function EntityDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
   if (!entity) return <div className="p-6 text-red-500">实体未找到</div>
 
+  const { labelCn, abbr } = parseEntityDisplay(entity)
+
   const nodes: GraphNode[] = (graph as any)?.nodes ?? []
   const edges: GraphEdge[] = (graph as any)?.edges ?? []
   const nodeMap: Record<string, string> = {}
@@ -283,8 +286,20 @@ export default function EntityDetailPage() {
                 <input {...register('name_cn', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
+                <label className="block text-xs text-gray-500 mb-1">英文缩写</label>
+                <input {...register('name_abbr')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+              </div>
+              <div>
                 <label className="block text-xs text-gray-500 mb-1">英文名</label>
                 <input {...register('name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">SNOMED-CT ID</label>
+                <input {...register('snomed_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="如 366979004" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Canonical ID</label>
+                <input {...register('canonical_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="如 symptom:depressed_mood" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">类型</label>
@@ -303,8 +318,11 @@ export default function EntityDetailPage() {
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <div><p className="text-xs text-gray-500 mb-1">中文名</p><p className="text-sm font-medium">{entity.name_cn}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">中文名</p><p className="text-sm font-medium">{labelCn}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">英文缩写</p><p className="text-sm font-mono">{entity.name_abbr?.trim() || abbr || '—'}</p></div>
               <div><p className="text-xs text-gray-500 mb-1">英文名</p><p className="text-sm">{entity.name_en || '—'}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">SNOMED-CT ID</p><p className="text-sm font-mono text-blue-600">{entity.snomed_id || '—'}</p></div>
+              <div className="col-span-2"><p className="text-xs text-gray-500 mb-1">Canonical ID</p><p className="text-sm font-mono text-green-700">{entity.canonical_id || '—'}</p></div>
               <div><p className="text-xs text-gray-500 mb-1">类型</p><p className="text-sm">{entity.type || '—'}</p></div>
               <div><p className="text-xs text-gray-500 mb-1">版本</p><p className="text-sm font-mono">{entity.version}</p></div>
             </div>

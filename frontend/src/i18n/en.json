@@ -105,7 +105,8 @@
       "entities": "Entities",
       "logic": "Logic Rules",
       "actions": "Actions",
-      "statemachine": "State Machine"
+      "statemachine": "State Machine",
+      "audit": "AI Audit"
     },
     "back": "← Back"
   },
@@ -119,7 +120,11 @@
     "col_size": "Size",
     "col_type": "Type",
     "col_uploaded": "Upload Time",
-    "col_actions": "Actions"
+    "col_status": "Conversion",
+    "col_actions": "Actions",
+    "conversion_ok": "Ready",
+    "conversion_failed": "Failed",
+    "upload_failed": "Upload failed: {{message}}"
   },
   "extract": {
     "llm_config": "LLM Extraction Config",
@@ -147,18 +152,26 @@
     "stage_validating": "Validating",
     "stage_inferring": "Inferring Relations",
     "stage_saving": "Saving",
-    "stage_done": "Done"
+    "stage_done": "Done",
+    "poll_timeout": "The task may still be running in the background; progress updates paused",
+    "resume_poll": "Resume polling"
   },
   "entities": {
     "add": "Add Entity",
     "empty": "No entities yet",
+    "no_match": "No entities match the filter",
+    "filter_type": "Filter by type",
+    "filter_all_types": "All types",
+    "filtered_count": "Showing {{count}} / {{total}}",
     "col_name_cn": "Chinese Name",
+    "col_abbr": "Abbreviation",
     "col_name_en": "English Name",
     "col_type": "Type",
     "col_desc": "Description",
     "col_confidence": "Confidence",
     "col_actions": "Actions",
     "ph_name_cn": "Chinese Name *",
+    "ph_abbr": "Abbreviation",
     "ph_name_en": "English Name",
     "ph_type": "Type",
     "ph_desc": "Description",
@@ -288,5 +301,37 @@
     "loading": "Loading...",
     "error": "Error",
     "success": "Success"
+  },
+  "audit": {
+    "title": "AI Quality Audit",
+    "description": "ReAct agent performs multi-step semantic quality analysis, typically 30–120s",
+    "model_label": "Model Config",
+    "model_specific": "Specific Model",
+    "start": "Start Audit",
+    "auditing": "Auditing...",
+    "progress": "Audit Progress",
+    "failed": "Audit Failed",
+    "findings_title": "Semantic Quality Report",
+    "findings_summary": "{{total}} issues found ({{critical}} critical / {{warning}} warnings / {{info}} info)",
+    "no_findings": "No semantic quality issues found — ontology structure looks complete",
+    "trace_title": "ReAct Reasoning Trace (Debug)",
+    "trace_thinking": "Agent reasoning...",
+    "severity_critical": "Critical",
+    "severity_warning": "Warning",
+    "severity_info": "Info",
+    "category_isolated_entity": "Isolated Entity",
+    "category_broken_ref": "Broken Reference",
+    "category_missing_relation": "Missing Relation",
+    "category_low_coverage": "Low Coverage",
+    "category_action_unreachable": "Unreachable Action",
+    "category_other": "Other",
+    "affected_items": "Affected Items",
+    "poll_timeout": "Audit may still be running in the background — polling paused",
+    "resume_poll": "Resume Polling",
+    "stage_queued": "Queued",
+    "stage_loading": "Loading Ontology",
+    "stage_running": "Agent Reasoning",
+    "stage_saving": "Saving Results",
+    "stage_done": "Done"
   }
 }

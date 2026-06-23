@@ -10,6 +10,7 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [uploadState, setUploadState] = useState<{ filename: string; current: number; total: number; pct: number } | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   const { data: files = [], isLoading } = useQuery({
     queryKey: ['files', ontologyId],
@@ -22,6 +23,7 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
   })
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    setUploadError(null)
     const total = acceptedFiles.length
     for (let i = 0; i < total; i++) {
       const file = acceptedFiles[i]
@@ -36,13 +38,15 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
             setUploadState(prev => prev ? { ...prev, pct } : null)
           },
         } as any)
-      } catch (e) {
+      } catch (e: any) {
+        const msg = e?.response?.data?.detail || e?.message || String(e)
+        setUploadError(t('files.upload_failed', { message: msg }))
         console.error('Upload failed:', file.name, e)
       }
     }
     setUploadState(null)
     qc.invalidateQueries({ queryKey: ['files', ontologyId] })
-  }, [ontologyId, qc])
+  }, [ontologyId, qc, t])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -101,6 +105,12 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
         )}
       </div>
 
+      {uploadError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {uploadError}
+        </div>
+      )}
+
       {isLoading ? <p className="text-gray-400 text-sm">{t('common.loading')}</p> : (
         <div className="bg-white rounded-lg border overflow-hidden">
           {(files as any[]).length === 0 ? (
@@ -109,7 +119,7 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  {[t('files.col_name'), t('files.col_size'), t('files.col_type'), t('files.col_uploaded'), t('files.col_actions')].map(h => (
+                  {[t('files.col_name'), t('files.col_size'), t('files.col_type'), t('files.col_uploaded'), t('files.col_status'), t('files.col_actions')].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-gray-500 font-medium text-xs">{h}</th>
                   ))}
                 </tr>
@@ -121,6 +131,15 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
                     <td className="px-4 py-3 text-gray-500">{formatSize(f.file_size)}</td>
                     <td className="px-4 py-3 text-gray-500">{f.mime_type || '—'}</td>
                     <td className="px-4 py-3 text-gray-500">{new Date(f.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-3">
+                      {f.conversion_ok === false ? (
+                        <span className="text-red-600" title={f.conversion_error || ''}>
+                          {t('files.conversion_failed')}
+                        </span>
+                      ) : (
+                        <span className="text-green-700">{t('files.conversion_ok')}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <button onClick={() => deleteMut.mutate(f.id)}
                         className="text-red-500 hover:text-red-700">

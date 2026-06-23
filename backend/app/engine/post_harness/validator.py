@@ -64,7 +64,7 @@ class PostHarnessValidator:
         "Supplier", "Product", "Material", "Warehouse", "Document",
         "Category", "Process", "ProductionLine", "PurchasingOrder",
         "CustomerOrder", "Organization", "Facility", "Concept",
-        "Disease", "Drug", "Symptom", "Treatment",
+        "Disease", "Drug", "Symptom", "Treatment", "RiskFactor", "Pathogenesis", "Subtype", "Scale", "Examination", "NonDrugTreatment", "FAQ", "DiagnosisCriteria", "FollowupQuestion", "DiversionRule", "ClinicalFocus",
         "Asset", "Liability", "Revenue", "Expense",
         "Subject", "Right", "Obligation",
         "Course", "Knowledge", "Skill",

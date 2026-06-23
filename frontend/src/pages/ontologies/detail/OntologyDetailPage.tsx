@@ -9,11 +9,13 @@ import FilesTab from './tabs/FilesTab'
 import EntitiesTab from './tabs/EntitiesTab'
 import LogicTab from './tabs/LogicTab'
 import ActionsTab from './tabs/ActionsTab'
+import AuditTab from './tabs/AuditTab'
 import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
+
 
 const GraphTab = lazy(() => import('./tabs/GraphTabV2'))
 
-type Tab = 'info' | 'graph' | 'entities' | 'logic' | 'actions' | 'files' | 'curated'
+type Tab = 'info' | 'graph' | 'entities' | 'logic' | 'actions' | 'files' | 'extract' |  'audit' | 'curated'
 
 class GraphErrorBoundary extends React.Component<
   { children: React.ReactNode; fallbackLabel?: string },
@@ -69,6 +71,7 @@ export default function OntologyDetailPage() {
     { key: 'entities', label: t('ontology.tabs.entities') },
     { key: 'logic', label: t('ontology.tabs.logic') },
     { key: 'actions', label: t('ontology.tabs.actions') },
+    { key: 'audit', label: t('ontology.tabs.audit') },
     isPipelineMode
       ? { key: 'curated', label: 'Curated 数据集' }
       : { key: 'files', label: t('ontology.tabs.files') },
@@ -113,6 +116,7 @@ export default function OntologyDetailPage() {
         {activeTab === 'entities' && <EntitiesTab ontologyId={id!} />}
         {activeTab === 'logic' && <LogicTab ontologyId={id!} />}
         {activeTab === 'actions' && <ActionsTab ontologyId={id!} />}
+        {activeTab === 'audit' && <AuditTab ontologyId={id!} />}
       </div>
     </div>
   )

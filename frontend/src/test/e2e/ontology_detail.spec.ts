@@ -67,7 +67,7 @@ test.describe('Ontology Detail Page', () => {
 
   test('export buttons visible', async ({ page }) => {
     await createOntology(page)
-    await expect(page.locator('a:has-text("JSON")')).toBeVisible()
+    await expect(page.locator('button:has-text("JSON")')).toBeVisible()
     await expect(page.locator('a:has-text("YAML")')).toBeVisible()
     await expect(page.locator('a:has-text("CSV")')).toBeVisible()
   })

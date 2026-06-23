@@ -6,7 +6,7 @@ from app.deps import get_db, get_current_user
 from app.models.file import UploadedFile
 from app.models.ontology import OntologyProject
 from app.schemas.file import FileOut
-from app.services.document_service import convert_to_markdown
+from app.services.document_service import convert_document, is_usable_converted_text
 from app.config import settings
 
 router = APIRouter()
@@ -19,10 +19,30 @@ ALLOWED_TYPES = {
     "application/msword", "application/vnd.ms-excel",
 }
 
+def _conversion_error_message(converted_md: str | None) -> str | None:
+    if is_usable_converted_text(converted_md):
+        return None
+    if not converted_md:
+        return "文件转换失败或无文本内容"
+    text = converted_md.strip()
+    if text.startswith("[File conversion failed:"):
+        return "DOCX/PDF 转换失败，请重新上传或改用 .md / .txt"
+    if text.startswith("["):
+        return text.split("\n", 1)[0].strip("[]")[:200]
+    return text[:200]
+
+
+def _file_out(f: UploadedFile) -> dict:
+    ok = is_usable_converted_text(f.converted_md)
+    return FileOut.model_validate(f).model_copy(
+        update={"conversion_ok": ok, "conversion_error": _conversion_error_message(f.converted_md)}
+    ).model_dump()
+
+
 @router.get("")
 def list_files(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     files = db.query(UploadedFile).filter(UploadedFile.ontology_id == ontology_id).all()
-    return {"data": [FileOut.model_validate(f).model_dump() for f in files]}
+    return {"data": [_file_out(f) for f in files]}
 
 @router.post("", status_code=201)
 async def upload_file(
@@ -54,7 +74,11 @@ async def upload_file(
         f.write(content)
 
     mime = file.content_type or "application/octet-stream"
-    converted = convert_to_markdown(save_path, mime)
+    conversion = convert_document(save_path, mime)
+    if not conversion.ok:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise HTTPException(422, conversion.error or "文件转换失败")
 
     db_file = UploadedFile(
         id=file_id,
@@ -63,10 +87,10 @@ async def upload_file(
         file_path=save_path,
         file_size=len(content),
         mime_type=mime,
-        converted_md=converted,
+        converted_md=conversion.content,
     )
     db.add(db_file); db.commit(); db.refresh(db_file)
-    return {"data": FileOut.model_validate(db_file).model_dump()}
+    return {"data": _file_out(db_file)}
 
 @router.delete("/{file_id}", status_code=204)
 def delete_file(ontology_id: str, file_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):

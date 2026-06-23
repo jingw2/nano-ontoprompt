@@ -27,30 +27,16 @@ test.describe('Export Functionality', () => {
 
   test('export links visible on ontology detail', async ({ page }) => {
     await createOntology(page)
-    await expect(page.locator('a:has-text("JSON")')).toBeVisible()
-    await expect(page.locator('a:has-text("YAML")')).toBeVisible()
-    await expect(page.locator('a:has-text("CSV")')).toBeVisible()
+    await expect(page.locator('button:has-text("JSON")')).toBeVisible()
+    await expect(page.locator('button:has-text("YAML")')).toBeVisible()
+    await expect(page.locator('button:has-text("CSV")')).toBeVisible()
   })
 
-  test('JSON export link has correct href', async ({ page }) => {
+  test('JSON export triggers download', async ({ page }) => {
     await createOntology(page)
-    const jsonLink = page.locator('a:has-text("JSON")')
-    const href = await jsonLink.getAttribute('href')
-    expect(href).toContain('ontologies')
-    expect(href).toContain('json')
-  })
-
-  test('YAML export link has correct href', async ({ page }) => {
-    await createOntology(page)
-    const yamlLink = page.locator('a:has-text("YAML")')
-    const href = await yamlLink.getAttribute('href')
-    expect(href).toContain('yaml')
-  })
-
-  test('CSV export link has correct href', async ({ page }) => {
-    await createOntology(page)
-    const csvLink = page.locator('a:has-text("CSV")')
-    const href = await csvLink.getAttribute('href')
-    expect(href).toContain('csv')
+    const downloadPromise = page.waitForEvent('download')
+    await page.click('button:has-text("JSON")')
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toMatch(/ontology_.*\.json/)
   })
 })

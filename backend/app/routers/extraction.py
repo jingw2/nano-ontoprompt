@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user
 from app.models.extraction_task import ExtractionTask
+from app.models.file import UploadedFile
 from app.models.ontology import OntologyProject
+from app.services.document_service import combine_converted_files
 from app.schemas.extraction import ExtractionRequest, ExtractionTaskOut
 import uuid
 
@@ -13,6 +15,16 @@ def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = De
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
         raise HTTPException(404, "Ontology not found")
+
+    files_query = db.query(UploadedFile).filter(UploadedFile.ontology_id == ontology_id)
+    if body.file_ids:
+        files_query = files_query.filter(UploadedFile.id.in_(body.file_ids))
+    files = files_query.all()
+    if not files:
+        raise HTTPException(422, "请先上传文件")
+    _, convert_error = combine_converted_files(files)
+    if convert_error:
+        raise HTTPException(422, convert_error)
 
     task = ExtractionTask(
         id=str(uuid.uuid4()),

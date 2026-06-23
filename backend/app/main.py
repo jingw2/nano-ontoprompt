@@ -10,6 +10,11 @@ v1 兼容：/api/v1/* 路由全部保留
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+
+from sqlalchemy import inspect, text
+from app.database import engine, Base, SessionLocal
+from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings, export, audit
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.database import engine, Base, SessionLocal
@@ -33,6 +38,7 @@ def _seed_db():
     db = SessionLocal()
     try:
         # Import all models to ensure tables are created
+        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, audit_task
         from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config
         from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
         from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
@@ -41,8 +47,23 @@ def _seed_db():
         from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
         Base.metadata.create_all(bind=engine)
 
-        # SQLite column migrations — create_all skips existing tables
+        # Lightweight column migrations — create_all skips existing tables
         with engine.connect() as conn:
+
+            columns = {col["name"] for col in inspect(conn).get_columns("extraction_tasks")}
+            if "validation_report" not in columns:
+                conn.execute(text("ALTER TABLE extraction_tasks ADD COLUMN validation_report JSON"))
+                conn.commit()
+            entity_columns = {col["name"] for col in inspect(conn).get_columns("entities")}
+            if "name_abbr" not in entity_columns:
+                conn.execute(text("ALTER TABLE entities ADD COLUMN name_abbr VARCHAR(50)"))
+                conn.commit()
+            if "snomed_id" not in entity_columns:
+                conn.execute(text("ALTER TABLE entities ADD COLUMN snomed_id VARCHAR(50)"))
+                conn.commit()
+            if "canonical_id" not in entity_columns:
+                conn.execute(text("ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
+                conn.commit()
             for stmt in [
                 "ALTER TABLE extraction_tasks ADD COLUMN validation_report TEXT",
                 "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
@@ -142,6 +163,7 @@ app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/acti
 app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"])
 app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"])
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"])
+app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"])
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])

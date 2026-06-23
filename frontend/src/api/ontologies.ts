@@ -45,8 +45,29 @@ export const ontologyApi = {
   getExtractionStatus: (oid: string, task_id: string) =>
     apiClient.get(`/ontologies/${oid}/execute/status?task_id=${task_id}`),
 
-  // Export
-  exportUrl: (oid: string, format: string) => `/api/v1/ontologies/${oid}/export?format=${format}`,
+  // Export (must use authenticated request — plain links omit Bearer token)
+  exportOntology: async (oid: string, format: string) => {
+    const blob = (await apiClient.get(`/ontologies/${oid}/export`, {
+      params: { format },
+      responseType: 'blob',
+    })) as unknown as Blob
+    if (blob.type.includes('json')) {
+      const err = JSON.parse(await blob.text())
+      throw err
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ontology_${oid}.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  // Audit
+  startAudit: (oid: string, body: { model_id: string; model_name: string }) =>
+    apiClient.post<{ task_id: string }>(`/ontologies/${oid}/audit`, body),
+  getAuditStatus: (oid: string, task_id: string) =>
+    apiClient.get(`/ontologies/${oid}/audit/status?task_id=${task_id}`),
 }
 
 export const promptApi = {

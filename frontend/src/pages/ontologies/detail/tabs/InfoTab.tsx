@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -86,6 +86,23 @@ const STAGE_PCT: Record<string, number> = {
 
 const lastTaskKey = (oid: string) => `ontoprompt_last_task_${oid}`
 
+type SavedTask = { task_id?: string; status?: string; [key: string]: unknown }
+
+function loadSavedTask(oid: string): SavedTask | null {
+  try {
+    const saved = localStorage.getItem(lastTaskKey(oid))
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
+function saveTask(oid: string, data: SavedTask) {
+  try {
+    localStorage.setItem(lastTaskKey(oid), JSON.stringify(data))
+  } catch {}
+}
+
 function StructuredDataLink() {
   const navigate = useNavigate()
   return (
@@ -97,7 +114,6 @@ function StructuredDataLink() {
     </button>
   )
 }
-
 function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
   const [mappings, setMappings] = useState<any[]>([])
   useEffect(() => {
@@ -141,16 +157,26 @@ function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
 export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
+  const pollRef = useRef<(() => void) | null>(null)
   const [promptId, setPromptId] = useState('')
   const [modelId, setModelId] = useState('')
   const [modelName, setModelName] = useState('')
-  const [taskStatus, setTaskStatus] = useState<any>(() => {
-    // Restore last task result for this ontology so P0 report persists after tab-switch
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+  const [taskStatus, setTaskStatus] = useState<any>(() => loadSavedTask(ontology.id))
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  const handleExport = async (format: string) => {
+    setExportError(null)
+    setExportingFormat(format)
     try {
-      const saved = localStorage.getItem(lastTaskKey(ontology.id))
-      return saved ? JSON.parse(saved) : null
-    } catch { return null }
-  })
+      await ontologyApi.exportOntology(ontology.id, format)
+    } catch (err: any) {
+      setExportError(err?.detail ?? err?.message ?? t('extract.export_failed', 'Export failed'))
+    } finally {
+      setExportingFormat(null)
+    }
+  }
 
   const { data: prompts } = useQuery({ queryKey: ['prompts'], queryFn: () => promptApi.list() as any })
   const { data: models } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
@@ -170,37 +196,59 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
   })
 
   const startPoll = (taskId: string) => {
+    pollRef.current?.()
+    setPollTimedOut(false)
     let attempts = 0
+    let cancelled = false
+    pollRef.current = () => { cancelled = true }
+
     const poll = async () => {
-      if (attempts++ > 90) return
+      if (cancelled) return
+      // 2s interval × 600 ≈ 20 min — local LLM extraction can exceed 5 min
+      if (attempts++ > 600) {
+        setPollTimedOut(true)
+        return
+      }
       try {
         const status: any = await ontologyApi.getExtractionStatus(ontology.id, taskId)
-        setTaskStatus(status)
+        if (cancelled) return
+        const merged = { ...status, task_id: taskId }
+        setTaskStatus(merged)
+        saveTask(ontology.id, merged)
         if (status.status === 'completed' || status.status === 'failed') {
-          try { localStorage.setItem(lastTaskKey(ontology.id), JSON.stringify(status)) } catch {}
-        }
-        if (status.status !== 'completed' && status.status !== 'failed') {
-          setTimeout(poll, 2000)
-        } else {
+          setPollTimedOut(false)
           qc.invalidateQueries({ queryKey: ['ontology', ontology.id] })
           qc.invalidateQueries({ queryKey: ['stats'] })
           qc.invalidateQueries({ queryKey: ['entities', ontology.id] })
           qc.invalidateQueries({ queryKey: ['logic', ontology.id] })
           qc.invalidateQueries({ queryKey: ['actions', ontology.id] })
           qc.invalidateQueries({ queryKey: ['graph', ontology.id] })
+          return
         }
+        setTimeout(poll, 2000)
       } catch {
-        setTimeout(poll, 3000)
+        if (!cancelled) setTimeout(poll, 3000)
       }
     }
     poll()
   }
 
+  // Resume polling if user refreshed while a task was still running
+  useEffect(() => {
+    const saved = loadSavedTask(ontology.id)
+    if (saved?.task_id && saved.status !== 'completed' && saved.status !== 'failed') {
+      startPoll(saved.task_id)
+    }
+    return () => { pollRef.current?.() }
+  }, [ontology.id])
+
   const handleExtract = async () => {
+    setPollTimedOut(false)
     setTaskStatus({ status: 'running', progress: { stage: 'queued', pct: 0 }, error: null } as any)
     const constraints = getActiveConstraints(loadRuleStates())
     try {
       const res: any = await extractMut.mutateAsync(constraints)
+      saveTask(ontology.id, { status: 'running', progress: { stage: 'queued', pct: 0 }, task_id: res.task_id })
       startPoll(res.task_id)
     } catch (e: any) {
       setTaskStatus({
@@ -363,6 +411,18 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
                 />
               </div>
               <p className="text-xs text-gray-400 mt-1.5">{currentPct}%{currentStage ? ` · ${currentStage}` : ''}</p>
+              {pollTimedOut && isExtracting && taskStatus?.task_id && (
+                <div className="mt-3 flex items-center gap-2">
+                  <p className="text-xs text-amber-600">{t('extract.poll_timeout')}</p>
+                  <button
+                    type="button"
+                    onClick={() => startPoll(taskStatus.task_id)}
+                    className="text-xs px-2 py-1 border border-amber-200 rounded text-amber-700 hover:bg-amber-50"
+                  >
+                    {t('extract.resume_poll')}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -376,13 +436,21 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
       {/* Export */}
       <div className="bg-white rounded-xl border p-6">
         <h3 className="font-semibold mb-4">{t('extract.export')}</h3>
+        {exportError && (
+          <p className="text-sm text-red-600 mb-2">{exportError}</p>
+        )}
         <div className="flex gap-2 flex-wrap">
-          {['json', 'yaml', 'csv', 'ttl', 'html'].map(fmt => (
-            <a key={fmt} href={ontologyApi.exportUrl(ontology.id, fmt)}
-              className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 font-mono text-gray-700"
-              download>
+          {['json', 'yaml', 'csv', 'ttl', 'html', 'cypher', 'tugraph'].map(fmt => (
+            <button
+              key={fmt}
+              type="button"
+              disabled={exportingFormat !== null}
+              onClick={() => handleExport(fmt)}
+              className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 font-mono text-gray-700 disabled:opacity-50"
+            >
+              {exportingFormat === fmt && <Loader2 size={14} className="animate-spin inline mr-1" />}
               {fmt.toUpperCase()}
-            </a>
+            </button>
           ))}
         </div>
       </div>

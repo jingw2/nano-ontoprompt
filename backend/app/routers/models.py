@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user
 from app.models.model_config import ModelConfig
+from app.models.extraction_task import ExtractionTask
 from app.models.user import User
 from app.schemas.model_config import ModelConfigCreate, ModelConfigUpdate, ModelConfigOut
 from app.services.encryption_service import encrypt
@@ -64,7 +65,11 @@ def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_cur
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
-    db.delete(c); db.commit()
+    db.query(ExtractionTask).filter(ExtractionTask.model_id == model_id).update(
+        {ExtractionTask.model_id: None}, synchronize_session=False
+    )
+    db.delete(c)
+    db.commit()
 
 @router.post("/{model_id}/test")
 def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):

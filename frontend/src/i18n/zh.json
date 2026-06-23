@@ -105,7 +105,8 @@
       "entities": "实体",
       "logic": "逻辑规则",
       "actions": "动作",
-      "statemachine": "状态机"
+      "statemachine": "状态机",
+      "audit": "AI 审查"
     },
     "back": "← 返回"
   },
@@ -119,7 +120,11 @@
     "col_size": "大小",
     "col_type": "类型",
     "col_uploaded": "上传时间",
-    "col_actions": "操作"
+    "col_status": "转换状态",
+    "col_actions": "操作",
+    "conversion_ok": "可用",
+    "conversion_failed": "转换失败",
+    "upload_failed": "上传失败：{{message}}"
   },
   "extract": {
     "llm_config": "LLM 提取配置",
@@ -147,18 +152,26 @@
     "stage_validating": "校验输出",
     "stage_inferring": "补全关系",
     "stage_saving": "保存结果",
-    "stage_done": "完成"
+    "stage_done": "完成",
+    "poll_timeout": "任务可能仍在后台运行，进度刷新已暂停",
+    "resume_poll": "继续刷新"
   },
   "entities": {
     "add": "添加实体",
     "empty": "暂无实体",
+    "no_match": "没有符合筛选条件的实体",
+    "filter_type": "类型筛选",
+    "filter_all_types": "全部类型",
+    "filtered_count": "显示 {{count}} / {{total}} 条",
     "col_name_cn": "中文名",
+    "col_abbr": "英文缩写",
     "col_name_en": "英文名",
     "col_type": "类型",
     "col_desc": "描述",
     "col_confidence": "置信度",
     "col_actions": "操作",
     "ph_name_cn": "中文名 *",
+    "ph_abbr": "英文缩写",
     "ph_name_en": "英文名",
     "ph_type": "类型",
     "ph_desc": "描述",
@@ -288,5 +301,37 @@
     "loading": "加载中...",
     "error": "出错了",
     "success": "成功"
+  },
+  "audit": {
+    "title": "AI 质量审查",
+    "description": "ReAct agent 将多步分析本体的语义质量，通常需要 30–120 秒",
+    "model_label": "模型配置",
+    "model_specific": "具体模型",
+    "start": "开始审查",
+    "auditing": "审查中...",
+    "progress": "审查进度",
+    "failed": "审查失败",
+    "findings_title": "语义质量报告",
+    "findings_summary": "共发现 {{total}} 个问题（{{critical}} 严重 / {{warning}} 警告 / {{info}} 提示）",
+    "no_findings": "未发现语义质量问题，本体结构完整",
+    "trace_title": "ReAct 推理轨迹（调试）",
+    "trace_thinking": "Agent 推理中...",
+    "severity_critical": "严重",
+    "severity_warning": "警告",
+    "severity_info": "提示",
+    "category_isolated_entity": "孤立实体",
+    "category_broken_ref": "断链引用",
+    "category_missing_relation": "缺失关系",
+    "category_low_coverage": "低覆盖率",
+    "category_action_unreachable": "不可达动作",
+    "category_other": "其他",
+    "affected_items": "受影响对象",
+    "poll_timeout": "审查可能仍在后台运行，进度刷新已暂停",
+    "resume_poll": "继续刷新",
+    "stage_queued": "排队中",
+    "stage_loading": "加载本体",
+    "stage_running": "Agent 推理中",
+    "stage_saving": "保存结果",
+    "stage_done": "完成"
   }
 }

@@ -25,6 +25,9 @@ export interface Entity {
   ontology_id: string
   name_cn: string
   name_en?: string
+  name_abbr?: string
+  snomed_id?: string
+  canonical_id?: string
   type?: string
   description?: string
   properties: Record<string, unknown>
