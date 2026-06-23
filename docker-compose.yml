@@ -33,6 +33,9 @@ services:
     ports: ["5173:5173"]
     volumes: [./frontend:/app, /app/node_modules]
     command: npm run dev -- --host
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    depends_on: [backend]
 
   neo4j:
     image: neo4j:5-community
