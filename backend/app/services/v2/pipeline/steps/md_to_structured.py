@@ -96,9 +96,17 @@ class MarkdownToStructuredStep(PipelineStep):
                     ctx.meta["md_to_structured"] = {
                         "method": "llm_auto", "processed": len(data), "success": len(result)
                     }
+                    if spec.get("llm_enrich") and model_config:
+                        result = self._llm_enrich_rows(result, model_config, spec)
+                        ctx.meta["md_to_structured"]["method"] = "llm_auto+enrich"
                     return result
-            # 规则回退
-            return self._rule_based_extract(data, ctx)
+            # 规则提取（确定性）
+            result = self._rule_based_extract(data, ctx)
+            # 方案三：规则提取后可选 LLM 语义增强
+            if spec.get("llm_enrich") and model_config:
+                result = self._llm_enrich_rows(result, model_config, spec)
+                ctx.meta["md_to_structured"]["method"] = "rule_based+enrich"
+            return result
 
         # 有 target_schema 时 LLM 按字段提取
         result, success = [], 0
@@ -411,6 +419,78 @@ class MarkdownToStructuredStep(PipelineStep):
                 "section_text": text[:2000],
             })
         return records
+
+
+    # ── LLM 语义增强（方案三）────────────────────────────────────────────────
+
+    ENRICH_PROMPT = """你是语义分析专家。以下是从文档中规则提取的结构化记录列表。
+请为每条记录补充语义字段，不要修改或删除已有字段的值。
+
+需补充的字段：
+{fields_desc}
+
+记录列表（JSON）：
+{records_json}
+
+返回相同数量的记录，每条记录包含原有字段和新补充的字段。
+格式（仅JSON，不要其他文字）：{{"records": [...]}}"""
+
+    _DEFAULT_ENRICH_FIELDS = {
+        "summary": "该记录的核心信息摘要（中文，30字以内）",
+        "entity_type": "最贴近的实体类型（KPI指标/业务规则/状态描述/流程步骤/数据记录/其他，单选）",
+        "importance": "重要程度（high/medium/low，单选）",
+    }
+
+    def _llm_enrich_rows(self, rows: list[dict], model_config, spec: dict) -> list[dict]:
+        """规则提取后的 LLM 语义增强：只加新字段，不改原有字段，不改行数。"""
+        if not rows:
+            return rows
+
+        enrich_fields: dict = spec.get("enrich_fields") or self._DEFAULT_ENRICH_FIELDS
+        if isinstance(enrich_fields, list):
+            enrich_fields = {f: self._DEFAULT_ENRICH_FIELDS.get(f, f) for f in enrich_fields}
+
+        fields_desc = "\n".join(f"- {k}: {v}" for k, v in enrich_fields.items())
+        SKIP = {"markdown_text", "content", "storage_uri"}
+        BATCH = 20
+
+        result = list(rows)
+        for batch_start in range(0, len(rows), BATCH):
+            batch = rows[batch_start: batch_start + BATCH]
+            slim_batch = [
+                {k: v for k, v in row.items() if k not in SKIP and v not in (None, "")}
+                for row in batch
+            ]
+            try:
+                raw = _call_with_model(model_config, [
+                    {"role": "system", "content": "你是结构化语义分析专家，输出JSON。"},
+                    {"role": "user", "content": self.ENRICH_PROMPT.format(
+                        fields_desc=fields_desc,
+                        records_json=json.dumps(slim_batch, ensure_ascii=False),
+                    )},
+                ])
+                if not raw:
+                    continue
+                text = raw.strip()
+                if "```" in text:
+                    m = re.search(r'```(?:json)?\s*([\s\S]+?)```', text)
+                    text = m.group(1).strip() if m else text
+                parsed = json.loads(text)
+                enriched = parsed.get("records", []) if isinstance(parsed, dict) else parsed
+                if not isinstance(enriched, list) or len(enriched) != len(batch):
+                    logger.warning(f"LLM enrich returned {len(enriched) if isinstance(enriched,list) else '?'} rows, expected {len(batch)}, skipping batch")
+                    continue
+                for i, (orig, extra) in enumerate(zip(batch, enriched)):
+                    merged = dict(orig)
+                    for k, v in (extra or {}).items():
+                        if k not in orig:          # 只加新字段，不覆盖原有字段
+                            merged[k] = v
+                    merged["extraction_method"] = merged.get("extraction_method", "") + "+llm_enrich"
+                    result[batch_start + i] = merged
+            except Exception as e:
+                logger.warning(f"LLM enrich batch failed (non-fatal): {e}")
+
+        return result
 
 
 def PathLikeTitle(value: str) -> str:

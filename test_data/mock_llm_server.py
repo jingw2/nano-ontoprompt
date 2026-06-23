@@ -66,6 +66,25 @@ def heuristic_extract(text: str) -> dict:
     return {"entities": entities, "relations": relations, "logic_rules": logic_rules, "actions": actions}
 
 
+def heuristic_infer_relations(user_content: str) -> dict:
+    """Generate IS-A / PART-OF mock relations from entity list in infer_relations prompt."""
+    entity_block = ""
+    for line in user_content.split("\n"):
+        if line.startswith("- "):
+            entity_block += line + "\n"
+    # Extract name_cn from lines like "- 名称 (type): desc"
+    names = []
+    for line in entity_block.strip().split("\n"):
+        m = re.match(r'^- (.+?) \(', line)
+        if m:
+            names.append(m.group(1).strip())
+    # Pair adjacent entities with IS-A
+    relations = []
+    for i in range(min(len(names) - 1, 8)):
+        relations.append({"source": names[i], "target": names[i + 1], "type": "IS-A", "confidence": 0.75})
+    return {"relations": relations}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -76,8 +95,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if "提取本体信息" in user_content:
             result = heuristic_extract(user_content)
+        elif "已提取实体：" in user_content:
+            result = heuristic_infer_relations(user_content)
         else:
-            result = {"relations": []}  # 关系补推断调用: 不追加
+            result = {"relations": []}
 
         resp = {
             "id": "mock-1", "object": "chat.completion", "created": 0, "model": "mock-extractor",

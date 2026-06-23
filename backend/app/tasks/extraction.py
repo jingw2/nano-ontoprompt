@@ -7,6 +7,94 @@ celery_app.conf.task_publish_retry = False
 celery_app.conf.broker_connection_timeout = 3
 
 
+# ── Extraction results merge (方案A) ───────────────────────────────────────
+def _merge_extraction_results(results: list[dict]) -> dict:
+    """合并多个文件的 LLM 提取结果，按 name_cn 去重实体/规则/动作。"""
+    all_entities: list[dict] = []
+    all_relations: list[dict] = []
+    all_logic: list[dict] = []
+    all_actions: list[dict] = []
+
+    # 收集全部
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        for e in (r.get("entities") or []):
+            if isinstance(e, dict):
+                all_entities.append(e)
+        for rel in (r.get("relations") or []):
+            if isinstance(rel, dict):
+                # 跨文件时 source/target 可能是其他文件提取的实体，
+                # 如果已存在则关系保留；暂存，后续去重
+                all_relations.append(rel)
+        for lg in (r.get("logic_rules") or []):
+            if isinstance(lg, dict):
+                all_logic.append(lg)
+        for a in (r.get("actions") or []):
+            if isinstance(a, dict):
+                all_actions.append(a)
+
+    # 实体去重（按 name_cn，保留属性最丰富的）
+    seen_entities: dict[str, dict] = {}
+    for e in all_entities:
+        name = e.get("name_cn") or e.get("name", "")
+        if not name:
+            continue
+        if name not in seen_entities:
+            seen_entities[name] = e
+        else:
+            existing = seen_entities[name]
+            existing_score = (
+                len(str(existing.get("properties", {}))) +
+                len(existing.get("description", "") or "")
+            )
+            cur_score = (
+                len(str(e.get("properties", {}))) +
+                len(e.get("description", "") or "")
+            )
+            if cur_score > existing_score:
+                # 合并非冲突字段
+                for k, v in e.items():
+                    if v and k not in ("name_cn",) and not existing.get(k):
+                        existing[k] = v
+
+    entities = list(seen_entities.values())
+
+    # 关系去重（source-target-type 唯一）
+    seen_rels: set = set()
+    relations = []
+    for rel in all_relations:
+        key = (rel.get("source", ""), rel.get("target", ""), rel.get("type", ""))
+        if key not in seen_rels and key[0] and key[1]:
+            seen_rels.add(key)
+            relations.append(rel)
+
+    # 逻辑规则去重
+    seen_logic: dict[str, dict] = {}
+    for lg in all_logic:
+        name = lg.get("name_cn") or lg.get("name", "")
+        if not name:
+            continue
+        if name not in seen_logic:
+            seen_logic[name] = lg
+
+    # 动作去重
+    seen_actions: dict[str, dict] = {}
+    for a in all_actions:
+        name = a.get("name_cn") or a.get("name", "")
+        if not name:
+            continue
+        if name not in seen_actions:
+            seen_actions[name] = a
+
+    return {
+        "entities": entities,
+        "relations": relations,
+        "logic_rules": list(seen_logic.values()),
+        "actions": list(seen_actions.values()),
+    }
+
+
 # ── Confidence calibration (Fix 5) ─────────────────────────────────────────
 def _calibrate_confidence(result: dict) -> dict:
     """Adjust LLM-generated confidence scores using objective completeness signals."""
@@ -148,22 +236,16 @@ def run_extraction(self, task_id: str):
         if not files:
             task.status = "failed"; task.error = "No files uploaded"; db.commit(); return
 
-        combined_text = "\n\n---\n\n".join(f.converted_md or "" for f in files if f.converted_md)
-        if not combined_text.strip():
+        # 逐文件提取 + 合并 (方案A)：分文件提取避免多文件混合后 LLM 仅提取泛概念
+        valid_mds = [f for f in files if (f.converted_md or "").strip()]
+        if not valid_mds:
             task.status = "failed"; task.error = "No text content found in files"; db.commit(); return
 
-        # Strip control characters and normalise whitespace so the LLM doesn't
-        # embed raw bytes that would later break its own JSON output.
-        import re as _re
-        combined_text = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', combined_text)
-
+        # 加载模型和提示词配置（必须在 LLM 调用前完成）
         model_cfg = db.query(ModelConfig).filter(ModelConfig.id == task.model_id).first()
         prompt    = db.query(Prompt).filter(Prompt.id == task.prompt_id).first()
         if not model_cfg or not prompt:
             task.status = "failed"; task.error = "Model or prompt not found"; db.commit(); return
-
-        task.progress = {"stage": "calling LLM", "pct": 40}
-        db.commit()
 
         model_name = task.parameters.get("model_name", "")
         config_dict = {
@@ -171,14 +253,36 @@ def run_extraction(self, task_id: str):
             "api_key":  decrypt(model_cfg.api_key_encrypted or ""),
             "api_base": model_cfg.api_base,
         }
-
         prompt_content = prompt.content
         constraints = task.parameters.get("constraints", [])
         if constraints:
             prompt_content += "\n\n" + "\n".join(constraints)
 
-        # ── Pass 1: main extraction ──────────────────────────────────────────
-        result = extract_ontology(combined_text, prompt_content, config_dict, model_name)
+        import re as _re
+        def _clean(text: str) -> str:
+            return _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+        combined_text = _clean("\n\n---\n\n".join(f.converted_md or "" for f in valid_mds if f.converted_md))
+
+        all_results = []
+        for fi, f in enumerate(valid_mds):
+            md = _clean(f.converted_md or "")
+            task.progress = {"stage": f"extracting file {fi + 1}/{len(valid_mds)}: {f.filename}", "pct": 20 + 35 * fi // len(valid_mds)}
+            db.commit()
+            try:
+                single = extract_ontology(md, prompt_content, config_dict, model_name)
+                if isinstance(single, dict):
+                    all_results.append(single)
+            except Exception:
+                continue
+
+        if all_results:
+            result = _merge_extraction_results(all_results)
+        else:
+            # 全部失败时回退到合并文本单次提取
+            task.progress = {"stage": "calling LLM (combined fallback)", "pct": 55}
+            db.commit()
+            result = extract_ontology(combined_text, prompt_content, config_dict, model_name)
 
         # ── Fix 5: calibrate confidence before validation ────────────────────
         result = _calibrate_confidence(result)
@@ -213,9 +317,9 @@ def run_extraction(self, task_id: str):
             if n and not any(n in rn or rn in n for rn in in_relation if rn)
         )
 
-        # Trigger when globally sparse OR >30% of entities are isolated
-        sparse = relation_count < max(5, entity_count * 0.4)
-        many_isolated = isolated_count > max(2, entity_count * 0.3)
+        # Trigger when globally sparse OR >25% of entities are isolated
+        sparse = relation_count < max(5, entity_count * 0.8)
+        many_isolated = isolated_count > max(2, entity_count * 0.25)
         if entity_count >= 5 and (sparse or many_isolated):
             task.progress = {"stage": "inferring relations", "pct": 75}
             db.commit()
@@ -254,6 +358,8 @@ def run_extraction(self, task_id: str):
                 entity_name_to_id[e.name_en] = e.id
 
         for e_data in result.get("entities", []):
+            if not isinstance(e_data, dict):
+                continue
             name_cn = e_data.get("name_cn") or e_data.get("name", "")
             if not name_cn:
                 continue
@@ -351,6 +457,8 @@ def run_extraction(self, task_id: str):
         logic_name_to_id: dict = {r.name_cn: r.id for r in existing_rules}
 
         for r_data in result.get("logic_rules", []):
+            if not isinstance(r_data, dict):
+                continue
             name_cn = r_data.get("name_cn") or r_data.get("name", "")
             if not name_cn:
                 continue
@@ -386,6 +494,8 @@ def run_extraction(self, task_id: str):
         existing_action_map = {a.name_cn: a for a in existing_actions}
 
         for a_data in result.get("actions", []):
+            if not isinstance(a_data, dict):
+                continue
             name_cn = a_data.get("name_cn") or a_data.get("name", "")
             if not name_cn:
                 continue

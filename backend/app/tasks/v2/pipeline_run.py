@@ -152,6 +152,13 @@ def _spec_from_transform_config(config: dict | None) -> dict:
             extract["auto_extract"] = True
             extract.update(params)
             spec["md_to_structured"] = extract
+        elif op == "llm_enrich":
+            # 方案三：规则提取后 LLM 语义增强，不影响结构确定性
+            extract = dict(spec.get("md_to_structured") or {})
+            extract["llm_enrich"] = True
+            if params.get("fields"):
+                extract["enrich_fields"] = params["fields"]
+            spec["md_to_structured"] = extract
 
     if config.get("path") == "wide_table":
         wide = dict(spec.get("wide_table_split") or {})
@@ -410,18 +417,24 @@ def pipeline_run_task(pipeline_id: str, run_id: str):
             )
             if source["route"] == "C":
                 ctx.spec = dict(ctx.spec or {})
-                # 配置了文本 LLM (如 deepseek) 时用 LLM 自动结构化提取 (PRD F5.6),
-                # 否则规则兜底; LLM 调用失败时 _auto_extract_with_llm 也会回退规则。
-                from app.services.model_config_selector import select_llm_model_config
-                try:
-                    _has_llm = bool(select_llm_model_config(
-                        purpose_tags=("结构化提取", "结构化抽取"), allow_vlm=False))
-                except Exception:
-                    _has_llm = False
-                ctx.spec["md_to_structured"] = {
-                    ("auto_extract" if _has_llm else "rule_based"): True,
-                    **(ctx.spec.get("md_to_structured") or {}),
-                }
+                # 默认使用规则提取保证可重复性。只有当 pipeline spec 中已明确写入
+                # md_to_structured.auto_extract=true 时才调用 LLM（非确定性）。
+                existing_md_spec = ctx.spec.get("md_to_structured") or {}
+                if existing_md_spec.get("auto_extract"):
+                    # Pipeline spec 显式请求 LLM 提取：检查模型是否可用
+                    from app.services.model_config_selector import select_llm_model_config
+                    try:
+                        _has_llm = bool(select_llm_model_config(
+                            purpose_tags=("结构化提取", "结构化抽取"), allow_vlm=False))
+                    except Exception:
+                        _has_llm = False
+                    if not _has_llm:
+                        existing_md_spec = {k: v for k, v in existing_md_spec.items() if k != "auto_extract"}
+                        existing_md_spec["rule_based"] = True
+                    ctx.spec["md_to_structured"] = existing_md_spec
+                else:
+                    # 默认规则提取（确定性）
+                    ctx.spec["md_to_structured"] = {"rule_based": True, **existing_md_spec}
             ctx.rows_in = len(data)
             data, ctx = _execute_route(source["route"], ctx, data)
             ctx.rows_out = len(data)
