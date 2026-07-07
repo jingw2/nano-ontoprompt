@@ -222,8 +222,9 @@ cd backend && python scripts/reset_admin_password.py
 
 ---
 
-[![GitHub stars](https://img.shields.io/github/stars/jingw2/nano-ontoprompt?style=social)](https://github.com/jingw2/nano-ontoprompt/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/jingw2/nano-ontoprompt?style=social)](https://github.com/jingw2/nano-ontoprompt/network/members)
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=jingw2/nano-ontoprompt&type=Date)](https://star-history.com/#jingw2/nano-ontoprompt&Date)
 
 ---
 
