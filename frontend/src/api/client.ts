@@ -17,7 +17,7 @@ function createApiClient(baseURL: string): ApiClient {
   client.interceptors.response.use(
     res => res.data.data !== undefined ? res.data.data : res.data,
     err => {
-      if (err.response?.status === 401) {
+      if (err.response?.status === 401 || err.response?.status === 403) {
         localStorage.removeItem('token')
         window.location.href = '/login'
       }
