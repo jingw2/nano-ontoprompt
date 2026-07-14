@@ -1,0 +1,142 @@
+snomed_id,canonical_id,name_en,name_zh,category,type
+# ── 抑郁症状（Depressive Symptoms）────────────────────────────────────────
+366979004,symptom:depressed_mood,Depressed mood,情绪低落,depression,symptom
+102895009,symptom:morose_mood,Morose mood,忧郁情绪,depression,symptom
+30819006,symptom:dysphoric_mood,Dysphoric mood,烦躁情绪,depression,symptom
+139596004,symptom:blunting_of_mood,Blunting of mood,情感迟钝,depression,symptom
+6140007,symptom:blunted_affect,Blunted affect,情感平淡,depression,symptom
+286639002,symptom:labile_mood,Labile mood,情绪不稳,depression,symptom
+18963009,symptom:mood_swings,Mood swings,情绪波动,depression,symptom
+386782008,symptom:disturbance_in_affect,Disturbance in affect,情感紊乱,depression,symptom
+20602000,symptom:indifference,Indifference,情感淡漠,depression,symptom
+24936000,symptom:emotionally_detached,Emotionally detached,情感疏离,depression,symptom
+247776002,symptom:depressive_preoccupation,Depressive preoccupation,抑郁性沉思,depression,symptom
+247801000,symptom:depression_worse_in_morning,Depression worse in morning,晨间抑郁加重,depression,symptom
+247802007,symptom:depression_worse_later_in_day,Depression worse later in day,日间抑郁加重,depression,symptom
+420038007,symptom:feeling_unhappy,Feeling unhappy,感到不快乐,depression,symptom
+272022009,symptom:complaining_of_feeling_depressed,Complaining of feeling depressed,主诉感到抑郁,depression,symptom
+139129007,symptom:crying_associated_with_mood,Crying associated with mood,情绪性哭泣,depression,symptom
+81492003,symptom:mood_anorexia,Mood anorexia,情绪性厌食,depression,symptom
+14661003,symptom:diminished_libido_due_to_mood,Diminished libido due to mood,情绪导致性欲减退,depression,symptom
+392721003,symptom:symptoms_of_depression,Symptoms of depression,抑郁症状群,depression,symptom
+# ── 睡眠症状（Sleep Symptoms）─────────────────────────────────────────────
+193462001,symptom:insomnia,Insomnia,失眠,sleep,symptom
+59050008,symptom:initial_insomnia,Initial insomnia,入睡困难,sleep,symptom
+38376001,symptom:initial_mood_insomnia,Initial mood insomnia,情绪性入睡困难,sleep,symptom
+45291004,symptom:middle_mood_insomnia,Middle mood insomnia,情绪性睡眠维持困难,sleep,symptom
+3277001,symptom:terminal_mood_insomnia,Terminal mood insomnia,情绪性早醒,sleep,symptom
+59445005,symptom:mood_hypersomnia,Mood hypersomnia,情绪性嗜睡,sleep,symptom
+# ── 焦虑症状（Anxiety Symptoms）──────────────────────────────────────────
+48694002,symptom:anxiety,Anxiety,焦虑,anxiety,symptom
+225624000,symptom:panic_attack,Panic attack,惊恐发作,anxiety,symptom
+61387006,symptom:moderate_anxiety,Moderate anxiety,中度焦虑,anxiety,symptom
+70997004,symptom:mild_anxiety,Mild anxiety,轻度焦虑,anxiety,symptom
+80583007,symptom:severe_anxiety,Severe anxiety,重度焦虑,anxiety,symptom
+81350009,symptom:free_floating_anxiety,Free-floating anxiety,游离性焦虑,anxiety,symptom
+35429005,symptom:anticipatory_anxiety,Anticipatory anxiety,预期性焦虑,anxiety,symptom
+11458009,symptom:anticipatory_anxiety_mild,Anticipatory anxiety mild,轻度预期性焦虑,anxiety,symptom
+36646009,symptom:anticipatory_anxiety_moderate,Anticipatory anxiety moderate,中度预期性焦虑,anxiety,symptom
+5874002,symptom:anticipatory_anxiety_severe,Anticipatory anxiety severe,重度预期性焦虑,anxiety,symptom
+126943008,symptom:separation_anxiety,Separation anxiety,分离焦虑,anxiety,symptom
+129869000,symptom:death_anxiety,Death anxiety,死亡焦虑,anxiety,symptom
+247808006,symptom:health_anxiety,Anxiety about body function or health,健康焦虑,anxiety,symptom
+69479009,symptom:anxiety_hyperventilation,Anxiety hyperventilation,焦虑性过度换气,anxiety,symptom
+424196004,symptom:feeling_nervous,Feeling nervous,感到紧张,anxiety,symptom
+139598003,symptom:anxious_cognitions,Anxious cognitions,焦虑性认知,anxiety,symptom
+# ── 认知症状（Cognitive Symptoms）────────────────────────────────────────
+247592009,symptom:poor_concentration,Poor concentration,注意力难集中,cognitive,symptom
+386806002,symptom:impaired_cognition,Impaired cognition,认知功能受损,cognitive,symptom
+102542000,symptom:lack_of_spontaneity,Lack of spontaneity,自发性减退,cognitive,symptom
+# ── 躯体症状（Somatic Symptoms）──────────────────────────────────────────
+11003002,symptom:nervous_diarrhea,Nervous diarrhea,神经性腹泻,somatic,symptom
+87842000,symptom:neuromuscular_exhaustion,Generalized neuromuscular exhaustion syndrome,神经肌肉衰竭综合征,somatic,symptom
+162218007,symptom:stress_related_problem,Stress-related problem,应激相关躯体问题,somatic,symptom
+# ── 抑郁障碍（Depressive Disorders）──────────────────────────────────────
+35489007,disorder:depressive_disorder,Depressive disorder,抑郁障碍,depression,disorder
+370143000,disorder:major_depressive_disorder,Major depressive disorder,重性抑郁障碍,depression,disorder
+36923009,disorder:major_depression_single_episode,Major depression single episode,重性抑郁单次发作,depression,disorder
+66344007,disorder:recurrent_major_depression,Recurrent major depression,复发性重性抑郁,depression,disorder
+78667006,disorder:dysthymia,Dysthymia,恶劣心境,depression,disorder
+83176005,disorder:primary_dysthymia,Primary dysthymia,原发性恶劣心境,depression,disorder
+85080004,disorder:secondary_dysthymia,Secondary dysthymia,继发性恶劣心境,depression,disorder
+2506003,disorder:early_onset_dysthymia,Early onset dysthymia,早发性恶劣心境,depression,disorder
+19694002,disorder:late_onset_dysthymia,Late onset dysthymia,晚发性恶劣心境,depression,disorder
+192080009,disorder:chronic_depression,Chronic depression,慢性抑郁,depression,disorder
+2618002,disorder:chronic_recurrent_mdd,Chronic recurrent major depressive disorder,慢性复发性重性抑郁障碍,depression,disorder
+247803002,disorder:seasonal_affective_disorder,Seasonal affective disorder,季节性情感障碍,depression,disorder
+40568001,disorder:recurrent_brief_depressive_disorder,Recurrent brief depressive disorder,复发性短暂抑郁障碍,depression,disorder
+48589009,disorder:minor_depressive_disorder,Minor depressive disorder,轻性抑郁障碍,depression,disorder
+715924009,disorder:dmdd,Disruptive mood dysregulation disorder,破坏性心境失调障碍,depression,disorder
+596004,disorder:pmdd,Premenstrual dysphoric disorder,经前烦躁障碍,depression,disorder
+58703003,disorder:postpartum_depression,Postpartum depression,产后抑郁,depression,disorder
+712823008,disorder:acute_depression,Acute depression,急性抑郁发作,depression,disorder
+87414006,disorder:reactive_depression,Reactive depression situational,反应性抑郁,depression,disorder
+57194009,disorder:adjustment_disorder_depressed,Adjustment disorder with depressed mood,伴抑郁心境的适应障碍,depression,disorder
+# ── 焦虑障碍（Anxiety Disorders）─────────────────────────────────────────
+197480006,disorder:anxiety_disorder,Anxiety disorder,焦虑障碍,anxiety,disorder
+21897009,disorder:gad,Generalized anxiety disorder,广泛性焦虑障碍,anxiety,disorder
+47505003,disorder:ptsd,Posttraumatic stress disorder,创伤后应激障碍,anxiety,disorder
+313182004,disorder:chronic_ptsd,Chronic post-traumatic stress disorder,慢性创伤后应激障碍,anxiety,disorder
+443919007,disorder:cptsd,Complex posttraumatic stress disorder,复杂性创伤后应激障碍,anxiety,disorder
+67195008,disorder:acute_stress_disorder,Acute stress disorder,急性应激障碍,anxiety,disorder
+426174008,disorder:chronic_stress_disorder,Chronic stress disorder,慢性应激障碍,anxiety,disorder
+56576003,disorder:panic_disorder,Panic disorder without agoraphobia,不伴广场恐惧的惊恐障碍,anxiety,disorder
+35607004,disorder:panic_disorder_with_agoraphobia,Panic disorder with agoraphobia,伴广场恐惧的惊恐障碍,anxiety,disorder
+70691001,disorder:agoraphobia,Agoraphobia,广场恐惧症,anxiety,disorder
+25501002,disorder:social_phobia,Social phobia,社交恐惧症,anxiety,disorder
+62351001,disorder:generalized_social_phobia,Generalized social phobia,广泛性社交恐惧症,anxiety,disorder
+54587008,disorder:simple_phobia,Simple phobia,单纯恐惧症,anxiety,disorder
+191736004,disorder:ocd,Obsessive-compulsive disorder,强迫症,anxiety,disorder
+231504006,disorder:mixed_anxiety_depression,Mixed anxiety and depressive disorder,混合性焦虑抑郁障碍,anxiety,disorder
+11806006,disorder:separation_anxiety_disorder,Separation anxiety disorder of childhood,儿童分离焦虑障碍,anxiety,disorder
+16265701000119107,disorder:illness_anxiety_disorder,Illness anxiety disorder,疾病焦虑障碍,anxiety,disorder
+782501005,disorder:adjustment_disorder_mixed,Adjustment disorder with mixed anxiety and depressed mood,混合性焦虑抑郁适应障碍,anxiety,disorder
+# ── 双相障碍（Bipolar Disorders）─────────────────────────────────────────
+13746004,disorder:bipolar_disorder,Bipolar disorder,双相障碍,bipolar,disorder
+371596008,disorder:bipolar_i,Bipolar I disorder,双相I型障碍,bipolar,disorder
+83225003,disorder:bipolar_ii,Bipolar II disorder,双相II型障碍,bipolar,disorder
+13313007,disorder:mild_bipolar,Mild bipolar disorder,轻度双相障碍,bipolar,disorder
+79584002,disorder:moderate_bipolar,Moderate bipolar disorder,中度双相障碍,bipolar,disorder
+371600003,disorder:severe_bipolar,Severe bipolar disorder,重度双相障碍,bipolar,disorder
+133091000119105,disorder:rapid_cycling_bipolar_i,Rapid cycling bipolar I disorder,快速循环双相I型障碍,bipolar,disorder
+789061003,disorder:rapid_cycling_bipolar_ii,Rapid cycling bipolar II disorder,快速循环双相II型障碍,bipolar,disorder
+38368003,disorder:schizoaffective_bipolar,Schizoaffective disorder bipolar type,双相型分裂情感障碍,bipolar,disorder
+# ── 精神分裂症（Schizophrenia & Psychosis）───────────────────────────────
+58214004,disorder:schizophrenia,Schizophrenia,精神分裂症,schizophrenia,disorder
+4926007,disorder:schizophrenia_remission,Schizophrenia in remission,缓解期精神分裂症,schizophrenia,disorder
+35252006,disorder:disorganized_schizophrenia,Disorganized schizophrenia,青春型精神分裂症,schizophrenia,disorder
+64905009,disorder:paranoid_schizophrenia,Paranoid schizophrenia,偏执型精神分裂症,schizophrenia,disorder
+26472000,disorder:paraphrenia,Paraphrenia,晚发性妄想症,schizophrenia,disorder
+26025008,disorder:residual_schizophrenia,Residual schizophrenia,残留型精神分裂症,schizophrenia,disorder
+1204417003,disorder:early_onset_schizophrenia,Early onset schizophrenia,早发性精神分裂症,schizophrenia,disorder
+416340002,disorder:late_onset_schizophrenia,Late onset schizophrenia,晚发性精神分裂症,schizophrenia,disorder
+111484002,disorder:undifferentiated_schizophrenia,Undifferentiated schizophrenia,未分化型精神分裂症,schizophrenia,disorder
+247804008,disorder:schizophrenic_prodrome,Schizophrenic prodrome,精神分裂症前驱期,schizophrenia,disorder
+# ── 人格障碍（Personality Disorders）────────────────────────────────────
+33449004,disorder:personality_disorder,Personality disorder,人格障碍,personality,disorder
+20010003,disorder:bpd,Borderline personality disorder,边缘型人格障碍,personality,disorder
+26665006,disorder:aspd,Antisocial personality disorder,反社会型人格障碍,personality,disorder
+55341008,disorder:histrionic_pd,Histrionic personality disorder,表演型人格障碍,personality,disorder
+80711002,disorder:npd,Narcissistic personality disorder,自恋型人格障碍,personality,disorder
+37746008,disorder:avoidant_pd,Avoidant personality disorder,回避型人格障碍,personality,disorder
+84466009,disorder:dependent_pd,Dependent personality disorder,依赖型人格障碍,personality,disorder
+31027006,disorder:schizotypal_pd,Schizotypal personality disorder,分裂型人格障碍,personality,disorder
+52954000,disorder:schizoid_pd,Schizoid personality disorder,分裂样人格障碍,personality,disorder
+13601005,disorder:paranoid_pd,Paranoid personality disorder,偏执型人格障碍,personality,disorder
+44966003,disorder:passive_aggressive_pd,Passive aggressive personality disorder,被动攻击型人格障碍,personality,disorder
+1376001,disorder:ocpd,Obsessive compulsive personality disorder,强迫型人格障碍,personality,disorder
+191765005,disorder:eupd,Emotionally unstable personality disorder,情绪不稳定型人格障碍,personality,disorder
+442057004,disorder:chronic_depressive_pd,Chronic depressive personality disorder,慢性抑郁型人格障碍,personality,disorder
+# ── 创伤相关（Trauma Related）────────────────────────────────────────────
+699241002,disorder:combat_chronic_ptsd,Chronic PTSD following military combat,军事创伤后慢性PTSD,trauma,disorder
+318784009,disorder:delayed_ptsd,Posttraumatic stress disorder delayed onset,迟发性创伤后应激障碍,trauma,disorder
+446175003,disorder:combat_acute_ptsd,Acute PTSD following military combat,军事创伤后急性PTSD,trauma,disorder
+# ── 发育相关（Neurodevelopmental）────────────────────────────────────────
+1855002,disorder:developmental_academic_disorder,Developmental academic disorder,发育性学业障碍,neurodevelopmental,disorder
+52824009,disorder:dyslexia,Developmental reading disorder,发育性阅读障碍,neurodevelopmental,disorder
+47916000,disorder:dyscalculia,Developmental arithmetic disorder,发育性算术障碍,neurodevelopmental,disorder
+443735008,disorder:nonverbal_learning_disorder,Nonverbal learning disorder,非语言性学习障碍,neurodevelopmental,disorder
+45677003,disorder:dysgraphia,Developmental expressive writing disorder,发育性书写障碍,neurodevelopmental,disorder
+# ── 风险指标（Risk Indicators）───────────────────────────────────────────
+428181000124104,risk:depression_screening_positive,Depression screening positive,抑郁筛查阳性,risk,indicator
+112001000119100,risk:phq9_positive,Positive screening for depression on PHQ-9,PHQ-9抑郁筛查阳性,risk,indicator

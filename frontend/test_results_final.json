@@ -1,0 +1,240 @@
+{
+  "testTime": "2026-06-06T02:06:02.269Z",
+  "timestamp": "2026-06-06_0206",
+  "domains": [
+    {
+      "domain": "人力资源",
+      "domainEn": "HR",
+      "ontologyName": "人力资源测试_2026-06-06_0206",
+      "ontologyId": "0ded6b54-2f1c-4286-8d86-532d08ee3c27",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_01_HR_01_list.png",
+        "modal": "domain_01_HR_02_modal.png",
+        "formFilled": "domain_01_HR_03_form.png",
+        "detail": "domain_01_HR_04_detail.png",
+        "uploaded": "domain_01_HR_05_uploaded.png",
+        "graph": "domain_01_HR_06_graph.png",
+        "entities": "domain_01_HR_07_entities.png",
+        "logic": "domain_01_HR_08_logic.png",
+        "actions": "domain_01_HR_09_actions.png",
+        "llm": "domain_01_HR_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711582235,
+      "duration": 21500
+    },
+    {
+      "domain": "供应链",
+      "domainEn": "SupplyChain",
+      "ontologyName": "供应链测试_2026-06-06_0206",
+      "ontologyId": "54de5795-fa3c-457e-b393-e59c5565cc6e",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_02_SupplyChain_01_list.png",
+        "modal": "domain_02_SupplyChain_02_modal.png",
+        "formFilled": "domain_02_SupplyChain_03_form.png",
+        "detail": "domain_02_SupplyChain_04_detail.png",
+        "uploaded": "domain_02_SupplyChain_05_uploaded.png",
+        "graph": "domain_02_SupplyChain_06_graph.png",
+        "entities": "domain_02_SupplyChain_07_entities.png",
+        "logic": "domain_02_SupplyChain_08_logic.png",
+        "actions": "domain_02_SupplyChain_09_actions.png",
+        "llm": "domain_02_SupplyChain_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711603735,
+      "duration": 21376
+    },
+    {
+      "domain": "医疗",
+      "domainEn": "Medical",
+      "ontologyName": "医疗测试_2026-06-06_0206",
+      "ontologyId": "aadf9bce-9918-430e-8e7c-1e2db40cdda3",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_03_Medical_01_list.png",
+        "modal": "domain_03_Medical_02_modal.png",
+        "formFilled": "domain_03_Medical_03_form.png",
+        "detail": "domain_03_Medical_04_detail.png",
+        "uploaded": "domain_03_Medical_05_uploaded.png",
+        "graph": "domain_03_Medical_06_graph.png",
+        "entities": "domain_03_Medical_07_entities.png",
+        "logic": "domain_03_Medical_08_logic.png",
+        "actions": "domain_03_Medical_09_actions.png",
+        "llm": "domain_03_Medical_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711625111,
+      "duration": 21335
+    },
+    {
+      "domain": "教育",
+      "domainEn": "Education",
+      "ontologyName": "教育测试_2026-06-06_0206",
+      "ontologyId": "9bf204b7-6487-4c72-99c0-296e1dc04b30",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_04_Education_01_list.png",
+        "modal": "domain_04_Education_02_modal.png",
+        "formFilled": "domain_04_Education_03_form.png",
+        "detail": "domain_04_Education_04_detail.png",
+        "uploaded": "domain_04_Education_05_uploaded.png",
+        "graph": "domain_04_Education_06_graph.png",
+        "entities": "domain_04_Education_07_entities.png",
+        "logic": "domain_04_Education_08_logic.png",
+        "actions": "domain_04_Education_09_actions.png",
+        "llm": "domain_04_Education_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711646446,
+      "duration": 21559
+    },
+    {
+      "domain": "法律",
+      "domainEn": "Legal",
+      "ontologyName": "法律测试_2026-06-06_0206",
+      "ontologyId": "c992b0b9-a4ae-4282-b2ff-c8a847a6d9b9",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_05_Legal_01_list.png",
+        "modal": "domain_05_Legal_02_modal.png",
+        "formFilled": "domain_05_Legal_03_form.png",
+        "detail": "domain_05_Legal_04_detail.png",
+        "uploaded": "domain_05_Legal_05_uploaded.png",
+        "graph": "domain_05_Legal_06_graph.png",
+        "entities": "domain_05_Legal_07_entities.png",
+        "logic": "domain_05_Legal_08_logic.png",
+        "actions": "domain_05_Legal_09_actions.png",
+        "llm": "domain_05_Legal_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711668005,
+      "duration": 21498
+    },
+    {
+      "domain": "营销",
+      "domainEn": "Marketing",
+      "ontologyName": "营销测试_2026-06-06_0206",
+      "ontologyId": "b412679d-054b-4c0d-90ed-a83e8361c59c",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_06_Marketing_01_list.png",
+        "modal": "domain_06_Marketing_02_modal.png",
+        "formFilled": "domain_06_Marketing_03_form.png",
+        "detail": "domain_06_Marketing_04_detail.png",
+        "uploaded": "domain_06_Marketing_05_uploaded.png",
+        "graph": "domain_06_Marketing_06_graph.png",
+        "entities": "domain_06_Marketing_07_entities.png",
+        "logic": "domain_06_Marketing_08_logic.png",
+        "actions": "domain_06_Marketing_09_actions.png",
+        "llm": "domain_06_Marketing_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711689503,
+      "duration": 21677
+    },
+    {
+      "domain": "财务",
+      "domainEn": "Finance",
+      "ontologyName": "财务测试_2026-06-06_0206",
+      "ontologyId": "9707a863-d004-451d-b663-b375c730f5c0",
+      "status": "PASS",
+      "filesAttempted": 3,
+      "filesUploaded": 3,
+      "tabsAccessed": [
+        "文件上传",
+        "知识图谱",
+        "实体",
+        "逻辑规则",
+        "动作",
+        "LLM提取配置"
+      ],
+      "screenshots": {
+        "list": "domain_07_Finance_01_list.png",
+        "modal": "domain_07_Finance_02_modal.png",
+        "formFilled": "domain_07_Finance_03_form.png",
+        "detail": "domain_07_Finance_04_detail.png",
+        "uploaded": "domain_07_Finance_05_uploaded.png",
+        "graph": "domain_07_Finance_06_graph.png",
+        "entities": "domain_07_Finance_07_entities.png",
+        "logic": "domain_07_Finance_08_logic.png",
+        "actions": "domain_07_Finance_09_actions.png",
+        "llm": "domain_07_Finance_10_llm.png"
+      },
+      "errors": [],
+      "startTime": 1780711711180,
+      "duration": 21446
+    }
+  ],
+  "summary": {
+    "totalDomains": 7,
+    "pass": 7,
+    "partial": 0,
+    "fail": 0,
+    "filesUploaded": 21,
+    "filesAttempted": 21,
+    "screenshotCount": 81,
+    "avgDurationMs": 21484
+  }
+}

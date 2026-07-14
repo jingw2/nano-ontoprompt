@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.deps import get_db, get_current_user
 from app.models.prompt import Prompt
+from app.models.extraction_task import ExtractionTask
 from app.models.user import User
+from app.models.model_config import ModelConfig
 from app.schemas.prompt import PromptCreate, PromptUpdate, PromptOut
 import uuid
 
@@ -82,6 +84,21 @@ def trigger_purchase_request(context: dict) -> dict:
 }"""},
     {"name": "医疗本体提取", "domain": "医疗", "content": """你是医疗领域本体工程专家。从文档中提取完整的医疗健康本体。
 
+【文件名与主疾病实体】（重要）
+每段文档以「【来源文件】{文件名}」开头。文件名通常形如：
+  1、创伤性应激障碍 (PTSD).docx
+  1、广泛性焦虑障碍 (GAD).docx
+即：{序号}、{中文病名} ({英文缩写}).扩展名
+
+对每个文档段，必须提取 1 个 type=Disease 的主疾病实体，中文名与英文缩写**以该段来源文件名为准**：
+1. 去掉扩展名（.docx 等）及前导序号（如「1、」）
+2. name_cn：仅保留纯中文病名，不得含英文、括号或缩写（✗ 创伤性应激障碍（PTSD） → ✓ 创伤性应激障碍）
+3. name_abbr：括号内纯英文字母缩写（如 PTSD、GAD、OCD），与 name_cn、name_en 并列；若无英文缩写则省略
+4. 若括号内为中文别名而非英文缩写（如「场所恐惧症（广场恐惧症）」），name_abbr 留空，可将别名写入 properties.alias
+5. name_en：填正文中的完整英文疾病名；正文未给出时可据医学常识补全。**禁止**用缩写填 name_en
+6. 文件名无法解析出单一病名时（如「治疗焦虑障碍常用药物表.docx」、.json），不强制创建主 Disease，按正文提取即可
+7. 主疾病 name_cn 必须与文件名解析结果一致，勿用正文中的近义称呼替代（如文件名是「创伤性」则不得改成「创伤后」）
+
 【实体类型】识别以下所有类型：
 - Disease（疾病）：诊断名称、病症、综合征
 - Drug（药物）：药品、化合物、制剂
@@ -90,6 +107,17 @@ def trigger_purchase_request(context: dict) -> dict:
 - Facility（医疗机构）：医院、科室、诊所
 - Category（分类）：疾病分类、药物分类
 - Process（医疗流程）：诊疗流程、用药流程、手术流程
+- RiskFactor(风险因素): 年龄、遗传、肥胖、吸烟、高盐饮食
+- Pathogenesis(发病机制): 疾病的发病机制、病理生理过程
+- Subtype(亚型): 疾病的亚型、变异型、并发症
+- Scale(量表): 疾病量表、评分量表、诊断量表
+- Examination(检查): 检查项目、检查方法、检查指标
+- NonDrugTreatment(非药物治疗): 非药物治疗、物理治疗、心理治疗
+- FAQ(常见问题): 疾病常见问题、疾病常见疑问
+- DiagnosisCriteria(诊断标准): 诊断标准
+- FollowupQuestion(随访问题): 随访问题
+- DiversionRule(转诊规则): 转诊规则
+- ClinicalFocus(临床重点): 临床重点
 
 每个实体必须填写 properties（最多3个关键属性，如发病率、副作用、适应症），不得为空。
 
@@ -116,7 +144,7 @@ def prescribe_medication(context: dict) -> dict:
 
 返回JSON，不要有多余文字：
 {
-  "entities": [{"name_cn": "实体名", "name_en": "EntityName", "type": "Disease|Drug|Symptom|Treatment|Facility|Category|Process", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
+  "entities": [{"name_cn": "创伤性应激障碍", "name_abbr": "PTSD", "name_en": "Post-Traumatic Stress Disorder", "type": "Disease", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "treats|causes|IS-A|PART-OF|INSTANCE-OF|关联", "confidence": 0.85}],
   "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
   "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', '')\\n    return {'status': 'ok', 'value': val}"}]
@@ -312,4 +340,52 @@ def delete_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(get_c
     p = db.query(Prompt).filter(Prompt.id == prompt_id).first()
     if not p:
         raise HTTPException(404, "Not found")
-    db.delete(p); db.commit()
+    db.query(ExtractionTask).filter(ExtractionTask.prompt_id == prompt_id).update(
+        {ExtractionTask.prompt_id: None}, synchronize_session=False
+    )
+    db.delete(p)
+    db.commit()
+
+@router.post("/generate-template")
+def generate_prompt_template(
+    domain: str = Query(..., description="业务域"),
+    style: str = Query("ontology_extraction", description="提示词风格"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Use LLM to generate a prompt template for a given business domain"""
+    from app.services.llm_service import _call_llm
+    from app.services.encryption_service import decrypt
+
+    model_cfg = db.query(ModelConfig).first()
+    if not model_cfg:
+        raise HTTPException(400, "No model configured. Please add a model in the Models page first.")
+
+    provider = model_cfg.provider
+    api_key = decrypt(model_cfg.api_key_encrypted or "")
+    api_base = model_cfg.api_base
+    models_list = model_cfg.models or []
+    model_name = models_list[0] if models_list else ""
+    if not model_name:
+        raise HTTPException(400, "Model name not configured.")
+
+    system_msg = (
+        "你是一个本体工程专家，擅长为不同业务域设计 LLM 提取提示词。"
+        "根据用户指定的业务域，生成一个完整的本体提取 Prompt。"
+        "Prompt 需要：1) 列出该域典型实体类型；2) 列出关系类型；3) 要求提取逻辑规则和动作；"
+        "4) 规定返回 JSON 格式（entities/relations/logic_rules/actions）。"
+        "只返回 Prompt 文本本身，不要有其他说明。"
+    )
+    user_msg = f"请为【{domain}】业务域生成本体提取提示词，风格：{style}。"
+
+    try:
+        content = _call_llm(provider, api_key, api_base, model_name, [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ], json_mode=False)
+        if not isinstance(content, str):
+            content = str(content)
+    except Exception as e:
+        raise HTTPException(500, f"LLM generation failed: {str(e)}")
+
+    return {"domain": domain, "content": content.strip()}

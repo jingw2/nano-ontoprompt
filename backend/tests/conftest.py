@@ -1,3 +1,6 @@
+import atexit
+import os
+import tempfile
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,9 +12,22 @@ from app.services.auth_service import hash_password
 from app.models.user import User
 import uuid
 
-TEST_DB = "sqlite:///./test.db"
+# 每次 pytest 运行使用独立的临时 SQLite, 避免并发运行互相锁库
+_db_fd, _db_path = tempfile.mkstemp(prefix="ontoprompt_test_", suffix=".db")
+os.close(_db_fd)
+
+TEST_DB = f"sqlite:///{_db_path}"
 engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
 TestSession = sessionmaker(bind=engine)
+
+
+@atexit.register
+def _cleanup_test_db():
+    engine.dispose()
+    try:
+        os.unlink(_db_path)
+    except OSError:
+        pass
 
 @pytest.fixture(autouse=True)
 def setup_db():

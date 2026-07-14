@@ -28,7 +28,7 @@ from app.tasks.extraction import _calibrate_confidence, _dedup_existing, _fuzzy_
 # ── 配置 ─────────────────────────────────────────────────────────────────────
 API_BASE    = "http://localhost:8000/api/v1"
 USERNAME    = "admin"
-PASSWORD    = "changeme123"
+PASSWORD    = "admin123"
 TEST_DATA   = os.path.abspath(os.path.join("..", "test_data"))
 
 DOMAINS = [

@@ -12,12 +12,14 @@ FORMAT_MAP = {
     "csv": ("text/csv", "csv", export_service.export_csv),
     "ttl": ("text/turtle", "ttl", export_service.export_ttl),
     "html": ("text/html", "html", export_service.export_html),
+    "cypher": ("text/plain", "cypher", export_service.export_neo4j_cypher),
+    "tugraph": ("application/zip", "zip", export_service.export_tugraph_zip),
 }
 
 @router.get("")
 def export_ontology(
     ontology_id: str,
-    format: str = Query("json", pattern="^(json|yaml|csv|ttl|html)$"),
+    format: str = Query("json", pattern="^(json|yaml|csv|ttl|html|cypher|tugraph)$"),
     db: Session = Depends(get_db),
     _=Depends(get_current_user)
 ):

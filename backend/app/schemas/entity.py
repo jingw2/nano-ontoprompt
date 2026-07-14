@@ -5,6 +5,9 @@ from typing import Optional, Dict, Any
 class EntityCreate(BaseModel):
     name_cn: str
     name_en: Optional[str] = None
+    name_abbr: Optional[str] = None
+    snomed_id: Optional[str] = None
+    canonical_id: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
     properties: Dict[str, Any] = {}
@@ -13,6 +16,9 @@ class EntityCreate(BaseModel):
 class EntityUpdate(BaseModel):
     name_cn: Optional[str] = None
     name_en: Optional[str] = None
+    name_abbr: Optional[str] = None
+    snomed_id: Optional[str] = None
+    canonical_id: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
     properties: Optional[Dict[str, Any]] = None
@@ -23,6 +29,9 @@ class EntityOut(BaseModel):
     ontology_id: str
     name_cn: str
     name_en: Optional[str] = None
+    name_abbr: Optional[str] = None
+    snomed_id: Optional[str] = None
+    canonical_id: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
     properties: Dict[str, Any] = {}

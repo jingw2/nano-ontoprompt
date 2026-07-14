@@ -1,0 +1,117 @@
+[
+  {
+    "order_id": "PO-2024-0001",
+    "order_date": "2024-01-15",
+    "status": "completed",
+    "supplier": {
+      "id": "SUP-001",
+      "name": "天钢原材料有限公司",
+      "level": "S级",
+      "region": "华东",
+      "contact": "张经理"
+    },
+    "items": [
+      {"sku": "STL-001", "name": "钢材Q235", "unit": "吨", "quantity": 50, "unit_price": 4800, "total": 240000},
+      {"sku": "STL-002", "name": "钢材Q355", "unit": "吨", "quantity": 30, "unit_price": 5200, "total": 156000}
+    ],
+    "logistics": {
+      "carrier": "明远物流",
+      "expected_days": 3,
+      "actual_days": 3,
+      "on_time": true
+    },
+    "quality": {"inspection_rate": 0.99, "defect_count": 0, "status": "pass"}
+  },
+  {
+    "order_id": "PO-2024-0002",
+    "order_date": "2024-01-18",
+    "status": "completed",
+    "supplier": {
+      "id": "SUP-002",
+      "name": "芯联电子科技",
+      "level": "S级",
+      "region": "华南",
+      "contact": "李总"
+    },
+    "items": [
+      {"sku": "ELC-101", "name": "微控制器MCU-32", "unit": "万件", "quantity": 10, "unit_price": 85000, "total": 850000},
+      {"sku": "ELC-102", "name": "电容器0402", "unit": "万件", "quantity": 20, "unit_price": 8000, "total": 160000}
+    ],
+    "logistics": {
+      "carrier": "顺丰物流",
+      "expected_days": 2,
+      "actual_days": 2,
+      "on_time": true
+    },
+    "quality": {"inspection_rate": 0.998, "defect_count": 2, "status": "pass"}
+  },
+  {
+    "order_id": "PO-2024-0003",
+    "order_date": "2024-01-20",
+    "status": "delayed",
+    "supplier": {
+      "id": "SUP-003",
+      "name": "聚合包装集团",
+      "level": "S级",
+      "region": "华东",
+      "contact": "王副总"
+    },
+    "items": [
+      {"sku": "PKG-201", "name": "瓦楞纸箱A型", "unit": "万件", "quantity": 5, "unit_price": 12000, "total": 60000}
+    ],
+    "logistics": {
+      "carrier": "德邦物流",
+      "expected_days": 4,
+      "actual_days": 6,
+      "on_time": false,
+      "delay_reason": "恶劣天气"
+    },
+    "quality": {"inspection_rate": 0.97, "defect_count": 150, "status": "review"}
+  },
+  {
+    "order_id": "PO-2024-0004",
+    "order_date": "2024-01-22",
+    "status": "completed",
+    "supplier": {
+      "id": "SUP-004",
+      "name": "华晟铝业",
+      "level": "A级",
+      "region": "华南",
+      "contact": "陈经理"
+    },
+    "items": [
+      {"sku": "ALU-001", "name": "铝合金6061", "unit": "吨", "quantity": 20, "unit_price": 18500, "total": 370000},
+      {"sku": "ALU-002", "name": "铝合金7075", "unit": "吨", "quantity": 10, "unit_price": 24000, "total": 240000}
+    ],
+    "logistics": {
+      "carrier": "明远物流",
+      "expected_days": 3,
+      "actual_days": 3,
+      "on_time": true
+    },
+    "quality": {"inspection_rate": 0.982, "defect_count": 18, "status": "pass"}
+  },
+  {
+    "order_id": "PO-2024-0005",
+    "order_date": "2024-01-25",
+    "status": "in_transit",
+    "supplier": {
+      "id": "SUP-005",
+      "name": "广联五金",
+      "level": "A级",
+      "region": "华北",
+      "contact": "刘主任"
+    },
+    "items": [
+      {"sku": "HW-301", "name": "M8螺栓镀锌", "unit": "万件", "quantity": 8, "unit_price": 3200, "total": 25600},
+      {"sku": "HW-302", "name": "M10螺母", "unit": "万件", "quantity": 5, "unit_price": 2800, "total": 14000}
+    ],
+    "logistics": {
+      "carrier": "京东物流",
+      "expected_days": 5,
+      "actual_days": null,
+      "on_time": null
+    },
+    "quality": {"inspection_rate": null, "defect_count": null, "status": "pending"}
+  }
+]

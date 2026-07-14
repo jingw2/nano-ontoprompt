@@ -5,7 +5,7 @@ const BASE = 'http://localhost:5173'
 async function login(page: any) {
   await page.goto(`${BASE}/login`)
   await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'changeme123')
+  await page.fill('input[placeholder="密码"]', 'admin123')
   await page.click('button[type="submit"]')
   await page.waitForURL(`${BASE}/overview`)
 }
@@ -45,5 +45,13 @@ test.describe('Model Config Management', () => {
     await expect(select).toBeVisible()
     const options = await select.locator('option').allTextContents()
     expect(options.some(o => o.toLowerCase().includes('openai'))).toBeTruthy()
+  })
+
+  test('ocr config exposes EasyOCR provider', async ({ page }) => {
+    await page.click('button:has-text("添加模型")')
+    await page.locator('select').first().selectOption('ocr')
+    const providerSelect = page.locator('select').nth(1)
+    const options = await providerSelect.locator('option').allTextContents()
+    expect(options).toContain('EasyOCR')
   })
 })

@@ -42,3 +42,49 @@ def delete_action(ontology_id: str, action_id: str, db: Session = Depends(get_db
     if not a:
         raise HTTPException(404, "Not found")
     db.delete(a); db.commit()
+
+
+@router.post("/{action_id}/toggle")
+def toggle_action(ontology_id: str, action_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    a = db.query(Action).filter(Action.id == action_id, Action.ontology_id == ontology_id).first()
+    if not a:
+        raise HTTPException(404, "Not found")
+    a.enabled = not getattr(a, 'enabled', True)
+    try:
+        from app.models.v2.action import OntologyActionType
+        v2 = db.query(OntologyActionType).filter(
+            OntologyActionType.ontology_id == ontology_id,
+            OntologyActionType.name == a.name_cn,
+        ).first()
+        if v2:
+            v2.enabled = a.enabled
+            if not a.enabled and v2.status != "published":
+                v2.status = "disabled"
+    except Exception:
+        pass
+    db.commit()
+    return {"enabled": a.enabled}
+
+
+@router.post("/publish")
+def publish_actions(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    acts = db.query(Action).filter(
+        Action.ontology_id == ontology_id,
+        Action.status != 'published',
+        Action.enabled == True,  # noqa: E712
+    ).all()
+    for a in acts:
+        a.status = 'published'
+    try:
+        from app.models.v2.action import OntologyActionType
+        v2_actions = db.query(OntologyActionType).filter(
+            OntologyActionType.ontology_id == ontology_id,
+            OntologyActionType.status != "published",
+            OntologyActionType.enabled == True,  # noqa: E712
+        ).all()
+        for a in v2_actions:
+            a.status = "published"
+    except Exception:
+        pass
+    db.commit()
+    return {"published": len(acts)}

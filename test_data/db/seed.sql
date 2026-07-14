@@ -7,13 +7,13 @@
 INSERT INTO users (id, username, email, password_hash, role, is_active, created_at, updated_at) VALUES
   ('u-admin-001', 'admin', 'admin@ontoprompt.local',
    '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', -- password: changeme123
-   'admin', true, NOW(), NOW()),
+   'admin', TRUE, NOW(), NOW()),
   ('u-editor-001', 'editor', 'editor@ontoprompt.local',
    '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW',
-   'editor', true, NOW(), NOW()),
+   'editor', TRUE, NOW(), NOW()),
   ('u-viewer-001', 'viewer', 'viewer@ontoprompt.local',
    '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW',
-   'viewer', true, NOW(), NOW());
+   'viewer', TRUE, NOW(), NOW());
 
 -- =====================
 -- ONTOLOGY PROJECTS (3 projects)
@@ -49,10 +49,10 @@ INSERT INTO relations (id, ontology_id, source_entity, target_entity, type, prop
 -- =====================
 -- LOGIC RULES (3 rules)
 -- =====================
-INSERT INTO logic_rules (id, ontology_id, name_cn, name_en, description, formula, linked_entities, confidence, version, created_at, updated_at) VALUES
-  ('l-001', 'o-supply-001', '安全库存触发规则', 'SafetyStockRule', '库存低于阈值时触发采购', 'stock < safety_stock * 0.2 → purchase()', '["e-sup-002","e-sup-005"]', 0.90, 'v1.0', NOW(), NOW()),
-  ('l-002', 'o-supply-001', '库存上限规则', 'MaxInventoryRule', '防止过度库存', 'inventory <= max_inventory * 1.5', '[]', 0.85, 'v1.0', NOW(), NOW()),
-  ('l-003', 'o-medical-001', '高血压合并糖尿病用药规则', 'HTN_DM_DrugRule', '高血压合并糖尿病首选ARB或ACEI', 'has(HTN) AND has(DM) → prefer(ARB | ACEI)', '["e-med-001","e-med-002"]', 0.88, 'v0.5', NOW(), NOW());
+INSERT INTO logic_rules (id, ontology_id, name_cn, name_en, description, formula, confidence, version, created_at, updated_at, linked_entities) VALUES
+  ('l-001', 'o-supply-001', '安全库存触发规则', 'SafetyStockRule', '库存低于阈值时触发采购', 'stock < safety_stock * 0.2 → purchase()', 0.90, 'v1.0', NOW(), NOW(), '[]'),
+  ('l-002', 'o-supply-001', '库存上限规则', 'MaxInventoryRule', '防止过度库存', 'inventory <= max_inventory * 1.5', 0.85, 'v1.0', NOW(), NOW(), '[]'),
+  ('l-003', 'o-medical-001', '高血压合并糖尿病用药规则', 'HTN_DM_DrugRule', '高血压合并糖尿病首选ARB或ACEI', 'has(HTN) AND has(DM) → prefer(ARB | ACEI)', 0.88, 'v0.5', NOW(), NOW(), '[]');
 
 -- =====================
 -- ACTIONS (3 actions)
@@ -71,7 +71,87 @@ INSERT INTO prompts (id, name, domain, content, version, created_by, created_at,
   ('p-003', '医疗本体提取', '医疗', '从医疗文档提取疾病、药物、症状等实体及诊疗规则，返回JSON', 'v1.0', 'u-admin-001', NOW(), NOW()),
   ('p-004', '财务本体提取', '财务', '从财务文档提取会计概念、财务规则，返回JSON', 'v1.0', 'u-admin-001', NOW(), NOW()),
   ('p-005', '法律本体提取', '法律', '从法律文档提取法律概念、权利义务关系，返回JSON', 'v1.0', 'u-admin-001', NOW(), NOW()),
-  ('p-006', '教育本体提取', '教育', '从教育文档提取课程、知识点、能力要求，返回JSON', 'v1.0', 'u-admin-001', NOW(), NOW());
+  ('p-006', '教育本体提取', '教育', '从教育文档提取课程、知识点、能力要求，返回JSON', 'v1.0', 'u-admin-001', NOW(), NOW()),
+  ('p-007', '精神科知识图谱提取', '医疗',
+'你是精神科/心理健康领域的医学知识图谱抽取专家。请从文档中提取结构化知识图谱，严格按照以下JSON格式输出，不要输出任何额外文字或注释。
+
+## 输出格式
+
+{
+  "entities": [...],
+  "relations": [...],
+  "logic_rules": [],
+  "actions": []
+}
+
+## 实体类型（entities）
+
+每个实体结构：
+{ "name_cn": "实体中文名", "name_en": "English name（如有）", "type": "实体类型", "description": "一句话描述", "properties": {}, "confidence": 0.90 }
+
+### 实体类型与 properties 字段说明
+
+Disease（疾病）— 文档描述的主体疾病
+  properties: { "definition": "疾病定义", "epidemiology_summary": "流行病学摘要", "treatment_principles": "治疗原则", "follow_up": "随访方案", "prognosis": "预后", "prevention": "预防措施", "patient_education": "患者教育要点" }
+
+Symptom（症状）— 疾病的临床表现症状
+  properties: { "category": "症状分类（如情感症状/认知症状/躯体症状）", "source_text": "原文摘录" }
+
+RiskFactor（危险因素）— 发病相关危险因素
+  properties: { "category": "因素类别（遗传/环境/社会心理/生物等）", "source_text": "原文摘录" }
+
+Pathogenesis（发病机制）— 发病原因和病理机制要点
+  properties: { "source_text": "原文摘录" }
+
+Subtype（疾病亚型）— 疾病分型/亚类
+  properties: { "criteria": "分型依据", "source_text": "原文摘录" }
+
+Scale（量表）— 诊断或评估量表
+  properties: { "full_name": "量表全称", "purpose": "用途", "items_or_dimensions": "条目或维度说明", "cutoff_or_scoring": "评分标准或截断值" }
+
+Examination（检查项目）— 辅助检查
+  properties: { "purpose": "检查目的", "key_findings": "关键异常表现" }
+
+DiagnosisCriteria（诊断标准）— 诊断标准条目，name_cn 使用"系统-代码"格式如"DSM-5-F32"
+  properties: { "system": "DSM-5或ICD-11等", "code": "诊断编码", "summary": "核心标准摘要", "full_text": "标准全文或核心条款" }
+
+Drug（药物）— 药物治疗
+  properties: { "drug_class": "药物类别", "indications": "适应症", "notes": "注意事项", "contraindications_raw": "禁忌证原文" }
+
+NonDrugTreatment（非药物治疗）— 心理治疗、物理治疗等
+  properties: { "treatment_type": "治疗类型（如CBT/ECT/rTMS等）", "description": "治疗方法描述", "contraindications_raw": "禁忌证原文" }
+
+FAQ（常见问答）— 医患常见问答，name_cn 使用问题核心词（不超过15字）
+  properties: { "question": "完整问题", "answer": "完整答案" }
+
+## 关系类型（relations）
+
+每条关系结构：
+{ "source": "source实体的name_cn", "target": "target实体的name_cn", "type": "关系类型", "confidence": 0.90 }
+
+关系类型清单（source类型 → target类型）：
+- HAS_SYMPTOM         Disease → Symptom          疾病具有该症状
+- HAS_RISK_FACTOR     Disease → RiskFactor        疾病具有该危险因素
+- HAS_PATHOGENESIS    Disease → Pathogenesis      疾病具有该发病机制
+- HAS_SUBTYPE         Disease → Subtype           疾病具有该亚型
+- DIAGNOSED_BY_SCALE  Disease → Scale             疾病用该量表诊断/评估
+- NEEDS_EXAM          Disease → Examination       疾病需要该检查
+- MEETS_CRITERIA      Disease → DiagnosisCriteria 疾病符合该诊断标准
+- TREATED_BY_DRUG     Disease → Drug              疾病使用该药物治疗
+- TREATED_BY_NON_DRUG Disease → NonDrugTreatment  疾病使用该非药物治疗
+- DIFFERENTIAL_WITH   Disease → Disease           疾病需与该病鉴别诊断
+- COMORBID_WITH       Disease → Disease           疾病与该病常见共病
+- HAS_FAQ             Disease → FAQ               疾病关联该常见问答
+
+## 抽取规则
+
+1. 所有 name_cn 必须来自原文真实表述，严禁凭空编造或按常识补充
+2. 原文中以①②③或1.2.3.编号罗列的条目必须逐条拆分为独立实体，不得合并
+3. source_text 摘录能支持该条目的原文句子，用于溯源
+4. confidence 赋值：原文明确表述 0.90~0.98，有一定推断 0.70~0.89，不确定 0.50~0.69
+5. 关系中 source 和 target 必须与 entities 中某个 name_cn 完全一致
+6. logic_rules 和 actions 固定输出空数组',
+  'v1.0', 'u-admin-001', NOW(), NOW());
 
 -- =====================
 -- MODEL CONFIGS (3 models)
@@ -94,11 +174,11 @@ INSERT INTO extraction_tasks (id, ontology_id, prompt_id, model_id, status, para
 -- RULES CONFIG (8 rules)
 -- =====================
 INSERT INTO rules_config (id, rule_key, rule_value, rule_label_cn, rule_label_en, editable, created_at, updated_at) VALUES
-  ('rc-001', 'confidence_entity_min', '0.5', '实体最低置信度', 'Entity min confidence', true, NOW(), NOW()),
-  ('rc-002', 'confidence_logic_min', '0.6', '逻辑规则最低置信度', 'Logic rule min confidence', true, NOW(), NOW()),
-  ('rc-003', 'confidence_action_min', '0.6', '动作最低置信度', 'Action min confidence', true, NOW(), NOW()),
-  ('rc-004', 'confidence_relation_min', '0.5', '关系最低置信度', 'Relation min confidence', true, NOW(), NOW()),
-  ('rc-005', 'confidence_high_threshold', '0.9', '高置信度阈值', 'High confidence threshold', true, NOW(), NOW()),
-  ('rc-006', 'confidence_medium_threshold', '0.7', '中置信度阈值', 'Medium confidence threshold', true, NOW(), NOW()),
-  ('rc-007', 'confidence_low_threshold', '0.5', '低置信度阈值', 'Low confidence threshold', true, NOW(), NOW()),
-  ('rc-008', 'confidence_display_dashed_below', '0.7', '低于此值显示虚线边', 'Show dashed edge below', true, NOW(), NOW());
+  ('rc-001', 'confidence_entity_min', '0.5', '实体最低置信度', 'Entity min confidence', TRUE, NOW(), NOW()),
+  ('rc-002', 'confidence_logic_min', '0.6', '逻辑规则最低置信度', 'Logic rule min confidence', TRUE, NOW(), NOW()),
+  ('rc-003', 'confidence_action_min', '0.6', '动作最低置信度', 'Action min confidence', TRUE, NOW(), NOW()),
+  ('rc-004', 'confidence_relation_min', '0.5', '关系最低置信度', 'Relation min confidence', TRUE, NOW(), NOW()),
+  ('rc-005', 'confidence_high_threshold', '0.9', '高置信度阈值', 'High confidence threshold', TRUE, NOW(), NOW()),
+  ('rc-006', 'confidence_medium_threshold', '0.7', '中置信度阈值', 'Medium confidence threshold', TRUE, NOW(), NOW()),
+  ('rc-007', 'confidence_low_threshold', '0.5', '低置信度阈值', 'Low confidence threshold', TRUE, NOW(), NOW()),
+  ('rc-008', 'confidence_display_dashed_below', '0.7', '低于此值显示虚线边', 'Show dashed edge below', TRUE, NOW(), NOW());

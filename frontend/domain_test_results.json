@@ -1,0 +1,156 @@
+{
+  "testTime": "2026-06-06T01:23:39.087Z",
+  "backend": "http://localhost:8000",
+  "frontend": "http://localhost:5173",
+  "pages": [
+    {
+      "page": "Overview",
+      "status": "PASS",
+      "screenshot": "02_overview.png"
+    },
+    {
+      "page": "Pipelines",
+      "status": "PASS",
+      "screenshot": "03_pipelines_connections.png"
+    },
+    {
+      "page": "Models",
+      "status": "PASS",
+      "screenshot": "10_models.png"
+    },
+    {
+      "page": "Settings",
+      "status": "PASS",
+      "screenshot": "11_settings.png"
+    }
+  ],
+  "domains": [
+    {
+      "domain": "人力资源",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:25:27.189Z",
+      "endTime": "2026-06-06T01:26:00.011Z"
+    },
+    {
+      "domain": "供应链",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:26:01.400Z",
+      "endTime": "2026-06-06T01:26:33.494Z"
+    },
+    {
+      "domain": "医疗",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:26:34.752Z",
+      "endTime": "2026-06-06T01:27:06.735Z"
+    },
+    {
+      "domain": "教育",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:27:07.945Z",
+      "endTime": "2026-06-06T01:27:39.945Z"
+    },
+    {
+      "domain": "法律",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:27:41.154Z",
+      "endTime": "2026-06-06T01:28:13.189Z"
+    },
+    {
+      "domain": "营销",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:28:14.384Z",
+      "endTime": "2026-06-06T01:28:46.369Z"
+    },
+    {
+      "domain": "财务",
+      "status": "FAIL",
+      "ontologyId": null,
+      "filesUploaded": 0,
+      "filesTotal": 3,
+      "entitiesExtracted": 0,
+      "relationsExtracted": 0,
+      "screenshotCreate": "",
+      "screenshotDetail": "",
+      "screenshotGraph": "",
+      "errors": [
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has-text(\"新建\"), a:has-text(\"新建\"), button:has-text(\"New\"), button:has-text(\"+\")').first()\u001b[22m\n"
+      ],
+      "startTime": "2026-06-06T01:28:47.698Z",
+      "endTime": "2026-06-06T01:29:19.646Z"
+    }
+  ],
+  "summary": {
+    "totalDomains": 7,
+    "pass": 0,
+    "partial": 0,
+    "fail": 7,
+    "totalFilesUploaded": 0,
+    "totalFilesAttempted": 21
+  }
+}

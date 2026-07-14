@@ -1,0 +1,46 @@
+model_list:
+  # OpenAI
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-3-5-haiku
+    litellm_params:
+      model: anthropic/claude-3-5-haiku-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # 通义千问（阿里云）
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/qwen-plus
+      api_key: os.environ/DASHSCOPE_API_KEY
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai/qwen-turbo
+      api_key: os.environ/DASHSCOPE_API_KEY
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+  # 本地 vLLM（OpenAI 兼容接口）
+  - model_name: qwen3.5-35b-int4
+    litellm_params:
+      model: openai/qwen3.5-35b-int4
+      api_base: http://10.0.0.67:8000/v1
+      api_key: dummy
+
+litellm_settings:
+  drop_params: true        # 忽略各 provider 不支持的参数，避免报错
+  request_timeout: 300

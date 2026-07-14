@@ -16,6 +16,8 @@ class LogicRule(Base):
     formula: Mapped[str] = mapped_column(Text, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     version: Mapped[str] = mapped_column(String(20), default="v0.1")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     _linked_entities: Mapped[str] = mapped_column("linked_entities", Text, default="[]")

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<articles>
+  <record id="A001">
+    <title>Machine Learning Basics</title>
+    <author>John Doe</author>
+    <category>AI</category>
+    <published>2024-01-15</published>
+  </record>
+  <record id="A002">
+    <title>Deep Learning with PyTorch</title>
+    <author>Jane Smith</author>
+    <category>Deep Learning</category>
+    <published>2024-02-20</published>
+  </record>
+  <record id="A003">
+    <title>Natural Language Processing</title>
+    <author>Bob Chen</author>
+    <category>NLP</category>
+    <published>2024-03-10</published>
+  </record>
+</articles>

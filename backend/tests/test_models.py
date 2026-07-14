@@ -24,3 +24,35 @@ def test_delete_model(client, auth_headers):
     mid = r.json()["data"]["id"]
     r2 = client.delete(f"/api/v1/models/{mid}", headers=auth_headers)
     assert r2.status_code == 204
+
+
+def test_create_easyocr_model_config(client, auth_headers):
+    r = client.post("/api/v1/models", json={
+        "name": "Local EasyOCR",
+        "config_type": "ocr",
+        "provider": "easyocr",
+        "models": [],
+        "options": {"enabled": False, "lang": "ch_sim,en", "device": "cpu"},
+    }, headers=auth_headers)
+
+    assert r.status_code == 201
+    data = r.json()["data"]
+    assert data["config_type"] == "ocr"
+    assert data["provider"] == "easyocr"
+
+
+def test_easyocr_model_test_reports_disabled(client, auth_headers):
+    r = client.post("/api/v1/models", json={
+        "name": "Local EasyOCR",
+        "config_type": "ocr",
+        "provider": "easyocr",
+        "models": [],
+        "options": {"enabled": False},
+    }, headers=auth_headers)
+    mid = r.json()["data"]["id"]
+
+    test = client.post(f"/api/v1/models/{mid}/test", headers=auth_headers)
+
+    assert test.status_code == 200
+    assert test.json()["data"]["ok"] is False
+    assert "EasyOCR" in test.json()["data"]["response"]

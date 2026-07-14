@@ -9,10 +9,13 @@ import FilesTab from './tabs/FilesTab'
 import EntitiesTab from './tabs/EntitiesTab'
 import LogicTab from './tabs/LogicTab'
 import ActionsTab from './tabs/ActionsTab'
+import AuditTab from './tabs/AuditTab'
+import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
 
-const GraphTab = lazy(() => import('./tabs/GraphTab'))
 
-type Tab = 'files' | 'extract' | 'graph' | 'entities' | 'logic' | 'actions'
+const GraphTab = lazy(() => import('./tabs/GraphTabV2'))
+
+type Tab = 'info' | 'graph' | 'entities' | 'logic' | 'actions' | 'files' | 'extract' |  'audit' | 'curated'
 
 class GraphErrorBoundary extends React.Component<
   { children: React.ReactNode; fallbackLabel?: string },
@@ -48,7 +51,7 @@ export default function OntologyDetailPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [searchParams] = useSearchParams()
-  const initialTab = (searchParams.get('tab') as Tab) || 'files'
+  const initialTab = (searchParams.get('tab') as Tab) || 'info'
   const [activeTab, setActiveTab] = useState<Tab>(initialTab)
 
   const { data: ontology, isLoading } = useQuery({
@@ -60,13 +63,18 @@ export default function OntologyDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-400">{t('common.loading')}</div>
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
+  const isPipelineMode = (ontology as any).build_mode === 'pipeline_mapping'
+
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'files', label: t('ontology.tabs.files') },
-    { key: 'extract', label: t('ontology.tabs.extract') },
+    { key: 'info', label: t('ontology.tabs.info') },
     { key: 'graph', label: t('ontology.tabs.graph') },
     { key: 'entities', label: t('ontology.tabs.entities') },
     { key: 'logic', label: t('ontology.tabs.logic') },
     { key: 'actions', label: t('ontology.tabs.actions') },
+    { key: 'audit', label: t('ontology.tabs.audit') },
+    isPipelineMode
+      ? { key: 'curated', label: 'Curated 数据集' }
+      : { key: 'files', label: t('ontology.tabs.files') },
   ]
 
   return (
@@ -95,8 +103,9 @@ export default function OntologyDetailPage() {
       </div>
 
       <div>
+        {activeTab === 'info' && <InfoTab ontology={ontology} />}
         {activeTab === 'files' && <FilesTab ontologyId={id!} />}
-        {activeTab === 'extract' && <InfoTab ontology={ontology} />}
+        {activeTab === 'curated' && <CuratedDatasetsTab ontologyId={id!} />}
         {activeTab === 'graph' && (
           <GraphErrorBoundary fallbackLabel="知识图谱渲染失败">
             <Suspense fallback={<div className="text-gray-400 py-8 text-center">{t('common.loading')}</div>}>
@@ -107,6 +116,7 @@ export default function OntologyDetailPage() {
         {activeTab === 'entities' && <EntitiesTab ontologyId={id!} />}
         {activeTab === 'logic' && <LogicTab ontologyId={id!} />}
         {activeTab === 'actions' && <ActionsTab ontologyId={id!} />}
+        {activeTab === 'audit' && <AuditTab ontologyId={id!} />}
       </div>
     </div>
   )

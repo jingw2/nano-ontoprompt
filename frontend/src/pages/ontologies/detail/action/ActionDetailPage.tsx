@@ -129,17 +129,19 @@ export default function ActionDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
   if (!action) return <div className="p-6 text-red-500">动作未找到</div>
 
-  // Related entities by name
-  const linkedEntityNames = new Set(action.linked_entities ?? [])
-  const relatedEntities = (allEntities as Entity[]).filter(e =>
-    linkedEntityNames.has(e.name_cn) || (e.name_en ? linkedEntityNames.has(e.name_en) : false)
-  )
-  const unlinkedEntities = (allEntities as Entity[]).filter(e => !linkedEntityNames.has(e.name_cn))
+  // linked_entities 可能是实体显示名(简易 LLM)或实体类型名(Pipeline Mapping)
+  const linkedKeys = new Set(action.linked_entities ?? [])
+  const entityHit = (e: Entity) =>
+    linkedKeys.has(e.name_cn) || (e.type ? linkedKeys.has(e.type) : false) || (e.name_en ? linkedKeys.has(e.name_en) : false)
+  const relatedEntities = (allEntities as Entity[]).filter(entityHit)
+  const unlinkedEntities = (allEntities as Entity[]).filter(e => !entityHit(e))
 
-  // Related logic by id
+  // 关联逻辑: 显式 linked_logic_ids, 或与本动作共享 linked_entities(同一实体类)
   const linkedLogicIds = new Set(action.linked_logic_ids ?? [])
-  const relatedLogic = (allLogic as LogicRule[]).filter(r => linkedLogicIds.has(r.id))
-  const unlinkedLogic = (allLogic as LogicRule[]).filter(r => !linkedLogicIds.has(r.id))
+  const logicHit = (r: LogicRule) =>
+    linkedLogicIds.has(r.id) || (r.linked_entities ?? []).some(x => linkedKeys.has(x))
+  const relatedLogic = (allLogic as LogicRule[]).filter(logicHit)
+  const unlinkedLogic = (allLogic as LogicRule[]).filter(r => !logicHit(r))
 
   // Entity link helpers
   const removeEntity = (entityId: string) => {

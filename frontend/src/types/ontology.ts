@@ -6,6 +6,9 @@ export interface OntologyListItem {
   domain: string
   version: string
   status: OntologyStatus
+  build_mode?: string
+  entity_count: number
+  relation_count: number
   created_by: string
   created_at: string
   updated_at: string
@@ -13,6 +16,7 @@ export interface OntologyListItem {
 
 export interface OntologyDetail extends OntologyListItem {
   description?: string
+  build_mode?: string
   created_at: string
 }
 
@@ -21,6 +25,9 @@ export interface Entity {
   ontology_id: string
   name_cn: string
   name_en?: string
+  name_abbr?: string
+  snomed_id?: string
+  canonical_id?: string
   type?: string
   description?: string
   properties: Record<string, unknown>
@@ -39,6 +46,8 @@ export interface LogicRule {
   formula?: string
   confidence: number
   version: string
+  enabled?: boolean
+  status?: string
   linked_entities: string[]
   created_at: string
   updated_at: string
@@ -83,9 +92,11 @@ export interface Prompt {
 export interface ModelConfig {
   id: string
   name: string
+  config_type: 'llm' | 'ocr' | 'other'
   provider: string
   api_base?: string
   models: string[]
+  options?: Record<string, unknown>
   created_by: string
   created_at: string
   updated_at: string

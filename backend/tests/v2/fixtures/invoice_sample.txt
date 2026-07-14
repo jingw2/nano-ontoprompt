@@ -1,0 +1,9 @@
+INVOICE #INV-2024-001
+
+Vendor: ABC Supply Co.
+Date: 2024-01-15
+Amount: $1,250.00
+Tax: $125.00
+Total: $1,375.00
+
+Item: Office Supplies x 5 @ $250.00

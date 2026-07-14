@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { ontologyApi, promptApi, modelApi } from '@/api/ontologies'
 import { CheckCircle, XCircle, Loader2, ChevronRight, AlertTriangle, AlertCircle, Info } from 'lucide-react'
 import type { OntologyDetail } from '@/types/ontology'
@@ -85,19 +86,97 @@ const STAGE_PCT: Record<string, number> = {
 
 const lastTaskKey = (oid: string) => `ontoprompt_last_task_${oid}`
 
+type SavedTask = { task_id?: string; status?: string; [key: string]: unknown }
+
+function loadSavedTask(oid: string): SavedTask | null {
+  try {
+    const saved = localStorage.getItem(lastTaskKey(oid))
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
+function saveTask(oid: string, data: SavedTask) {
+  try {
+    localStorage.setItem(lastTaskKey(oid), JSON.stringify(data))
+  } catch {}
+}
+
+function StructuredDataLink() {
+  const navigate = useNavigate()
+  return (
+    <button
+      onClick={() => navigate('/data/structured')}
+      className="text-xs text-blue-600 hover:underline"
+    >
+      → 查看结构数据
+    </button>
+  )
+}
+function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
+  const [mappings, setMappings] = useState<any[]>([])
+  useEffect(() => {
+    import('@/api/client').then(({ apiClientV2 }) => {
+      apiClientV2.get(`/ontologies/${ontology.id}/mappings`)
+        .then((res: any) => setMappings(Array.isArray(res) ? res : []))
+        .catch(() => setMappings([]))
+    })
+  }, [ontology.id])
+
+  return (
+    <div className="bg-white rounded-xl border p-6 space-y-4">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold">Pipeline Mapping 状态</span>
+        <span className="px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700">🔄 Pipeline 模式</span>
+      </div>
+      {mappings.length === 0 ? (
+        <p className="text-sm text-gray-400">暂无 Mapping 配置。请先在 Pipelines → Curated Datasets 中审批数据，然后在新建本体时配置 Mapping。</p>
+      ) : (
+        <div className="space-y-2">
+          {mappings.map((m: any) => (
+            <div key={m.mapping_id || m.id} className="border rounded-lg px-3 py-2 text-sm flex items-center justify-between">
+              <div>
+                <span className="font-medium">{m.entity_class}</span>
+                {m.entity_class_cn && <span className="text-gray-400 ml-2">({m.entity_class_cn})</span>}
+              </div>
+              <span className={`text-xs px-1.5 py-0.5 rounded border ${m.status === 'active' ? 'border-green-200 bg-green-50 text-green-700' : 'border-gray-200 text-gray-500'}`}>
+                {m.status || 'draft'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="pt-2 border-t flex gap-2">
+        <StructuredDataLink />
+      </div>
+    </div>
+  )
+}
+
 export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
+  const pollRef = useRef<(() => void) | null>(null)
   const [promptId, setPromptId] = useState('')
   const [modelId, setModelId] = useState('')
   const [modelName, setModelName] = useState('')
-  const [taskStatus, setTaskStatus] = useState<any>(() => {
-    // Restore last task result for this ontology so P0 report persists after tab-switch
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+  const [taskStatus, setTaskStatus] = useState<any>(() => loadSavedTask(ontology.id))
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  const handleExport = async (format: string) => {
+    setExportError(null)
+    setExportingFormat(format)
     try {
-      const saved = localStorage.getItem(lastTaskKey(ontology.id))
-      return saved ? JSON.parse(saved) : null
-    } catch { return null }
-  })
+      await ontologyApi.exportOntology(ontology.id, format)
+    } catch (err: any) {
+      setExportError(err?.detail ?? err?.message ?? t('extract.export_failed', 'Export failed'))
+    } finally {
+      setExportingFormat(null)
+    }
+  }
 
   const { data: prompts } = useQuery({ queryKey: ['prompts'], queryFn: () => promptApi.list() as any })
   const { data: models } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
@@ -117,36 +196,59 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
   })
 
   const startPoll = (taskId: string) => {
+    pollRef.current?.()
+    setPollTimedOut(false)
     let attempts = 0
+    let cancelled = false
+    pollRef.current = () => { cancelled = true }
+
     const poll = async () => {
-      if (attempts++ > 90) return
+      if (cancelled) return
+      // 2s interval × 600 ≈ 20 min — local LLM extraction can exceed 5 min
+      if (attempts++ > 600) {
+        setPollTimedOut(true)
+        return
+      }
       try {
         const status: any = await ontologyApi.getExtractionStatus(ontology.id, taskId)
-        setTaskStatus(status)
+        if (cancelled) return
+        const merged = { ...status, task_id: taskId }
+        setTaskStatus(merged)
+        saveTask(ontology.id, merged)
         if (status.status === 'completed' || status.status === 'failed') {
-          try { localStorage.setItem(lastTaskKey(ontology.id), JSON.stringify(status)) } catch {}
-        }
-        if (status.status !== 'completed' && status.status !== 'failed') {
-          setTimeout(poll, 2000)
-        } else {
+          setPollTimedOut(false)
           qc.invalidateQueries({ queryKey: ['ontology', ontology.id] })
           qc.invalidateQueries({ queryKey: ['stats'] })
           qc.invalidateQueries({ queryKey: ['entities', ontology.id] })
           qc.invalidateQueries({ queryKey: ['logic', ontology.id] })
           qc.invalidateQueries({ queryKey: ['actions', ontology.id] })
+          qc.invalidateQueries({ queryKey: ['graph', ontology.id] })
+          return
         }
+        setTimeout(poll, 2000)
       } catch {
-        setTimeout(poll, 3000)
+        if (!cancelled) setTimeout(poll, 3000)
       }
     }
     poll()
   }
 
+  // Resume polling if user refreshed while a task was still running
+  useEffect(() => {
+    const saved = loadSavedTask(ontology.id)
+    if (saved?.task_id && saved.status !== 'completed' && saved.status !== 'failed') {
+      startPoll(saved.task_id)
+    }
+    return () => { pollRef.current?.() }
+  }, [ontology.id])
+
   const handleExtract = async () => {
+    setPollTimedOut(false)
     setTaskStatus({ status: 'running', progress: { stage: 'queued', pct: 0 }, error: null } as any)
     const constraints = getActiveConstraints(loadRuleStates())
     try {
       const res: any = await extractMut.mutateAsync(constraints)
+      saveTask(ontology.id, { status: 'running', progress: { stage: 'queued', pct: 0 }, task_id: res.task_id })
       startPoll(res.task_id)
     } catch (e: any) {
       setTaskStatus({
@@ -164,10 +266,38 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
   const currentPct = taskStatus?.progress?.pct ?? 0
   const currentStage = taskStatus?.progress?.stage ?? ''
 
+  const isPipelineMode = ontology.build_mode === 'pipeline_mapping'
+
   return (
     <div className="space-y-5">
-      {/* LLM Config */}
+      {/* Basic Info */}
       <div className="bg-white rounded-xl border p-6">
+        <h3 className="font-semibold mb-4">{t('ontology.tabs.info')}</h3>
+        <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+          <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.name')}</dt><dd className="font-medium">{ontology.name}</dd></div>
+          <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.domain')}</dt><dd>{ontology.domain}</dd></div>
+          <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.version')}</dt><dd className="font-mono">{ontology.version}</dd></div>
+          <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.status')}</dt><dd>{ontology.status}</dd></div>
+          <div>
+            <dt className="text-xs text-gray-500 mb-0.5">构建方式</dt>
+            <dd>
+              {isPipelineMode
+                ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700">🔄 Pipeline Mapping</span>
+                : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-50 border border-amber-200 text-amber-700">⚡ 简易 LLM 提取</span>
+              }
+            </dd>
+          </div>
+          {ontology.description && (
+            <div className="col-span-2"><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.desc_optional')}</dt><dd className="text-gray-700">{ontology.description}</dd></div>
+          )}
+        </dl>
+      </div>
+
+      {/* Pipeline Mapping 状态（仅 pipeline_mapping 模式显示） */}
+      {isPipelineMode && <PipelineMappingInfo ontology={ontology} />}
+
+      {/* LLM Config（仅简易模式显示） */}
+      {!isPipelineMode && <div className="bg-white rounded-xl border p-6">
         <div className="flex items-center gap-2 mb-4">
           <h3 className="font-semibold">{t('extract.llm_config')}</h3>
           {activeConstraints.length > 0 && (
@@ -226,10 +356,10 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
             )}
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Extraction Progress */}
-      {taskStatus && (
+      {!isPipelineMode && taskStatus && (
         <div className={`bg-white rounded-xl border p-6 ${taskStatus.status === 'failed' ? 'border-red-200 bg-red-50' : ''}`}>
           <h3 className="font-semibold mb-4">{t('extract.progress')}</h3>
 
@@ -281,26 +411,46 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
                 />
               </div>
               <p className="text-xs text-gray-400 mt-1.5">{currentPct}%{currentStage ? ` · ${currentStage}` : ''}</p>
+              {pollTimedOut && isExtracting && taskStatus?.task_id && (
+                <div className="mt-3 flex items-center gap-2">
+                  <p className="text-xs text-amber-600">{t('extract.poll_timeout')}</p>
+                  <button
+                    type="button"
+                    onClick={() => startPoll(taskStatus.task_id)}
+                    className="text-xs px-2 py-1 border border-amber-200 rounded text-amber-700 hover:bg-amber-50"
+                  >
+                    {t('extract.resume_poll')}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
       )}
 
       {/* Validation Report */}
-      {taskStatus?.validation_report && (
+      {!isPipelineMode && taskStatus?.validation_report && (
         <ValidationReportCard report={taskStatus.validation_report} />
       )}
 
       {/* Export */}
       <div className="bg-white rounded-xl border p-6">
         <h3 className="font-semibold mb-4">{t('extract.export')}</h3>
+        {exportError && (
+          <p className="text-sm text-red-600 mb-2">{exportError}</p>
+        )}
         <div className="flex gap-2 flex-wrap">
-          {['json', 'yaml', 'csv', 'ttl', 'html'].map(fmt => (
-            <a key={fmt} href={ontologyApi.exportUrl(ontology.id, fmt)}
-              className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 font-mono text-gray-700"
-              download>
+          {['json', 'yaml', 'csv', 'ttl', 'html', 'cypher', 'tugraph'].map(fmt => (
+            <button
+              key={fmt}
+              type="button"
+              disabled={exportingFormat !== null}
+              onClick={() => handleExport(fmt)}
+              className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 font-mono text-gray-700 disabled:opacity-50"
+            >
+              {exportingFormat === fmt && <Loader2 size={14} className="animate-spin inline mr-1" />}
               {fmt.toUpperCase()}
-            </a>
+            </button>
           ))}
         </div>
       </div>

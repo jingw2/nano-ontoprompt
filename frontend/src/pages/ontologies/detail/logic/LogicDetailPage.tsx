@@ -3,8 +3,9 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { ontologyApi } from '@/api/ontologies'
+import { apiClient } from '@/api/client'
 import ConfidenceBar from '@/components/ConfidenceBar'
-import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check } from 'lucide-react'
+import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check, ToggleLeft, ToggleRight } from 'lucide-react'
 import type { LogicRule, Action, Entity } from '@/types/ontology'
 
 function ChipEditor({
@@ -110,6 +111,14 @@ export default function LogicDetailPage() {
     },
   })
 
+  const toggleMut = useMutation({
+    mutationFn: () => apiClient.post(`/ontologies/${oid}/logic/${lid}/toggle`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['logic-rule', oid, lid] })
+      qc.invalidateQueries({ queryKey: ['logic', oid] })
+    },
+  })
+
   // Patch an action's linked_logic_ids (for bidirectional action linking)
   const updateActionLinkMut = useMutation({
     mutationFn: ({ aid, linked_logic_ids }: { aid: string; linked_logic_ids: string[] }) =>
@@ -136,15 +145,19 @@ export default function LogicDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
   if (!rule) return <div className="p-6 text-red-500">逻辑规则未找到</div>
 
-  // Related entities: name_cn listed in rule.linked_entities
-  const linkedEntityNames = new Set(rule.linked_entities ?? [])
-  const relatedEntities = (allEntities as Entity[]).filter(e => linkedEntityNames.has(e.name_cn))
-  const unlinkedEntities = (allEntities as Entity[]).filter(e => !linkedEntityNames.has(e.name_cn))
+  // linked_entities 可能是实体显示名(简易 LLM)或实体类型名(Pipeline Mapping)
+  const linkedKeys = new Set(rule.linked_entities ?? [])
+  const entityHit = (e: Entity) =>
+    linkedKeys.has(e.name_cn) || (e.type ? linkedKeys.has(e.type) : false) || (e.name_en ? linkedKeys.has(e.name_en) : false)
+  const relatedEntities = (allEntities as Entity[]).filter(entityHit)
+  const unlinkedEntities = (allEntities as Entity[]).filter(e => !entityHit(e))
 
-  // Related actions: linked_logic_ids includes this rule's id
-  const relatedActions = (allActions as Action[]).filter(a => a.linked_logic_ids?.includes(lid!))
-  const relatedActionIds = new Set(relatedActions.map(a => a.id))
-  const unlinkedActions = (allActions as Action[]).filter(a => !relatedActionIds.has(a.id))
+  // 关联动作: 显式 linked_logic_ids, 或与本规则共享 linked_entities(同一实体类)
+  const actionHit = (a: Action) =>
+    (a.linked_logic_ids?.includes(lid!) ?? false) ||
+    (a.linked_entities ?? []).some(x => linkedKeys.has(x))
+  const relatedActions = (allActions as Action[]).filter(actionHit)
+  const unlinkedActions = (allActions as Action[]).filter(a => !actionHit(a))
 
   // Entity link helpers
   const removeEntity = (entityId: string) => {
@@ -200,6 +213,11 @@ export default function LogicDetailPage() {
             </>
           ) : (
             <>
+              <button onClick={() => toggleMut.mutate()} disabled={toggleMut.isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                {rule.enabled !== false ? <ToggleRight size={14} className="text-green-600" /> : <ToggleLeft size={14} />}
+                {rule.enabled !== false ? '已启用' : '已禁用'}
+              </button>
               <button onClick={startEdit}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
                 <Pencil size={14} /> 编辑
@@ -255,6 +273,14 @@ export default function LogicDetailPage() {
               <div>
                 <p className="text-xs text-gray-500 mb-1">版本</p>
                 <p className="text-sm font-mono">{rule.version}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">状态</p>
+                <span className={`inline-flex text-xs px-1.5 py-0.5 rounded border ${
+                  rule.status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                  rule.status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                  'bg-gray-50 text-gray-600'
+                }`}>{rule.status || 'draft'}</span>
               </div>
               <div>
                 <p className="text-xs text-gray-500 mb-1">置信度</p>

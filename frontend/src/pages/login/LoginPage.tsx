@@ -22,9 +22,10 @@ export default function LoginPage() {
       const profile = await authApi.profile() as any
       setAuth(profile, res.access_token)
       navigate('/')
-    } catch {
+    } catch (e: any) {
       localStorage.removeItem('token')
-      setError(t('auth.login_error'))
+      console.error('login failed:', e)
+      setError(e?.response ? t('auth.login_error') : t('auth.network_error'))
     } finally {
       setLoading(false)
     }

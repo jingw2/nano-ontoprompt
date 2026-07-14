@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   db:
     image: postgres:16-alpine
@@ -7,11 +6,14 @@ services:
       POSTGRES_USER: ontoprompt
       POSTGRES_PASSWORD: ontoprompt
     ports: ["5432:5432"]
-    volumes: [postgres_data:/var/lib/postgresql/data]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-litellm-db.sql:/docker-entrypoint-initdb.d/02-litellm-db.sql
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    # 外部端口 6380 避免与宿主机本地 redis 冲突; 容器内仍用 6379
+    ports: ["6380:6379"]
 
   backend:
     build: ./backend
@@ -26,13 +28,72 @@ services:
     env_file: .env
     depends_on: [db, redis]
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: celery -A app.tasks.extraction worker --loglevel=info
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports: ["4000:4000"]
+    depends_on: [db]
+    volumes: [./litellm_config.yaml:/app/config.yaml]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      # Use a dedicated DB — do NOT share .env DATABASE_URL with ontoprompt
+      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/litellm
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-}
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:-}
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
     ports: ["5173:5173"]
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    depends_on: [backend]
     volumes: [./frontend:/app, /app/node_modules]
     command: npm run dev -- --host
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/ontoprompt123
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes: [neo4j_data:/data]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes: [minio_data:/data]
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes: [chroma_data:/chroma/chroma]
+
+  celery_beat:
+    build: ./backend
+    command: celery -A app.tasks.extraction beat --loglevel=info
+    env_file: .env
+    depends_on: [db, redis]
+    volumes:
+      - ./backend:/app
+      - ./uploads:/uploads
+
 volumes:
   postgres_data:
+  neo4j_data:
+  minio_data:
+  chroma_data:

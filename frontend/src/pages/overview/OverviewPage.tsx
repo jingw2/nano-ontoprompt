@@ -42,7 +42,7 @@ export default function OverviewPage() {
     queryFn: () => apiClient.get('/overview/stats') as any,
   })
 
-  const cards = [
+  const cards: Array<{ key: 'ontology_count' | 'entity_count' | 'logic_count' | 'action_count'; label: string; color: string; icon: string }> = [
     { key: 'ontology_count', label: t('overview.ontology_count'), color: 'border-blue-200', icon: '🗂️' },
     { key: 'entity_count', label: t('overview.entity_count'), color: 'border-green-200', icon: '📦' },
     { key: 'logic_count', label: t('overview.logic_count'), color: 'border-purple-200', icon: '⚖️' },
@@ -63,15 +63,18 @@ export default function OverviewPage() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map(({ key, label, color, icon }) => (
+        {cards.map(({ key, label, color, icon }) => {
+          const value = data?.[key] ?? 0
+          return (
           <div key={key} className={`bg-white rounded-xl border ${color} p-5`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm text-gray-500">{label}</p>
               <span className="text-xl">{icon}</span>
             </div>
-            <p className="text-4xl font-bold">{data?.[key as keyof Stats] ?? 0}</p>
+            <p className="text-4xl font-bold">{value}</p>
           </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

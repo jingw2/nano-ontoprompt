@@ -1,18 +1,35 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
+import { apiClient } from '@/api/client'
 import ConfidenceBar from '@/components/ConfidenceBar'
-import { Pencil, Trash2, Plus } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
+
+function parseLinkedEntities(value: unknown): string[] {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value || '[]')
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
 
 export default function LogicTab({ ontologyId }: { ontologyId: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<LogicRule | null>(null)
   const { register, handleSubmit, reset } = useForm<Partial<LogicRule>>()
 
   const { data: rules = [], isLoading } = useQuery({
@@ -30,41 +47,112 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['logic', ontologyId] }); qc.invalidateQueries({ queryKey: ['stats'] }) },
   })
 
+  const toggleMut = useMutation({
+    mutationFn: (id: string) => apiClient.post(`/ontologies/${ontologyId}/logic/${id}/toggle`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['logic', ontologyId] }),
+  })
+
+  const publishMut = useMutation({
+    mutationFn: () => apiClient.post(`/ontologies/${ontologyId}/logic/publish`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['logic', ontologyId] }),
+  })
+
+  const filtered = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    if (!q) return rules as LogicRule[]
+    return (rules as LogicRule[]).filter(r =>
+      r.name_cn?.toLowerCase().includes(q) || r.name_en?.toLowerCase().includes(q) ||
+      r.description?.toLowerCase().includes(q) || r.formula?.toLowerCase().includes(q)
+    )
+  }, [rules, searchQ])
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      {/* Search + Actions */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
+            placeholder="搜索规则名称 / 公式…"
+            className="w-full border rounded-lg pl-8 pr-3 py-2 text-sm" />
+        </div>
+        <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
+          className="flex items-center gap-1.5 px-3 py-2 bg-green-700 text-white rounded-lg text-sm disabled:opacity-50">
+          {publishMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+          发布全部
+        </button>
         <button onClick={() => { setShowCreate(true); reset() }}
           className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-lg text-sm">
           <Plus size={14} /> {t('logic.add')}
         </button>
       </div>
+
+      {/* Rules table */}
       <div className="bg-white border rounded-lg overflow-hidden">
         {isLoading ? <p className="py-8 text-center text-gray-400">{t('common.loading')}</p> : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
-              <tr>{[t('entities.col_name_cn'), t('logic.col_formula'), t('entities.col_desc'), t('entities.col_confidence'), t('entities.col_actions')].map(h => (
-                <th key={h} className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{h}</th>
-              ))}</tr>
+              <tr>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">公式</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类型</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">置信度</th>
+                <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
+                <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium">操作</th>
+              </tr>
             </thead>
             <tbody>
-              {(rules as LogicRule[]).map(r => (
-                <tr key={r.id} className="border-b hover:bg-gray-50 cursor-pointer"
-                  onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)}>
-                  <td className="px-4 py-3 font-medium">{r.name_cn}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate">{r.formula || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.description || '—'}</td>
-                  <td className="px-4 py-3 w-32"><ConfidenceBar value={r.confidence} /></td>
-                  <td className="px-4 py-3 space-x-2" onClick={ev => ev.stopPropagation()}>
-                    <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)} className="text-blue-500"><Pencil size={14} /></button>
-                    <button onClick={() => deleteMut.mutate(r.id)} className="text-red-500"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((r: any) => {
+                const linkedEntities = parseLinkedEntities(r.linked_entities)
+                const status = r.status || 'draft'
+                const enabled = r.enabled !== false
+                return (
+                  <tr key={r.id} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium">{r.name_cn || r.name || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate">{r.formula || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.description || '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || 'rule'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {linkedEntities.map((e: string) => (
+                          <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                        status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                        status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                        'bg-gray-50 text-gray-600'
+                      }`}>{status}</span>
+                    </td>
+                    <td className="px-4 py-3 w-28"><ConfidenceBar value={r.confidence} /></td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => toggleMut.mutate(r.id)} className="text-gray-500 hover:text-black">
+                        {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="inline-flex items-center gap-3">
+                        <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)}
+                          title={t('common.edit')} className="p-1.5 rounded text-blue-600 hover:bg-blue-50"><Pencil size={14} /></button>
+                        <button onClick={() => setDeleteTarget(r)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
-        {!isLoading && (rules as LogicRule[]).length === 0 && <p className="text-center text-gray-400 py-8">{t('logic.empty')}</p>}
+        {!isLoading && filtered.length === 0 && <p className="text-center text-gray-400 py-8">{searchQ ? '无匹配结果' : t('logic.empty')}</p>}
       </div>
+
       {showCreate && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-96">
@@ -83,6 +171,14 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t('logic.delete_title')}
+        message={t('logic.delete_confirm', { name: deleteTarget?.name_cn ?? '' })}
+        onConfirm={() => { if (deleteTarget) deleteMut.mutate(deleteTarget.id); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }

@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.100.10",
     "@types/cytoscape": "^3.21.9",
+    "@xyflow/react": "^12.11.0",
     "axios": "^1.16.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -4,8 +4,10 @@ import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
+import { apiClient } from '@/api/client'
 import ConfidenceBar from '@/components/ConfidenceBar'
-import { Pencil, Trash2, Plus } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import { Pencil, Trash2, Plus, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { Action } from '@/types/ontology'
 
 export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
@@ -13,6 +15,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Action | null>(null)
   const { register, handleSubmit, reset } = useForm<Partial<Action>>()
 
   const { data: actions = [], isLoading } = useQuery({
@@ -24,15 +27,28 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
     mutationFn: (data: Partial<Action>) => ontologyApi.createAction(ontologyId, data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['actions', ontologyId] }); qc.invalidateQueries({ queryKey: ['stats'] }); setShowCreate(false); reset() },
   })
-
   const deleteMut = useMutation({
     mutationFn: (id: string) => ontologyApi.deleteAction(ontologyId, id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['actions', ontologyId] }); qc.invalidateQueries({ queryKey: ['stats'] }) },
   })
+  const toggleMut = useMutation({
+    mutationFn: (id: string) => apiClient.post(`/ontologies/${ontologyId}/actions/${id}/toggle`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['actions', ontologyId] }),
+  })
+  const publishMut = useMutation({
+    mutationFn: () => apiClient.post(`/ontologies/${ontologyId}/actions/publish`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['actions', ontologyId] }),
+  })
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center gap-3">
+        <div className="flex-1" />
+        <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
+          className="flex items-center gap-1.5 px-3 py-2 bg-green-700 text-white rounded-lg text-sm disabled:opacity-50">
+          {publishMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+          发布全部
+        </button>
         <button onClick={() => { setShowCreate(true); reset() }}
           className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-lg text-sm">
           <Plus size={14} /> {t('actions.add')}
@@ -42,24 +58,57 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
         {isLoading ? <p className="py-8 text-center text-gray-400">{t('common.loading')}</p> : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
-              <tr>{[t('entities.col_name_cn'), t('actions.col_exec'), t('entities.col_desc'), t('entities.col_confidence'), t('entities.col_actions')].map(h => (
-                <th key={h} className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{h}</th>
-              ))}</tr>
+              <tr>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类别</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
+                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
+                <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
+                <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium">操作</th>
+              </tr>
             </thead>
             <tbody>
-              {(actions as Action[]).map(a => (
-                <tr key={a.id} className="border-b hover:bg-gray-50 cursor-pointer"
-                  onClick={() => navigate(`/ontologies/${ontologyId}/actions/${a.id}`)}>
-                  <td className="px-4 py-3 font-medium">{a.name_cn}</td>
-                  <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{a.execution_rule || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{a.description || '—'}</td>
-                  <td className="px-4 py-3 w-32"><ConfidenceBar value={a.confidence} /></td>
-                  <td className="px-4 py-3 space-x-2" onClick={ev => ev.stopPropagation()}>
-                    <button onClick={() => navigate(`/ontologies/${ontologyId}/actions/${a.id}`)} className="text-blue-500"><Pencil size={14} /></button>
-                    <button onClick={() => deleteMut.mutate(a.id)} className="text-red-500"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
+              {(actions as any[]).map(a => {
+                const le = (typeof a.linked_entities === 'string' ? JSON.parse(a.linked_entities || '[]') : a.linked_entities) || []
+                const category = a.action_category || a.execution_rule || 'crud'
+                const status = a.status || 'draft'
+                const enabled = a.enabled !== false
+                return (
+                  <tr key={a.id} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium">{a.name_cn}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{category}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{a.description || '—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {le.map((e: string) => (
+                          <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                        status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                        status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                        'bg-gray-50 text-gray-600'
+                      }`}>{status}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => toggleMut.mutate(a.id)} className="text-gray-500 hover:text-black">
+                        {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right" onClick={ev => ev.stopPropagation()}>
+                      <div className="inline-flex items-center gap-3">
+                        <button onClick={() => navigate(`/ontologies/${ontologyId}/actions/${a.id}`)} title={t('common.edit')} className="p-1.5 rounded text-blue-500 hover:bg-blue-50"><Pencil size={14} /></button>
+                        <button onClick={() => setDeleteTarget(a)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
@@ -76,13 +125,21 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
               <textarea {...register('description')} placeholder={t('entities.ph_desc')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
               <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" placeholder={t('entities.ph_confidence')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={() => { setShowCreate(false); reset() }} className="px-4 py-2 border rounded-lg text-sm">{t('common.cancel')}</button>
-                <button type="submit" className="px-4 py-2 bg-black text-white rounded-lg text-sm">{t('common.save')}</button>
+                <button type="button" onClick={() => { setShowCreate(false); reset() }} className="px-4 py-2 border rounded-lg text-sm">取消</button>
+                <button type="submit" className="px-4 py-2 bg-black text-white rounded-lg text-sm">保存</button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t('actions.delete_title')}
+        message={t('actions.delete_confirm', { name: deleteTarget?.name_cn ?? '' })}
+        onConfirm={() => { if (deleteTarget) deleteMut.mutate(deleteTarget.id); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }

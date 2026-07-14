@@ -9,6 +9,8 @@ class LogicRuleCreate(BaseModel):
     formula: Optional[str] = None
     confidence: Optional[float] = None
     linked_entities: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+    status: Optional[str] = None
 
 class LogicRuleUpdate(BaseModel):
     name_cn: Optional[str] = None
@@ -17,6 +19,8 @@ class LogicRuleUpdate(BaseModel):
     formula: Optional[str] = None
     confidence: Optional[float] = None
     linked_entities: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+    status: Optional[str] = None
 
 class LogicRuleOut(BaseModel):
     id: str
@@ -27,6 +31,8 @@ class LogicRuleOut(BaseModel):
     formula: Optional[str]
     confidence: float
     version: str
+    enabled: bool
+    status: str
     linked_entities: List[str] = []
     created_at: datetime
     updated_at: datetime

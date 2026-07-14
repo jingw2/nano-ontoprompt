@@ -1,0 +1,33 @@
+[
+  {
+    "order_id": "ORD-001",
+    "customer": {
+      "id": "C-100",
+      "name": "Alice Corp",
+      "address": {
+        "city": "Seoul",
+        "country": "KR"
+      }
+    },
+    "items": [
+      {"sku": "SKU-A", "qty": 2, "price": 100.0},
+      {"sku": "SKU-B", "qty": 1, "price": 50.0}
+    ],
+    "total": 250.0
+  },
+  {
+    "order_id": "ORD-002",
+    "customer": {
+      "id": "C-101",
+      "name": "Bob Ltd",
+      "address": {
+        "city": "Busan",
+        "country": "KR"
+      }
+    },
+    "items": [
+      {"sku": "SKU-C", "qty": 5, "price": 30.0}
+    ],
+    "total": 150.0
+  }
+]

@@ -36,14 +36,23 @@ Thumbs.db
 
 # Logs
 *.log
+*.log.err
 celerybeat-schedule
 
-# Internal / agent-only files
+# Test artifacts
+test-results/
+
+# Internal / agent-only files (不进行 git 同步)
 AGENTS.md
 CLAUDE.md
 nano-ontoprompt-requirements.md
 prompt-harness-rules-for-coding-agent.md
-docs/superpowers/
+docs/
+pipeline-builder-redesign-plan.md
+PRD_AND_ARCHITECTURE_v1.1_logic_actions.md
+PRD_AND_ARCHITECTURE.md
+RELEASE_NOTES_*.md
 
 # Test screenshots
 frontend/screenshots_*/
+test_data/screenshots/

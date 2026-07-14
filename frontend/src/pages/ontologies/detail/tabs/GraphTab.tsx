@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ontologyApi } from '@/api/ontologies'
 import cytoscape from 'cytoscape'
-import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2, Search, X } from 'lucide-react'
 
 // Entity type → node color
 const TYPE_COLORS: Record<string, string> = {
@@ -48,6 +48,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
   const [layout, setLayout] = useState<'cose' | 'breadthfirst' | 'circle'>('cose')
   const [legendTypes, setLegendTypes] = useState<{ type: string; color: string }[]>([])
   const [initError, setInitError] = useState<string | null>(null)
+  const [searchQ, setSearchQ] = useState('')
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery({
@@ -195,7 +196,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
           style: {
             'label': 'data(label)',
             'font-size': '11px',
-            'font-weight': '500',
+            'font-weight': 500,
             'color': '#1f2937',
             'line-color': 'data(edgeColor)',
             'target-arrow-color': 'data(edgeColor)',
@@ -205,7 +206,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
             'text-background-color': '#ffffff',
             'text-background-opacity': 0.92,
             'text-background-padding': '3px',
-            'text-border-width': '1px',
+            'text-border-width': 1,
             'text-border-color': '#d1d5db',
             'text-border-opacity': 1,
             'width': 1.8,
@@ -224,6 +225,14 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
             'border-width': '3px',
             'border-color': '#fff',
           }
+        },
+        {
+          selector: '.search-dim',
+          style: { 'opacity': 0.15 }
+        },
+        {
+          selector: '.search-match',
+          style: { 'border-width': '3px', 'border-color': '#f59e0b', 'opacity': 1 }
         }
       ],
       // No layout in constructor — run manually so we can post-process isolated nodes
@@ -282,6 +291,35 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     return () => { if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null } }
   }, [data, layout])
 
+  // 搜索高亮：匹配节点正常显示，其余节点半透明
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
+    const q = searchQ.trim().toLowerCase()
+    if (!q) {
+      cy.elements().removeClass('search-dim').removeClass('search-match')
+      return
+    }
+    cy.nodes().forEach(n => {
+      const label = (n.data('label') || '').toLowerCase()
+      const type = (n.data('type') || '').toLowerCase()
+      if (label.includes(q) || type.includes(q)) {
+        n.addClass('search-match').removeClass('search-dim')
+      } else {
+        n.addClass('search-dim').removeClass('search-match')
+      }
+    })
+    cy.edges().forEach(e => {
+      const src = cy.getElementById(e.data('source'))
+      const tgt = cy.getElementById(e.data('target'))
+      if (src.hasClass('search-match') || tgt.hasClass('search-match')) {
+        e.removeClass('search-dim')
+      } else {
+        e.addClass('search-dim')
+      }
+    })
+  }, [searchQ])
+
   if (isLoading) return <div className="text-gray-400 text-center py-12">加载图谱中...</div>
   if (initError) return (
     <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
@@ -296,6 +334,23 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
 
   return (
     <div className="space-y-3">
+      {/* Search bar */}
+      <div className="relative">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <input
+          value={searchQ}
+          onChange={e => setSearchQ(e.target.value)}
+          placeholder="搜索节点（名称 / 类型）…"
+          className="w-full border rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+        />
+        {searchQ && (
+          <button onClick={() => setSearchQ('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-sm text-gray-600">

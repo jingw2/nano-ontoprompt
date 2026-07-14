@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import Optional
 from app.deps import get_db, get_current_user
 from app.models.ontology import OntologyProject
+from app.models.entity import Entity
+from app.models.relation import Relation
 from app.models.user import User
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
 import uuid
@@ -20,7 +23,13 @@ def list_ontologies(
         q = q.filter(OntologyProject.name.ilike(f"%{name}%"))
     total = q.count()
     items = q.order_by(OntologyProject.updated_at.desc()).offset((page-1)*page_size).limit(page_size).all()
-    return {"data": {"items": [OntologyListItem.model_validate(i).model_dump() for i in items], "total": total, "page": page, "page_size": page_size}}
+    result = []
+    for item in items:
+        d = OntologyListItem.model_validate(item).model_dump()
+        d['entity_count'] = db.query(func.count(Entity.id)).filter(Entity.ontology_id == item.id).scalar() or 0
+        d['relation_count'] = db.query(func.count(Relation.id)).filter(Relation.ontology_id == item.id).scalar() or 0
+        result.append(d)
+    return {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
 
 @router.post("", status_code=201)
 def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -28,7 +37,8 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     if existing:
         raise HTTPException(status_code=409, detail={"error": "DUPLICATE_NAME", "message": f"Ontology 名称「{body.name}」已存在", "existing_id": existing.id})
     project = OntologyProject(id=str(uuid.uuid4()), name=body.name, domain=body.domain,
-                               description=body.description, created_by=current_user.id)
+                               description=body.description, build_mode=body.build_mode or "simple_llm",
+                               created_by=current_user.id)
     db.add(project); db.commit(); db.refresh(project)
     return {"data": OntologyOut.model_validate(project).model_dump()}
 

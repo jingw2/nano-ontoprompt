@@ -42,3 +42,51 @@ def delete_logic(ontology_id: str, logic_id: str, db: Session = Depends(get_db),
     if not r:
         raise HTTPException(404, "Not found")
     db.delete(r); db.commit()
+
+
+@router.post("/{logic_id}/toggle")
+def toggle_logic(ontology_id: str, logic_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """Human Review: 启用/禁用规则"""
+    r = db.query(LogicRule).filter(LogicRule.id == logic_id, LogicRule.ontology_id == ontology_id).first()
+    if not r:
+        raise HTTPException(404, "Not found")
+    r.enabled = not getattr(r, 'enabled', True)
+    try:
+        from app.models.v2.logic import OntologyLogicRule
+        v2 = db.query(OntologyLogicRule).filter(
+            OntologyLogicRule.ontology_id == ontology_id,
+            OntologyLogicRule.name == r.name_cn,
+        ).first()
+        if v2:
+            v2.enabled = r.enabled
+            if not r.enabled and v2.status != "published":
+                v2.status = "disabled"
+    except Exception:
+        pass
+    db.commit()
+    return {"enabled": r.enabled}
+
+
+@router.post("/publish")
+def publish_logic_rules(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """Human Review: 发布所有草稿规则"""
+    rules = db.query(LogicRule).filter(
+        LogicRule.ontology_id == ontology_id,
+        LogicRule.status != 'published',
+        LogicRule.enabled == True,  # noqa: E712
+    ).all()
+    for r in rules:
+        r.status = 'published'
+    try:
+        from app.models.v2.logic import OntologyLogicRule
+        v2_rules = db.query(OntologyLogicRule).filter(
+            OntologyLogicRule.ontology_id == ontology_id,
+            OntologyLogicRule.status != "published",
+            OntologyLogicRule.enabled == True,  # noqa: E712
+        ).all()
+        for r in v2_rules:
+            r.status = "published"
+    except Exception:
+        pass
+    db.commit()
+    return {"published": len(rules)}

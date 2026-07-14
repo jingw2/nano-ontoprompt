@@ -9,8 +9,8 @@ class ExtractionTask(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False)
-    prompt_id: Mapped[str] = mapped_column(String, ForeignKey("prompts.id"), nullable=True)
-    model_id: Mapped[str] = mapped_column(String, ForeignKey("model_configs.id"), nullable=True)
+    prompt_id: Mapped[str] = mapped_column(String, ForeignKey("prompts.id", ondelete="SET NULL"), nullable=True)
+    model_id: Mapped[str] = mapped_column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|completed|failed
     parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     progress: Mapped[dict] = mapped_column(JSON, default=dict)

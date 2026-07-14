@@ -1,0 +1,169 @@
+{
+  "testTime": "2026-06-06T01:50:14.577Z",
+  "domains": [
+    {
+      "domain": "人力资源",
+      "domainEn": "HR",
+      "ontologyDomain": "其他",
+      "status": "PARTIAL",
+      "ontologyId": "9ca070a2-0370-4f7d-80c4-471072562c35",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_01_HR_01_list.png",
+        "createModal": "domain_01_HR_02_modal.png",
+        "formFilled": "domain_01_HR_03_form_filled.png",
+        "detail": "domain_01_HR_04_detail_info.png"
+      },
+      "pageLoadTime": 1316,
+      "errors": [],
+      "startTime": 1780710636782,
+      "duration": 9686
+    },
+    {
+      "domain": "供应链",
+      "domainEn": "SupplyChain",
+      "ontologyDomain": "供应链",
+      "status": "PARTIAL",
+      "ontologyId": "8b8031eb-586b-4080-b2f1-a37d3fca74e5",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_02_SupplyChain_01_list.png",
+        "createModal": "domain_02_SupplyChain_02_modal.png",
+        "formFilled": "domain_02_SupplyChain_03_form_filled.png",
+        "detail": "domain_02_SupplyChain_04_detail_info.png"
+      },
+      "pageLoadTime": 1292,
+      "errors": [],
+      "startTime": 1780710646469,
+      "duration": 9640
+    },
+    {
+      "domain": "医疗",
+      "domainEn": "Medical",
+      "ontologyDomain": "医疗",
+      "status": "PARTIAL",
+      "ontologyId": "9aefa0fb-dea9-4899-b329-bc12e7d18428",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_03_Medical_01_list.png",
+        "createModal": "domain_03_Medical_02_modal.png",
+        "formFilled": "domain_03_Medical_03_form_filled.png",
+        "detail": "domain_03_Medical_04_detail_info.png"
+      },
+      "pageLoadTime": 1237,
+      "errors": [],
+      "startTime": 1780710656109,
+      "duration": 9551
+    },
+    {
+      "domain": "教育",
+      "domainEn": "Education",
+      "ontologyDomain": "教育",
+      "status": "PARTIAL",
+      "ontologyId": "c395bbf4-5c13-429c-9a52-baa042ea2825",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_04_Education_01_list.png",
+        "createModal": "domain_04_Education_02_modal.png",
+        "formFilled": "domain_04_Education_03_form_filled.png",
+        "detail": "domain_04_Education_04_detail_info.png"
+      },
+      "pageLoadTime": 1227,
+      "errors": [],
+      "startTime": 1780710665660,
+      "duration": 9473
+    },
+    {
+      "domain": "法律",
+      "domainEn": "Legal",
+      "ontologyDomain": "法律",
+      "status": "PARTIAL",
+      "ontologyId": "754a1acf-45d5-4d13-87ef-479cc22bb24c",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_05_Legal_01_list.png",
+        "createModal": "domain_05_Legal_02_modal.png",
+        "formFilled": "domain_05_Legal_03_form_filled.png",
+        "detail": "domain_05_Legal_04_detail_info.png"
+      },
+      "pageLoadTime": 1298,
+      "errors": [],
+      "startTime": 1780710675133,
+      "duration": 9553
+    },
+    {
+      "domain": "营销",
+      "domainEn": "Marketing",
+      "ontologyDomain": "其他",
+      "status": "PARTIAL",
+      "ontologyId": "d6395070-b4f1-48a7-a2f2-5f8384be9b92",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_06_Marketing_01_list.png",
+        "createModal": "domain_06_Marketing_02_modal.png",
+        "formFilled": "domain_06_Marketing_03_form_filled.png",
+        "detail": "domain_06_Marketing_04_detail_info.png"
+      },
+      "pageLoadTime": 1297,
+      "errors": [],
+      "startTime": 1780710684687,
+      "duration": 9614
+    },
+    {
+      "domain": "财务",
+      "domainEn": "Finance",
+      "ontologyDomain": "财务",
+      "status": "PARTIAL",
+      "ontologyId": "fda6047b-eecb-49d4-8589-04b8662f369c",
+      "filesAttempted": 3,
+      "filesUploaded": 0,
+      "tabsTested": [
+        "Info"
+      ],
+      "screenshots": {
+        "list": "domain_07_Finance_01_list.png",
+        "createModal": "domain_07_Finance_02_modal.png",
+        "formFilled": "domain_07_Finance_03_form_filled.png",
+        "detail": "domain_07_Finance_04_detail_info.png"
+      },
+      "pageLoadTime": 1296,
+      "errors": [],
+      "startTime": 1780710694301,
+      "duration": 9659
+    }
+  ],
+  "pages": {},
+  "summary": {
+    "totalDomains": 7,
+    "pass": 0,
+    "partial": 7,
+    "fail": 0,
+    "filesUploaded": 0,
+    "filesAttempted": 21,
+    "screenshotCount": 40
+  }
+}

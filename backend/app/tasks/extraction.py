@@ -1,14 +1,103 @@
-from celery import Celery
-from app.config import settings
+from app.tasks.celery_app import celery_app
 
-celery_app = Celery("ontoprompt", broker=settings.redis_url, backend=settings.redis_url)
+# 确保 Celery worker 在 fork 前加载所有模型映射, 避免子进程缺少模型注册
+from app.models import (  # noqa: E402, F401
+    user, ontology, file, prompt, model_config,
+    entity, logic as logic_model, action, relation, extraction_task, rules_config,
+)
+
+# ── Extraction results merge (方案A) ───────────────────────────────────────
+def _merge_extraction_results(results: list[dict]) -> dict:
+    """合并多个文件的 LLM 提取结果，按 name_cn 去重实体/规则/动作。"""
+    all_entities: list[dict] = []
+    all_relations: list[dict] = []
+    all_logic: list[dict] = []
+    all_actions: list[dict] = []
+
+    # 收集全部
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        for e in (r.get("entities") or []):
+            if isinstance(e, dict):
+                all_entities.append(e)
+        for rel in (r.get("relations") or []):
+            if isinstance(rel, dict):
+                # 跨文件时 source/target 可能是其他文件提取的实体，
+                # 如果已存在则关系保留；暂存，后续去重
+                all_relations.append(rel)
+        for lg in (r.get("logic_rules") or []):
+            if isinstance(lg, dict):
+                all_logic.append(lg)
+        for a in (r.get("actions") or []):
+            if isinstance(a, dict):
+                all_actions.append(a)
+
+    # 实体去重（按 name_cn，保留属性最丰富的）
+    seen_entities: dict[str, dict] = {}
+    for e in all_entities:
+        name = e.get("name_cn") or e.get("name", "")
+        if not name:
+            continue
+        if name not in seen_entities:
+            seen_entities[name] = e
+        else:
+            existing = seen_entities[name]
+            existing_score = (
+                len(str(existing.get("properties", {}))) +
+                len(existing.get("description", "") or "")
+            )
+            cur_score = (
+                len(str(e.get("properties", {}))) +
+                len(e.get("description", "") or "")
+            )
+            if cur_score > existing_score:
+                # 合并非冲突字段
+                for k, v in e.items():
+                    if v and k not in ("name_cn",) and not existing.get(k):
+                        existing[k] = v
+
+    entities = list(seen_entities.values())
+
+    # 关系去重（source-target-type 唯一）
+    seen_rels: set = set()
+    relations = []
+    for rel in all_relations:
+        key = (rel.get("source", ""), rel.get("target", ""), rel.get("type", ""))
+        if key not in seen_rels and key[0] and key[1]:
+            seen_rels.add(key)
+            relations.append(rel)
+
+    # 逻辑规则去重
+    seen_logic: dict[str, dict] = {}
+    for lg in all_logic:
+        name = lg.get("name_cn") or lg.get("name", "")
+        if not name:
+            continue
+        if name not in seen_logic:
+            seen_logic[name] = lg
+
+    # 动作去重
+    seen_actions: dict[str, dict] = {}
+    for a in all_actions:
+        name = a.get("name_cn") or a.get("name", "")
+        if not name:
+            continue
+        if name not in seen_actions:
+            seen_actions[name] = a
+
+    return {
+        "entities": entities,
+        "relations": relations,
+        "logic_rules": list(seen_logic.values()),
+        "actions": list(seen_actions.values()),
+    }
+
 
 
 # ── Confidence calibration (Fix 5) ─────────────────────────────────────────
-# ── 置信度校准 (修复 5) ───────────────────────────────────────────────────
 def _calibrate_confidence(result: dict) -> dict:
     """Adjust LLM-generated confidence scores using objective completeness signals."""
-    """根据客观完整性信号调整 LLM 生成的置信度分数。"""
     import ast
 
     entities    = result.get("entities", [])
@@ -19,7 +108,6 @@ def _calibrate_confidence(result: dict) -> dict:
     entity_names = {e.get("name_cn") for e in entities if e.get("name_cn")}
 
     # Entities that appear in at least one relation get a small boost
-    # 出现在关系中的实体获得小幅置信度提升
     in_graph: set = set()
     for r in relations:
         in_graph.add(r.get("source")); in_graph.add(r.get("target"))
@@ -36,7 +124,6 @@ def _calibrate_confidence(result: dict) -> dict:
         base = float(r.get("confidence") or 0.85)
         if r.get("source") not in entity_names or r.get("target") not in entity_names:
             r["confidence"] = 0.30   # broken reference → low confidence
-            # 引用断裂 → 低置信度
         else:
             r["confidence"] = round(max(0.40, min(0.98, base)), 3)
 
@@ -65,9 +152,17 @@ def _calibrate_confidence(result: dict) -> dict:
     return result
 
 
+def _resolve_name_abbr(e_data: dict, props: dict) -> str | None:
+    abbr = e_data.get("name_abbr") or e_data.get("abbreviation")
+    if not abbr and isinstance(props, dict):
+        abbr = props.pop("abbreviation", None) or props.pop("abbr", None)
+    if isinstance(abbr, str) and abbr.strip():
+        return abbr.strip()
+    return None
+
+
 def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
     """Delete duplicate rows with the same (ontology_id, name_field), keeping the richest one."""
-    """删除具有相同 (ontology_id, name_field) 的重复行，保留数据最丰富的记录。"""
     rows = db.query(model_cls).filter(model_cls.ontology_id == ontology_id).all()
     seen: dict = {}
     for row in rows:
@@ -78,7 +173,6 @@ def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
             seen[key] = row
         else:
             # Keep the one with more data (prefer non-None properties/code/formula)
-            # 保留数据更丰富的记录（优先保留非空属性/代码/公式的记录）
             incumbent = seen[key]
             challenger_score = _richness(row)
             incumbent_score  = _richness(incumbent)
@@ -91,7 +185,6 @@ def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
 
 def _richness(obj) -> int:
     """Heuristic score for how data-rich an ORM object is — higher = keep."""
-    """评估 ORM 对象数据丰富程度的启发式分数 — 分数越高越应保留。"""
     score = 0
     for attr in ("properties", "function_code", "formula", "description", "linked_entities"):
         val = getattr(obj, attr, None)
@@ -106,17 +199,11 @@ def _fuzzy_resolve_entity(name: str, name_to_id: dict) -> str | None:
     Handles cases where the LLM writes a slightly different name in relations
     than what was extracted in entities (e.g. '供应商' vs '供应商A').
     """
-    """将实体名称解析为 ID，回退策略为子字符串匹配。
-
-    处理 LLM 在关系中使用的名称与提取的实体名称略有不同的情况
-    （例如 '供应商' vs '供应商A'）。
-    """
     if not name:
         return None
     if name in name_to_id:
         return name_to_id[name]
     # Substring containment: search name is contained in a known name, or vice versa
-    # 子字符串匹配：搜索名称包含在已知名称中，或反之
     candidates = [
         (kn, eid) for kn, eid in name_to_id.items()
         if kn and (name in kn or kn in name)
@@ -124,13 +211,13 @@ def _fuzzy_resolve_entity(name: str, name_to_id: dict) -> str | None:
     if not candidates:
         return None
     # When multiple candidates, prefer the one sharing the most unique characters
-    # 多个候选时，优先选择共享最多独特字符的那个
     candidates.sort(key=lambda x: len(set(x[0]) & set(name)), reverse=True)
     return candidates[0][1]
 
 
 @celery_app.task(bind=True)
 def run_extraction(self, task_id: str):
+    import app.models  # noqa: F401 — register all tables for FK resolution
     from app.database import SessionLocal
     from app.models.extraction_task import ExtractionTask
     from app.models.file import UploadedFile
@@ -155,27 +242,22 @@ def run_extraction(self, task_id: str):
         task.progress = {"stage": "loading files", "pct": 10}
         db.commit()
 
+        from app.services.document_service import combine_converted_files
+
         files = db.query(UploadedFile).filter(UploadedFile.ontology_id == task.ontology_id).all()
         if not files:
             task.status = "failed"; task.error = "No files uploaded"; db.commit(); return
 
-        combined_text = "\n\n---\n\n".join(f.converted_md or "" for f in files if f.converted_md)
-        if not combined_text.strip():
+        # 逐文件提取 + 合并 (方案A)：分文件提取避免多文件混合后 LLM 仅提取泛概念
+        valid_mds = [f for f in files if (f.converted_md or "").strip()]
+        if not valid_mds:
             task.status = "failed"; task.error = "No text content found in files"; db.commit(); return
 
-        # Strip control characters and normalise whitespace so the LLM doesn't
-        # embed raw bytes that would later break its own JSON output.
-        # 清除控制字符并规范化空白字符，防止 LLM 嵌入原始字节导致后续 JSON 解析失败
-        import re as _re
-        combined_text = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', combined_text)
-
+        # 加载模型和提示词配置（必须在 LLM 调用前完成）
         model_cfg = db.query(ModelConfig).filter(ModelConfig.id == task.model_id).first()
         prompt    = db.query(Prompt).filter(Prompt.id == task.prompt_id).first()
         if not model_cfg or not prompt:
             task.status = "failed"; task.error = "Model or prompt not found"; db.commit(); return
-
-        task.progress = {"stage": "calling LLM", "pct": 40}
-        db.commit()
 
         model_name = task.parameters.get("model_name", "")
         config_dict = {
@@ -183,22 +265,57 @@ def run_extraction(self, task_id: str):
             "api_key":  decrypt(model_cfg.api_key_encrypted or ""),
             "api_base": model_cfg.api_base,
         }
-
         prompt_content = prompt.content
         constraints = task.parameters.get("constraints", [])
         if constraints:
             prompt_content += "\n\n" + "\n".join(constraints)
 
-        # ── Pass 1: main extraction ──────────────────────────────────────────
-        # ── 第一遍：主提取 ─────────────────────────────────────────────────
-        result = extract_ontology(combined_text, prompt_content, config_dict, model_name)
+        import re as _re
+        def _clean(text: str) -> str:
+            return _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+        combined_text = _clean("\n\n---\n\n".join(f.converted_md or "" for f in valid_mds if f.converted_md))
+
+        # 并行提取所有文件 (I/O 密集型 LLM API 调用，ThreadPool 即可)
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        all_results = []
+        max_workers = 1  # serial extraction to avoid OOM with large LLM payloads
+        completed = 0
+
+        task.progress = {"stage": f"extracting files 0/{len(valid_mds)} (parallel ×{max_workers})", "pct": 20}
+        db.commit()
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for f in valid_mds:
+                md = _clean(f.converted_md or "")
+                futures[executor.submit(extract_ontology, md, prompt_content, config_dict, model_name)] = f
+
+            for future in as_completed(futures):
+                f = futures[future]
+                try:
+                    single = future.result()
+                    if isinstance(single, dict):
+                        all_results.append(single)
+                except Exception:
+                    pass
+                completed += 1
+                task.progress = {"stage": f"extracting files {completed}/{len(valid_mds)} (parallel ×{max_workers})", "pct": 20 + 35 * completed // len(valid_mds)}
+                db.commit()
+
+        if all_results:
+            result = _merge_extraction_results(all_results)
+        else:
+            # 全部失败时回退到合并文本单次提取
+            task.progress = {"stage": "calling LLM (combined fallback)", "pct": 55}
+            db.commit()
+            result = extract_ontology(combined_text, prompt_content, config_dict, model_name)
 
         # ── Fix 5: calibrate confidence before validation ────────────────────
-        # ── 修复 5：在验证前校准置信度 ──────────────────────────────────────
         result = _calibrate_confidence(result)
 
         # ── P0 validation ────────────────────────────────────────────────────
-        # ── P0 验证 ─────────────────────────────────────────────────────────
         task.progress = {"stage": "validating output", "pct": 65}
         db.commit()
 
@@ -212,14 +329,12 @@ def run_extraction(self, task_id: str):
             task.status = "failed"; task.error = v_report.to_summary(); db.commit(); return
 
         # ── Fix 1: second-pass relation inference ─────────────────────────────
-        # ── 修复 1：第二遍关系推断 ──────────────────────────────────────────
         entities_extracted  = result.get("entities", [])
         relations_extracted = result.get("relations", [])
         entity_count    = len(entities_extracted)
         relation_count  = len(relations_extracted)
 
         # Count how many entities appear in at least one relation (exact or fuzzy)
-        # 统计出现在至少一条关系中的实体数量（精确或模糊匹配）
         entity_names_set = {e.get("name_cn") for e in entities_extracted if e.get("name_cn")}
         in_relation: set = set()
         for r in relations_extracted:
@@ -230,10 +345,9 @@ def run_extraction(self, task_id: str):
             if n and not any(n in rn or rn in n for rn in in_relation if rn)
         )
 
-        # Trigger when globally sparse OR >30% of entities are isolated
-        # 当关系全局稀疏（< 40% 实体有边）或超过 30% 实体为孤立点时触发
-        sparse = relation_count < max(5, entity_count * 0.4)
-        many_isolated = isolated_count > max(2, entity_count * 0.3)
+        # Trigger when globally sparse OR >25% of entities are isolated
+        sparse = relation_count < max(5, entity_count * 0.8)
+        many_isolated = isolated_count > max(2, entity_count * 0.25)
         if entity_count >= 5 and (sparse or many_isolated):
             task.progress = {"stage": "inferring relations", "pct": 75}
             db.commit()
@@ -243,7 +357,6 @@ def run_extraction(self, task_id: str):
             )
             if extra_rels:
                 # Accept relations where both endpoints fuzzy-match a known entity name
-                # 接受两端都能模糊匹配到已知实体名称的关系
                 for r in extra_rels:
                     src, tgt = r.get("source", ""), r.get("target", "")
                     src_ok = src in entity_names_set or any(
@@ -258,14 +371,12 @@ def run_extraction(self, task_id: str):
         db.commit()
 
         # ── Cleanup pre-existing duplicates (keep best, delete extras) ────────
-        # ── 清理预先存在的重复记录（保留最佳，删除多余）────────────────────
         _dedup_existing(db, task.ontology_id, Entity, "name_cn")
         _dedup_existing(db, task.ontology_id, LogicRule, "name_cn")
         _dedup_existing(db, task.ontology_id, Action, "name_cn")
         db.flush()
 
         # ── Fix 2+4: upsert entities (by name_cn) ────────────────────────────
-        # ── 修复 2+4：按 name_cn Upsert 实体 ──────────────────────────────
         existing_entities = db.query(Entity).filter(Entity.ontology_id == task.ontology_id).all()
         existing_ent_map  = {e.name_cn: e for e in existing_entities}
 
@@ -275,28 +386,37 @@ def run_extraction(self, task_id: str):
                 entity_name_to_id[e.name_en] = e.id
 
         for e_data in result.get("entities", []):
+            if not isinstance(e_data, dict):
+                continue
             name_cn = e_data.get("name_cn") or e_data.get("name", "")
             if not name_cn:
                 continue
             props = e_data.get("properties") or e_data.get("attributes") or e_data.get("attrs") or {}
             if not isinstance(props, dict):
                 props = {}
+            name_abbr = _resolve_name_abbr(e_data, props)
 
             if name_cn in existing_ent_map:
-                # Upsert: update fields that improved
-                # Upsert：更新已有实体的字段
                 ent = existing_ent_map[name_cn]
-                if e_data.get("type"):        ent.type        = e_data["type"]
+                # Always allow LLM to enrich description, properties, name_en, name_abbr
                 if e_data.get("description"): ent.description = e_data["description"]
                 if props:                     ent.properties  = props
                 if e_data.get("name_en"):     ent.name_en     = e_data["name_en"]
+                if name_abbr:                 ent.name_abbr   = name_abbr
+                if e_data.get("type"):        ent.type        = e_data["type"]
                 ent.confidence = e_data.get("confidence", ent.confidence)
+                # Protect authoritative SNOMED fields — never overwrite once set
+                if e_data.get("snomed_id") and not ent.snomed_id:
+                    ent.snomed_id = e_data["snomed_id"]
+                if e_data.get("canonical_id") and not ent.canonical_id:
+                    ent.canonical_id = e_data["canonical_id"]
                 eid = ent.id
             else:
                 eid = str(uuid.uuid4())
                 ent = Entity(
                     id=eid, ontology_id=task.ontology_id,
-                    name_cn=name_cn, name_en=e_data.get("name_en"),
+                    name_cn=name_cn, name_en=e_data.get("name_en"), name_abbr=name_abbr,
+                    snomed_id=e_data.get("snomed_id"), canonical_id=e_data.get("canonical_id"),
                     type=e_data.get("type"), description=e_data.get("description"),
                     properties=props, confidence=e_data.get("confidence", 0.85),
                 )
@@ -307,8 +427,10 @@ def run_extraction(self, task_id: str):
             if e_data.get("name_en"):
                 entity_name_to_id[e_data["name_en"]] = eid
 
-        # ── Fix 2+4: upsert relations (by source_id, target_id, type) ───────
-        # ── 修复 2+4：按 source_id, target_id, type Upsert 关系 ─────────────
+        # 实体写完先 commit 一次，缩短大事务窗口，避免 saving 阶段 SQLite 写冲突
+        db.commit()
+
+        # ── Fix 2+4: upsert relations (by source_id, target_id, type) ────────
         existing_rels    = db.query(Relation).filter(Relation.ontology_id == task.ontology_id).all()
         existing_rel_set = {(r.source_entity, r.target_entity, r.type) for r in existing_rels}
 
@@ -317,7 +439,10 @@ def run_extraction(self, task_id: str):
             tgt_name = rel.get("target") or rel.get("target_entity", "")
             src_id   = _fuzzy_resolve_entity(src_name, entity_name_to_id)
             tgt_id   = _fuzzy_resolve_entity(tgt_name, entity_name_to_id)
-            rel_type = rel.get("type", "关联")
+            rel_type = (rel.get("type") or "RELATED").strip()
+            # Reject fuzzy Chinese relation types — must be semantic English
+            if rel_type in ("关联", "未知", "相关", "其他", "") or not rel_type.isascii():
+                continue
             if src_id and tgt_id and (src_id, tgt_id, rel_type) not in existing_rel_set:
                 db.add(Relation(
                     id=str(uuid.uuid4()), ontology_id=task.ontology_id,
@@ -327,7 +452,6 @@ def run_extraction(self, task_id: str):
                 existing_rel_set.add((src_id, tgt_id, rel_type))
 
         # ── Keyword matching helpers (unchanged) ─────────────────────────────
-        # ── 关键词匹配辅助函数 ─────────────────────────────────────────────
         all_entity_names = [
             e.get("name_cn") or e.get("name", "")
             for e in result.get("entities", [])
@@ -367,12 +491,13 @@ def run_extraction(self, task_id: str):
                     if len(text_chars & (set(lname) - STOP_CHARS)) >= 2]
 
         # ── Fix 2+4: upsert logic rules (by name_cn) ─────────────────────────
-        # ── 修复 2+4：按 name_cn Upsert 逻辑规则 ──────────────────────────
         existing_rules    = db.query(LogicRule).filter(LogicRule.ontology_id == task.ontology_id).all()
         existing_rule_map = {r.name_cn: r for r in existing_rules}
         logic_name_to_id: dict = {r.name_cn: r.id for r in existing_rules}
 
         for r_data in result.get("logic_rules", []):
+            if not isinstance(r_data, dict):
+                continue
             name_cn = r_data.get("name_cn") or r_data.get("name", "")
             if not name_cn:
                 continue
@@ -404,11 +529,12 @@ def run_extraction(self, task_id: str):
             logic_name_to_id[name_cn] = rid
 
         # ── Fix 2+4: upsert actions (by name_cn) ─────────────────────────────
-        # ── 修复 2+4：按 name_cn Upsert 动作 ─────────────────────────────
         existing_actions    = db.query(Action).filter(Action.ontology_id == task.ontology_id).all()
         existing_action_map = {a.name_cn: a for a in existing_actions}
 
         for a_data in result.get("actions", []):
+            if not isinstance(a_data, dict):
+                continue
             name_cn = a_data.get("name_cn") or a_data.get("name", "")
             if not name_cn:
                 continue
@@ -454,11 +580,76 @@ def run_extraction(self, task_id: str):
         task.progress = {"stage": "done", "pct": 100}
         db.commit()
 
+        # 同步到 Neo4j（非致命，失败不影响任务成功状态）
+        _sync_neo4j(db, task.ontology_id)
+
     except Exception as e:
-        task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
-        if task:
-            task.status = "failed"
-            task.error  = str(e)
-            db.commit()
+        try:
+            db.rollback()  # 清除错误态，确保后续 query/commit 可用
+            task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
+            if task:
+                task.status = "failed"
+                task.error  = str(e)
+                db.commit()
+        except Exception:
+            pass  # 数据库完全不可用时静默跳过，避免掩盖原始异常
     finally:
         db.close()
+
+
+def _sync_neo4j(db, ontology_id: str) -> None:
+    """把 SQLite 里的实体/关系批量同步到 Neo4j。Neo4j 不可用或出错时静默跳过。"""
+    try:
+        from app.services.v2.graph.neo4j_service import Neo4jService
+        from app.models.entity import Entity
+        from app.models.relation import Relation
+
+        svc = Neo4jService()
+        if not svc.available:
+            return
+
+        entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
+        if not entities:
+            svc.close()
+            return
+
+        # 按 type 分组批量 upsert（label = entity.type）
+        from collections import defaultdict
+        by_type: dict = defaultdict(list)
+        entity_type_map: dict[str, str] = {}  # id → type
+        for e in entities:
+            label = e.type or "OntologyEntity"
+            entity_type_map[e.id] = label
+            props = {
+                **(e.properties or {}),
+                "id": e.id,
+                "ontology_id": ontology_id,
+                "name_cn": e.name_cn or "",
+                "name_en": e.name_en or "",
+                "name": e.name_cn or e.name_en or e.id,
+                "display_name": e.name_cn or e.name_en or e.id,
+                "type": label,
+                "description": e.description or "",
+                "confidence": e.confidence or 0.85,
+            }
+            by_type[label].append(props)
+
+        for label, batch in by_type.items():
+            svc.batch_upsert_entities(label, batch, key_field="id")
+
+        # 写关系（逐条 MERGE，避免类型不匹配导致批量失败）
+        relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+        for r in relations:
+            src_type = entity_type_map.get(r.source_entity, "OntologyEntity")
+            tgt_type = entity_type_map.get(r.target_entity, "OntologyEntity")
+            rel_type = (r.type or "RELATED").upper().replace(" ", "_").replace("-", "_")
+            svc.upsert_relation(
+                src_label=src_type, src_key=r.source_entity,
+                tgt_label=tgt_type, tgt_key=r.target_entity,
+                rel_type=rel_type,
+                props={"id": r.id, "ontology_id": ontology_id, "confidence": r.confidence or 0.85},
+            )
+
+        svc.close()
+    except Exception:
+        pass  # Neo4j 同步失败不影响提取结果

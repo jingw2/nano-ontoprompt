@@ -1,11 +1,46 @@
 {
   "nav": {
     "overview": "Overview",
+    "data_management": "Data",
+    "data_pipelines": "Pipelines",
+    "structured_data": "Structured Data",
+    "pipelines": "Pipelines",
     "ontologies": "Ontologies",
     "prompts": "Prompts",
     "models": "Models",
     "settings": "Settings",
     "logout": "Logout"
+  },
+  "data": {
+    "title": "Data Management",
+    "subtitle": "Manage data pipelines and structured datasets",
+    "pipeline_overview": "Pipeline Overview",
+    "curated_overview": "Structured Data Overview",
+    "total_pipelines": "Total Pipelines",
+    "total_curated": "Structured Datasets",
+    "status_published": "Published",
+    "status_draft": "Draft",
+    "status_failed": "Failed",
+    "no_pipelines": "No pipelines",
+    "no_curated": "No structured datasets",
+    "go_pipelines": "Go to Pipelines",
+    "go_structured": "Go to Structured Data",
+    "structured_title": "Structured Data",
+    "structured_subtitle": "Curated datasets produced by Pipelines",
+    "col_pipeline_id": "Pipeline ID",
+    "col_pipeline_name": "Pipeline Name",
+    "col_domain": "Domain",
+    "col_curated_name": "Dataset Name",
+    "col_curated_status": "Status",
+    "filter_pipeline": "Filter by pipeline ID / name",
+    "filter_curated": "Filter by dataset name / ID",
+    "no_match": "No matching records",
+    "empty": "No structured data yet — run a Pipeline first",
+    "status_pending": "Pending Review",
+    "status_approved": "Approved",
+    "status_rejected": "Rejected",
+    "open_pipeline": "Open Pipeline",
+    "back_to_structured": "← Back to Structured Data"
   },
   "overview": {
     "title": "Overview",
@@ -30,7 +65,8 @@
     "email": "Email",
     "no_account": "No account?",
     "have_account": "Have an account?",
-    "login_error": "Invalid username or password"
+    "login_error": "Invalid username or password",
+    "network_error": "Network error — please verify the backend service is running"
   },
   "ontology": {
     "title": "Ontology Management",
@@ -70,7 +106,8 @@
       "entities": "Entities",
       "logic": "Logic Rules",
       "actions": "Actions",
-      "statemachine": "State Machine"
+      "statemachine": "State Machine",
+      "audit": "AI Audit"
     },
     "back": "← Back"
   },
@@ -84,7 +121,11 @@
     "col_size": "Size",
     "col_type": "Type",
     "col_uploaded": "Upload Time",
-    "col_actions": "Actions"
+    "col_status": "Conversion",
+    "col_actions": "Actions",
+    "conversion_ok": "Ready",
+    "conversion_failed": "Failed",
+    "upload_failed": "Upload failed: {{message}}"
   },
   "extract": {
     "llm_config": "LLM Extraction Config",
@@ -112,34 +153,48 @@
     "stage_validating": "Validating",
     "stage_inferring": "Inferring Relations",
     "stage_saving": "Saving",
-    "stage_done": "Done"
+    "stage_done": "Done",
+    "poll_timeout": "The task may still be running in the background; progress updates paused",
+    "resume_poll": "Resume polling"
   },
   "entities": {
     "add": "Add Entity",
     "empty": "No entities yet",
+    "no_match": "No entities match the filter",
+    "filter_type": "Filter by type",
+    "filter_all_types": "All types",
+    "filtered_count": "Showing {{count}} / {{total}}",
     "col_name_cn": "Chinese Name",
+    "col_abbr": "Abbreviation",
     "col_name_en": "English Name",
     "col_type": "Type",
     "col_desc": "Description",
     "col_confidence": "Confidence",
     "col_actions": "Actions",
     "ph_name_cn": "Chinese Name *",
+    "ph_abbr": "Abbreviation",
     "ph_name_en": "English Name",
     "ph_type": "Type",
     "ph_desc": "Description",
-    "ph_confidence": "Confidence (0-1)"
+    "ph_confidence": "Confidence (0-1)",
+    "delete_title": "Delete Entity",
+    "delete_confirm": "Delete entity “{{name}}”? This cannot be undone."
   },
   "logic": {
     "add": "Add Rule",
     "empty": "No rules yet",
     "col_formula": "Formula",
-    "ph_formula": "Formula"
+    "ph_formula": "Formula",
+    "delete_title": "Delete Rule",
+    "delete_confirm": "Delete rule “{{name}}”? This cannot be undone."
   },
   "actions": {
     "add": "Add Action",
     "empty": "No actions yet",
     "col_exec": "Execution Rule",
-    "ph_exec": "Execution Rule"
+    "ph_exec": "Execution Rule",
+    "delete_title": "Delete Action",
+    "delete_confirm": "Delete action “{{name}}”? This cannot be undone."
   },
   "prompt": {
     "title": "Prompt Management",
@@ -247,5 +302,37 @@
     "loading": "Loading...",
     "error": "Error",
     "success": "Success"
+  },
+  "audit": {
+    "title": "AI Quality Audit",
+    "description": "ReAct agent performs multi-step semantic quality analysis, typically 30–120s",
+    "model_label": "Model Config",
+    "model_specific": "Specific Model",
+    "start": "Start Audit",
+    "auditing": "Auditing...",
+    "progress": "Audit Progress",
+    "failed": "Audit Failed",
+    "findings_title": "Semantic Quality Report",
+    "findings_summary": "{{total}} issues found ({{critical}} critical / {{warning}} warnings / {{info}} info)",
+    "no_findings": "No semantic quality issues found — ontology structure looks complete",
+    "trace_title": "ReAct Reasoning Trace (Debug)",
+    "trace_thinking": "Agent reasoning...",
+    "severity_critical": "Critical",
+    "severity_warning": "Warning",
+    "severity_info": "Info",
+    "category_isolated_entity": "Isolated Entity",
+    "category_broken_ref": "Broken Reference",
+    "category_missing_relation": "Missing Relation",
+    "category_low_coverage": "Low Coverage",
+    "category_action_unreachable": "Unreachable Action",
+    "category_other": "Other",
+    "affected_items": "Affected Items",
+    "poll_timeout": "Audit may still be running in the background — polling paused",
+    "resume_poll": "Resume Polling",
+    "stage_queued": "Queued",
+    "stage_loading": "Loading Ontology",
+    "stage_running": "Agent Reasoning",
+    "stage_saving": "Saving Results",
+    "stage_done": "Done"
   }
 }
