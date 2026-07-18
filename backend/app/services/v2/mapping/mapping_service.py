@@ -37,31 +37,80 @@ class MappingService:
     # ── 单个 Mapping 应用 ─────────────────────────────────────────────
 
     def apply_mapping(self, mapping_id: str, data: list[dict]) -> dict:
+        import hashlib as _hl
+        from app.models.entity import Entity
         mapping = self._db.query(OntologyMapping).filter(OntologyMapping.id == mapping_id).first()
         if not mapping:
             raise ValueError(f"Mapping {mapping_id} not found")
         if data:
             self._normalize_mapping(mapping, data)
-        entities = self._rows_to_entities(mapping, data)
-        neo4j_count = self._write_neo4j(mapping.entity_class, entities)
-        v1_count = self._write_v1_entities(mapping, entities)
+        # 确保概念实体存在
+        concept_id = str(_uuid.UUID(
+            _hl.md5(f"{mapping.ontology_id}:{mapping.entity_class}:concept".encode()).hexdigest()
+        ))
+        existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+        if not existing:
+            name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', mapping.entity_class).replace('_', ' ').title()
+            self._db.add(Entity(
+                id=concept_id, ontology_id=mapping.ontology_id,
+                name_cn=name_cn, name_en=mapping.entity_class,
+                type=mapping.entity_class, canonical_id=f"concept:{mapping.entity_class}",
+                properties={"is_concept": True, "source": "apply_mapping"},
+                confidence=1.0,
+            ))
+            self._db.flush()
+        # 写入实例数据（EntityInstance 表）
+        instances = self._rows_to_instances(mapping, concept_id, data)
+        # 写入 Neo4j（概念节点）
+        concept_dict = {"id": concept_id, "type": mapping.entity_class,
+                        "name_cn": existing.name_cn if existing else name_cn,
+                        "confidence": mapping.confidence or 0.85, "version": "v0.1",
+                        "ontology_id": mapping.ontology_id}
+        self._write_neo4j(mapping.entity_class, [concept_dict])
         mapping.status = "applied"
         self._db.commit()
         return {"mapping_id": mapping_id, "entity_class": mapping.entity_class,
-                "nodes_created": neo4j_count, "v1_entities_written": v1_count,
+                "instances_written": len(instances),
                 "errors": 0, "total_rows": len(data)}
 
-    # ── 全量构建：Entity → Relation → ChromaDB ────────────────────────
+    # ── 全量构建：Concept Entity → EntityInstance → Relation → ChromaDB ──────
 
     def build_all(self, ontology_id: str) -> dict:
         from app.services.v2.dataset_service import DatasetService
+        from app.models.entity import Entity
         mappings = self.get_mappings(ontology_id)
         if not mappings:
             return {"error": "no mappings configured", "ontology_id": ontology_id}
 
         ds_svc = DatasetService(self._db)
+        import hashlib as _hl
 
-        # Phase 1: Entity Mapping
+        # ── Phase 0: 为每个 entity_class 创建概念实体（Entity 表中只存概念，不存实例）─
+        concept_by_mapping: dict[str, str] = {}  # mapping_id -> concept_entity_id
+        concept_count = 0
+        for m in mappings:
+            ec = m.entity_class
+            concept_id = str(_uuid.UUID(
+                _hl.md5(f"{ontology_id}:{ec}:concept".encode()).hexdigest()
+            ))
+            existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+            if not existing:
+                name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
+                self._db.add(Entity(
+                    id=concept_id, ontology_id=ontology_id,
+                    name_cn=name_cn, name_en=ec,
+                    type=ec, canonical_id=f"concept:{ec}",
+                    description=f"{name_cn} — Pipeline Mapping 自动创建的概念实体",
+                    properties={"is_concept": True, "source": "build_all"},
+                    confidence=1.0,
+                ))
+                concept_count += 1
+            elif existing.name_cn and "(概念类型)" in existing.name_cn:
+                existing.name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
+            concept_by_mapping[m.id] = concept_id
+        self._db.commit()
+
+        # ── Phase 1: 实例数据处理 — 每行数据写入 EntityInstance 表 ──────────
         entity_results = []
         mapping_meta: dict[str, dict] = {}
 
@@ -77,122 +126,88 @@ class MappingService:
             if rows:
                 self._normalize_mapping(m, rows)
 
-            entities = self._rows_to_entities(m, rows)
-            neo4j_count = self._write_neo4j(m.entity_class, entities)
-            v1_count = self._write_v1_entities(m, entities)
+            concept_id = concept_by_mapping[m.id]
+            instances = self._rows_to_instances(m, concept_id, rows)
 
             pk_col = (m.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(rows)
+            # entity_id_map: 所有实例行指向同一个概念实体 ID
             entity_id_map = {
-                self._row_identity_value(row, pk_col): self._stable_row_id(m, row, pk_col if pk_col in row else None)
+                self._row_identity_value(row, pk_col): concept_id
                 for row in rows
             }
             mapping_meta[m.id] = {
-                "entity_class": m.entity_class, "pk_col": pk_col,
-                "rows": rows, "entity_id_map": entity_id_map,
+                "entity_class": m.entity_class,
+                "concept_id": concept_id,
+                "pk_col": pk_col,
+                "rows": rows,
+                "entity_id_map": entity_id_map,
                 "columns": list(rows[0].keys()) if rows else [],
                 "property_mappings": (m.field_mapping or {}).get("__properties__", []),
             }
             m.status = "applied"
-            entity_results.append({"mapping_id": m.id, "entity_class": m.entity_class,
-                                   "v1_entities_written": v1_count, "nodes_created": neo4j_count})
+            entity_results.append({
+                "mapping_id": m.id, "entity_class": m.entity_class,
+                "instances_written": len(instances),
+            })
 
         self._db.commit()
 
-        # Phase 2: Relation 推断
+        # Phase 1.5: 将概念实体写入 Neo4j（每类只写一个节点）
+        neo4j_nodes = 0
+        for m in mappings:
+            if m.id not in concept_by_mapping:
+                continue
+            cid = concept_by_mapping[m.id]
+            entity_obj = self._db.query(Entity).filter(Entity.id == cid).first()
+            if entity_obj:
+                concept_dict = {
+                    "id": entity_obj.id,
+                    "name_cn": entity_obj.name_cn,
+                    "type": entity_obj.type,
+                    "description": entity_obj.description,
+                    "confidence": entity_obj.confidence,
+                    "version": entity_obj.version,
+                    "ontology_id": ontology_id,
+                    "properties": entity_obj.properties or {},
+                }
+                self._write_neo4j(m.entity_class, [concept_dict])
+                neo4j_nodes += 1
+
+        # ── Phase 2: Relation 推断（概念级别）───────────────────────────
         relation_results = self._infer_and_write_relations(ontology_id, mappings, mapping_meta)
 
-        # Phase 2b: Link Mapping 处理（手动配置的跨表关系）
+        # Phase 2b: Link Mapping 处理
         link_results = self._process_link_mappings(ontology_id, mapping_meta)
         relation_results.extend(link_results)
 
-        # Phase 3: Logic / Action Discovery
+        # ── Phase 3: Logic / Action Discovery ─────────────────────────────
         logic_result = self._discover_logic_rules(ontology_id, mappings, mapping_meta, relation_results)
         action_result = self._discover_action_types(ontology_id, mappings, mapping_meta, relation_results, logic_result)
 
-        # Phase 4: 写入 ChromaDB
+        # ── Phase 4: ChromaDB（只写概念实体）─────────────────────────────
         chroma_count = 0
         try:
             from app.services.v2.vector.chroma_service import ChromaService
             chroma = ChromaService()
-            all_entities = []
+            concept_entities = []
             for m in mappings:
-                if m.id not in mapping_meta:
+                if m.id not in concept_by_mapping:
                     continue
-                meta = mapping_meta[m.id]
-                for row in meta["rows"]:
-                    eid = meta.get("entity_id_map", {}).get(self._row_identity_value(row, meta["pk_col"]))
-                    if eid:
-                        all_entities.append({"id": eid, "type": m.entity_class, "properties": row})
-            if all_entities:
-                chroma.upsert_entities(ontology_id, all_entities)
-                chroma_count = len(all_entities)
+                cid = concept_by_mapping[m.id]
+                concept_entities.append({
+                    "id": cid,
+                    "type": m.entity_class,
+                    "properties": {
+                        "is_concept": True,
+                        "entity_class": m.entity_class,
+                        "instance_count": len(mapping_meta.get(m.id, {}).get("rows", [])),
+                    },
+                })
+            if concept_entities:
+                chroma.upsert_entities(ontology_id, concept_entities)
+                chroma_count = len(concept_entities)
         except Exception as e:
             logger.warning(f"ChromaDB 写入失败（非致命）: {e}")
-
-        # Phase 5: 为每个实体类创建概念实体 + INSTANCE-OF 关系
-        # Pipeline Mapping 按行创建的是实例实体（如"员工A"），缺少顶层概念实体（"员工"）
-        # 此步骤为每个 entity_class 创建一个抽象概念实体，并将所有实例关联到它
-        concept_results = {"concepts": 0, "instance_of": 0}
-        try:
-            from app.models.entity import Entity
-            from app.models.relation import Relation
-            import hashlib as _hl
-
-            for m in mappings:
-                ec = m.entity_class
-                concept_id = str(_uuid.UUID(
-                    _hl.md5(f"{ontology_id}:{ec}:concept".encode()).hexdigest()
-                ))
-                existing_concept = self._db.query(Entity).filter(Entity.id == concept_id).first()
-                name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
-                if not existing_concept:
-                    self._db.add(Entity(
-                        id=concept_id, ontology_id=ontology_id,
-                        name_cn=name_cn, name_en=ec,
-                        type=ec, canonical_id=f"concept:{ec}",
-                        description=f"{name_cn} — Pipeline Mapping 自动创建的概念实体",
-                        properties={"is_concept": True, "source": "build_all_concept_inference"},
-                        confidence=1.0,
-                    ))
-                    concept_results["concepts"] += 1
-                elif existing_concept.name_cn.endswith("(概念类型)"):
-                    # Upgrade: remove legacy suffix from name
-                    existing_concept.name_cn = name_cn
-                    concept_results["concepts"] = max(concept_results["concepts"], 1)
-
-                # 查询该类型的所有实例实体
-                instance_ids = [
-                    r[0] for r in self._db.query(Entity.id).filter(
-                        Entity.ontology_id == ontology_id,
-                        Entity.type == ec,
-                        Entity.id != concept_id,
-                    ).all()
-                ]
-
-                # 跳过已有 INSTANCE-OF 的实例
-                existing_linked = set(
-                    r[0] for r in self._db.query(Relation.source_entity).filter(
-                        Relation.ontology_id == ontology_id,
-                        Relation.target_entity == concept_id,
-                        Relation.type == "INSTANCE-OF",
-                    ).all()
-                )
-                for inst_id in instance_ids:
-                    if inst_id in existing_linked:
-                        continue
-                    self._db.add(Relation(
-                        id=str(_uuid.uuid4()), ontology_id=ontology_id,
-                        source_entity=inst_id, target_entity=concept_id,
-                        type="INSTANCE-OF",
-                        properties={"source": "build_all_concept_inference"},
-                        confidence=1.0,
-                    ))
-                    concept_results["instance_of"] += 1
-
-            self._db.commit()
-        except Exception as e:
-            logger.warning(f"概念实体创建失败（非致命）: {e}")
-            self._db.rollback()
 
         return {
             "ontology_id": ontology_id,
@@ -201,10 +216,11 @@ class MappingService:
             "logic_discovery": logic_result,
             "action_discovery": action_result,
             "chroma_entities_written": chroma_count,
-            "concept_entities_created": concept_results["concepts"],
-            "instance_of_relations_created": concept_results["instance_of"],
-            "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results) + concept_results["concepts"],
-            "total_relations": sum(r.get("count", 0) for r in relation_results) + concept_results["instance_of"],
+            "concept_entities_created": concept_count,
+            "total_instances": sum(r.get("instances_written", 0) for r in entity_results),
+            "total_concepts": concept_count,
+            "total_entities": concept_count,
+            "total_relations": sum(r.get("count", 0) for r in relation_results),
             "total_logic": logic_result.get("total_v2", 0),
             "total_actions": action_result.get("total_v2", 0),
             "review_required": True,
@@ -930,25 +946,73 @@ class MappingService:
             entities_by_id[props["id"]] = props
         return list(entities_by_id.values())
 
+    def _rows_to_instances(self, mapping: OntologyMapping, concept_id: str, rows: list[dict]) -> list[dict]:
+        """将行数据写入 EntityInstance 表，每条数据对应一个 instance"""
+        from app.models.entity_instance import EntityInstance
+        field_map = mapping.field_mapping or {}
+        pk_col = field_map.get("__primary_key__") or self._choose_pk_col(rows)
+        property_meta = self._property_metadata_by_column(field_map)
+        instances = []
+        for index, row in enumerate(rows):
+            row_data: dict = {}
+            for col, prop in field_map.items():
+                if col.startswith("__"):
+                    continue
+                if property_meta.get(col, {}).get("hidden"):
+                    continue
+                if col in row:
+                    row_data[prop] = row[col]
+            id_val = self._row_identity_value(row, pk_col)
+            # 用按列名映射后的属性名构建 display name
+            names = self._instance_names(mapping, row, pk_col, index)
+            row_data["name_cn"] = names.get("name_cn", id_val)
+            row_data["name_en"] = names.get("name_en", id_val)
+            row_data["object_type"] = mapping.entity_class
+            inst = EntityInstance(
+                id=self._stable_row_id(mapping, row, pk_col if pk_col in row else None),
+                entity_id=concept_id,
+                ontology_id=mapping.ontology_id,
+                row_identity=id_val,
+                row_data=row_data,
+            )
+            self._db.merge(inst)
+            instances.append(inst)
+        self._db.flush()
+        return instances
+
     def _write_v1_entities(self, mapping: OntologyMapping, entities: list[dict]) -> int:
+        """Legacy: write per-row entities (仍保留供 apply_mapping 使用)"""
         from app.models.entity import Entity
+        from app.models.entity_instance import EntityInstance
+        import hashlib as _hl
         count = 0
         try:
-            for props in entities:
-                eid = props["id"]
-                name_cn = props.get("name_cn") or props.get("display_name") or eid
-                name_en = props.get("name_en") or props.get("display_name") or eid
-                other = {k: v for k, v in props.items() if k not in ("id", "ontology_id")}
-                self._db.merge(Entity(
-                    id=eid, ontology_id=mapping.ontology_id,
-                    name_cn=str(name_cn)[:200], name_en=str(name_en)[:200],
-                    type=mapping.entity_class, properties=other,
-                    confidence=mapping.confidence or 0.85,
+            concept_id = str(_uuid.UUID(
+                _hl.md5(f"{mapping.ontology_id}:{mapping.entity_class}:concept".encode()).hexdigest()
+            ))
+            # Ensure concept entity exists
+            existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+            if not existing:
+                name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', mapping.entity_class).replace('_', ' ').title()
+                self._db.add(Entity(
+                    id=concept_id, ontology_id=mapping.ontology_id,
+                    name_cn=name_cn, name_en=mapping.entity_class,
+                    type=mapping.entity_class, canonical_id=f"concept:{mapping.entity_class}",
+                    properties={"is_concept": True, "source": "apply_mapping"},
+                    confidence=1.0,
                 ))
+            for props in entities:
+                inst = EntityInstance(
+                    id=props["id"], entity_id=concept_id,
+                    ontology_id=mapping.ontology_id,
+                    row_identity=props.get("source_id", props["id"]),
+                    row_data=props,
+                )
+                self._db.merge(inst)
                 count += 1
             self._db.commit()
         except Exception as e:
-            logger.warning(f"v1 entities 写入失败: {e}")
+            logger.warning(f"EntityInstance 写入失败: {e}")
             self._db.rollback()
         return count
 

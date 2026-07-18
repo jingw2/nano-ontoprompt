@@ -210,11 +210,7 @@ async function runPipelineMapping(
   // 9. Build all
   console.log(`    构建本体...`)
   const buildBody = await apiCall(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings/build-all`, token)
-  if (buildBody.concept_entities_created > 0) {
-    console.log(`    构建完成: entities=${buildBody.total_entities} (含${buildBody.concept_entities_created}概念) relations=${buildBody.total_relations} (含${buildBody.instance_of_relations_created} INSTANCE-OF) logic=${buildBody.total_logic} actions=${buildBody.total_actions}`)
-  } else {
-    console.log(`    构建完成: entities=${buildBody.total_entities} relations=${buildBody.total_relations} logic=${buildBody.total_logic} actions=${buildBody.total_actions}`)
-  }
+  console.log(`    构建完成: 概念=${buildBody.total_concepts} 实例=${buildBody.total_instances} 关系=${buildBody.total_relations} 逻辑=${buildBody.total_logic} 动作=${buildBody.total_actions}`)
 
   // 10. 前端截图本体详情 + 图谱
   await page.goto(`${BASE}/ontologies/${ontologyId}`)
