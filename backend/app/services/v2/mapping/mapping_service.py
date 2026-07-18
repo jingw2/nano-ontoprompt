@@ -129,6 +129,68 @@ class MappingService:
         except Exception as e:
             logger.warning(f"ChromaDB 写入失败（非致命）: {e}")
 
+        # Phase 5: 为每个实体类创建概念实体 + INSTANCE-OF 关系
+        # Pipeline Mapping 按行创建的是实例实体（如"员工A"），缺少顶层概念实体（"员工"）
+        # 此步骤为每个 entity_class 创建一个抽象概念实体，并将所有实例关联到它
+        concept_results = {"concepts": 0, "instance_of": 0}
+        try:
+            from app.models.entity import Entity
+            from app.models.relation import Relation
+            import hashlib as _hl
+
+            for m in mappings:
+                ec = m.entity_class
+                concept_id = str(_uuid.UUID(
+                    _hl.md5(f"{ontology_id}:{ec}:concept".encode()).hexdigest()
+                ))
+                existing_concept = self._db.query(Entity).filter(Entity.id == concept_id).first()
+                if not existing_concept:
+                    name_en = ec
+                    name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
+                    self._db.add(Entity(
+                        id=concept_id, ontology_id=ontology_id,
+                        name_cn=f"{name_cn} (概念类型)", name_en=name_en,
+                        type=ec, canonical_id=f"concept:{ec}",
+                        description=f"抽象概念实体 — {name_cn} 类型的概念定义",
+                        properties={"is_concept": True, "source": "build_all_concept_inference"},
+                        confidence=1.0,
+                    ))
+                    concept_results["concepts"] += 1
+
+                # 查询该类型的所有实例实体
+                instance_ids = [
+                    r[0] for r in self._db.query(Entity.id).filter(
+                        Entity.ontology_id == ontology_id,
+                        Entity.type == ec,
+                        Entity.id != concept_id,
+                    ).all()
+                ]
+
+                # 跳过已有 INSTANCE-OF 的实例
+                existing_linked = set(
+                    r[0] for r in self._db.query(Relation.source_entity).filter(
+                        Relation.ontology_id == ontology_id,
+                        Relation.target_entity == concept_id,
+                        Relation.type == "INSTANCE-OF",
+                    ).all()
+                )
+                for inst_id in instance_ids:
+                    if inst_id in existing_linked:
+                        continue
+                    self._db.add(Relation(
+                        id=str(_uuid.uuid4()), ontology_id=ontology_id,
+                        source_entity=inst_id, target_entity=concept_id,
+                        type="INSTANCE-OF",
+                        properties={"source": "build_all_concept_inference"},
+                        confidence=1.0,
+                    ))
+                    concept_results["instance_of"] += 1
+
+            self._db.commit()
+        except Exception as e:
+            logger.warning(f"概念实体创建失败（非致命）: {e}")
+            self._db.rollback()
+
         return {
             "ontology_id": ontology_id,
             "entity_mappings": entity_results,
@@ -136,8 +198,10 @@ class MappingService:
             "logic_discovery": logic_result,
             "action_discovery": action_result,
             "chroma_entities_written": chroma_count,
-            "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results),
-            "total_relations": sum(r.get("count", 0) for r in relation_results),
+            "concept_entities_created": concept_results["concepts"],
+            "instance_of_relations_created": concept_results["instance_of"],
+            "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results) + concept_results["concepts"],
+            "total_relations": sum(r.get("count", 0) for r in relation_results) + concept_results["instance_of"],
             "total_logic": logic_result.get("total_v2", 0),
             "total_actions": action_result.get("total_v2", 0),
             "review_required": True,
