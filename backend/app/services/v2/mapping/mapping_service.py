@@ -144,18 +144,21 @@ class MappingService:
                     _hl.md5(f"{ontology_id}:{ec}:concept".encode()).hexdigest()
                 ))
                 existing_concept = self._db.query(Entity).filter(Entity.id == concept_id).first()
+                name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
                 if not existing_concept:
-                    name_en = ec
-                    name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
                     self._db.add(Entity(
                         id=concept_id, ontology_id=ontology_id,
-                        name_cn=f"{name_cn} (概念类型)", name_en=name_en,
+                        name_cn=name_cn, name_en=ec,
                         type=ec, canonical_id=f"concept:{ec}",
-                        description=f"抽象概念实体 — {name_cn} 类型的概念定义",
+                        description=f"{name_cn} — Pipeline Mapping 自动创建的概念实体",
                         properties={"is_concept": True, "source": "build_all_concept_inference"},
                         confidence=1.0,
                     ))
                     concept_results["concepts"] += 1
+                elif existing_concept.name_cn.endswith("(概念类型)"):
+                    # Upgrade: remove legacy suffix from name
+                    existing_concept.name_cn = name_cn
+                    concept_results["concepts"] = max(concept_results["concepts"], 1)
 
                 # 查询该类型的所有实例实体
                 instance_ids = [
