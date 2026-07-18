@@ -10,6 +10,7 @@ from app.models.relation import Relation
 from app.models.extraction_task import ExtractionTask
 from app.models.rules_config import RulesConfig
 from app.models.audit_task import AuditTask
+from app.models.entity_instance import EntityInstance
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "ExtractionTask",
     "RulesConfig",
     "AuditTask",
+    "EntityInstance",
 ]
