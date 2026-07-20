@@ -5,6 +5,11 @@ CONVERSION_ERROR_MARKERS = (
     "[File conversion failed:",
     "[Text read failed:",
     "[CSV read failed:",
+    # markitdown 的 ZipConverter 在处理 pptx/docx/xlsx（本质是 zip 容器）失败时，
+    # 不抛异常也不返回 None，而是把错误信息当正文返回，例如：
+    # "[ERROR] Invalid or corrupted zip file: ..."。必须识别为失败，否则损坏文件会被
+    # 当成"转换成功"送进 LLM，导致提取结果空白且没有任何错误提示。
+    "[ERROR]",
 )
 
 
@@ -62,8 +67,12 @@ def convert_document(file_path: str, mime_type: str | None = None) -> Conversion
         md = MarkItDown()
         result = md.convert(file_path)
         content = (result.text_content or "").strip()
-        if content:
+        if content and is_usable_converted_text(content):
             return ConversionResult(content=content)
+        if docx_result is not None:
+            return docx_result
+        if content:
+            return ConversionResult(error=f"文件转换失败：{content}")
         return ConversionResult(error="文件转换后没有可用文本内容")
     except BaseException as e:
         if docx_result is not None:

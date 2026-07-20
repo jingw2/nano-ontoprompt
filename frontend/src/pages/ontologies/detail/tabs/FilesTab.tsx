@@ -39,7 +39,7 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
           },
         } as any)
       } catch (e: any) {
-        const msg = e?.response?.data?.detail || e?.message || String(e)
+        const msg = e?.detail || e?.message || String(e)
         setUploadError(t('files.upload_failed', { message: msg }))
         console.error('Upload failed:', file.name, e)
       }
