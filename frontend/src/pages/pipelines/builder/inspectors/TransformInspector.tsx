@@ -27,9 +27,7 @@ export default function TransformInspector({ config, onChange, readOnly = false,
   const steps = (config.steps || []) as Array<{ op: string; params?: Record<string, unknown> }>
   const [showCatalog, setShowCatalog] = useState(false)
   const [previewMap, setPreviewMap] = useState<Record<number, { loading: boolean; data?: any[]; error?: string }>>({})
-  const [models, setModels] = useState<Array<{ id: string; name: string; provider: string; models: string[] }>>([])
   const filteredOps = useMemo(() => PATH_OPS_MAP[currentPath] || AVAILABLE_OPS, [currentPath])
-  useEffect(() => { apiClientV2.get('/models').then((r: any) => setModels(Array.isArray(r) ? r : r?.data ?? [])).catch(() => {}) }, [])
 
   // Runtime stats (hooks must be at top level)
   const [runStats, setRunStats] = useState<{ rows_in: number; rows_out: number } | null>(null);

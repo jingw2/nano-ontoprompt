@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
+import { DOMAINS } from '@/types/ontology'
 
 const STATUS_STYLE: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-600 border-gray-200',
@@ -203,7 +204,7 @@ function PipelineCreateModal({
   onCreated: (pl: Pipeline) => void
 }) {
   const [name, setName] = useState('')
-  const [domain, setDomain] = useState('供应链')
+  const [domain, setDomain] = useState(DOMAINS[0])
   const [description, setDescription] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -255,11 +256,7 @@ function PipelineCreateModal({
               onChange={e => setDomain(e.target.value)}
               className="w-full border rounded-lg px-3 py-2 text-sm"
             >
-              <option value="供应链">供应链</option>
-              <option value="金融">金融</option>
-              <option value="医疗">医疗</option>
-              <option value="法律">法律</option>
-              <option value="通用">通用</option>
+              {DOMAINS.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div>

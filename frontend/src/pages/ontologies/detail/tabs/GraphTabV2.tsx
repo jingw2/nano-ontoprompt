@@ -263,8 +263,11 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       }
     }
 
-    cy.one('layoutstop', spreadIsolatedNodes)
-    window.setTimeout(spreadIsolatedNodes, 100)
+    const spreadTimeout = window.setTimeout(spreadIsolatedNodes, 100)
+    cy.one('layoutstop', () => {
+      window.clearTimeout(spreadTimeout)
+      spreadIsolatedNodes()
+    })
 
     cy.on('tap', 'node', evt => {
       const nodeData = evt.target.data()
@@ -289,6 +292,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
     cyRef.current = cy
 
     return () => {
+      window.clearTimeout(spreadTimeout)
       cy.destroy()
       cyRef.current = null
     }

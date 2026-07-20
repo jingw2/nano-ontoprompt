@@ -242,7 +242,11 @@ function NodeInspector({ nodeData, onUpdate, onClose, pipelineId }: { nodeData: 
   const [localConfig, setLocalConfig] = useState<Record<string, unknown>>(nodeData.config || {})
   const [localLabel, setLocalLabel] = useState(nodeData.label)
 
-  useEffect(() => { setLocalConfig(nodeData.config || {}); setLocalLabel(nodeData.label) }, [nodeData.id])
+  useEffect(() => {
+    if (editing) return
+    setLocalConfig(nodeData.config || {})
+    setLocalLabel(nodeData.label)
+  }, [nodeData.id, nodeData.config, nodeData.label, editing])
 
   const handleChange = (key: string, value: unknown) => { setLocalConfig(p => ({ ...p, [key]: value })) }
 
