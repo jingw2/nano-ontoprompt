@@ -1,5 +1,9 @@
 from app.tasks.celery_app import celery_app
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # 确保 Celery worker 在 fork 前加载所有模型映射, 避免子进程缺少模型注册
 from app.models import (  # noqa: E402, F401
     user, ontology, file, prompt, model_config,
@@ -299,7 +303,7 @@ def run_extraction(self, task_id: str):
                     if isinstance(single, dict):
                         all_results.append(single)
                 except Exception:
-                    pass
+                    logger.exception("extract_ontology failed for file %s", getattr(f, "id", f))
                 completed += 1
                 task.progress = {"stage": f"extracting files {completed}/{len(valid_mds)} (parallel ×{max_workers})", "pct": 20 + 35 * completed // len(valid_mds)}
                 db.commit()
@@ -584,15 +588,27 @@ def run_extraction(self, task_id: str):
         _sync_neo4j(db, task.ontology_id)
 
     except Exception as e:
+        logger.exception("extraction task %s failed", task_id)
         try:
-            db.rollback()  # 清除错误态，确保后续 query/commit 可用
+            db.rollback()
             task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
             if task:
                 task.status = "failed"
                 task.error  = str(e)
                 db.commit()
         except Exception:
-            pass  # 数据库完全不可用时静默跳过，避免掩盖原始异常
+            # session 可能已损坏，用新 session 兜底标记失败，避免任务永远卡在 running
+            logger.warning("primary session unusable, retrying with fresh session for task %s", task_id, exc_info=True)
+            try:
+                fresh_db = SessionLocal()
+                task = fresh_db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
+                if task:
+                    task.status = "failed"
+                    task.error  = str(e)
+                    fresh_db.commit()
+                fresh_db.close()
+            except Exception:
+                logger.error("无法将任务 %s 标记为 failed，原始错误: %s", task_id, e, exc_info=True)
     finally:
         db.close()
 
@@ -652,4 +668,4 @@ def _sync_neo4j(db, ontology_id: str) -> None:
 
         svc.close()
     except Exception:
-        pass  # Neo4j 同步失败不影响提取结果
+        logger.warning("Neo4j sync failed for ontology %s; extraction result unaffected", ontology_id, exc_info=True)

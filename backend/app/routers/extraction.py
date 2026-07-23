@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+import logging
 from app.deps import get_db, get_current_user
 from app.models.extraction_task import ExtractionTask
 from app.models.file import UploadedFile
@@ -7,6 +8,8 @@ from app.models.ontology import OntologyProject
 from app.services.document_service import combine_converted_files
 from app.schemas.extraction import ExtractionRequest, ExtractionTaskOut
 import uuid
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
