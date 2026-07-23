@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.entity import Entity
 from app.schemas.entity import EntityCreate, EntityUpdate, EntityOut
 import uuid
@@ -13,7 +13,7 @@ def list_entities(ontology_id: str, db: Session = Depends(get_db), _=Depends(get
     return {"data": [EntityOut.model_validate(e).model_dump() for e in items]}
 
 @router.post("", status_code=201)
-def create_entity(ontology_id: str, body: EntityCreate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def create_entity(ontology_id: str, body: EntityCreate, db: Session = Depends(get_db), _=Depends(require_editor)):
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     e = Entity(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
     db.add(e); db.commit(); db.refresh(e)
@@ -27,7 +27,7 @@ def get_entity(ontology_id: str, entity_id: str, db: Session = Depends(get_db), 
     return {"data": EntityOut.model_validate(e).model_dump()}
 
 @router.put("/{entity_id}")
-def update_entity(ontology_id: str, entity_id: str, body: EntityUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_entity(ontology_id: str, entity_id: str, body: EntityUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
     if not e:
         raise HTTPException(404, "Not found")
@@ -37,7 +37,7 @@ def update_entity(ontology_id: str, entity_id: str, body: EntityUpdate, db: Sess
     return {"data": EntityOut.model_validate(e).model_dump()}
 
 @router.delete("/{entity_id}", status_code=204)
-def delete_entity(ontology_id: str, entity_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_entity(ontology_id: str, entity_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
     e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
     if not e:
         raise HTTPException(404, "Not found")

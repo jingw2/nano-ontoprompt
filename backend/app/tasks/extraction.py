@@ -1,5 +1,9 @@
 from app.tasks.celery_app import celery_app
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # 确保 Celery worker 在 fork 前加载所有模型映射, 避免子进程缺少模型注册
 from app.models import (  # noqa: E402, F401
     user, ontology, file, prompt, model_config,
@@ -299,7 +303,7 @@ def run_extraction(self, task_id: str):
                     if isinstance(single, dict):
                         all_results.append(single)
                 except Exception:
-                    pass
+                    logger.exception("extract_ontology failed for file %s", getattr(f, "id", f))
                 completed += 1
                 task.progress = {"stage": f"extracting files {completed}/{len(valid_mds)} (parallel ×{max_workers})", "pct": 20 + 35 * completed // len(valid_mds)}
                 db.commit()
@@ -652,4 +656,4 @@ def _sync_neo4j(db, ontology_id: str) -> None:
 
         svc.close()
     except Exception:
-        pass  # Neo4j 同步失败不影响提取结果
+        logger.warning("Neo4j sync failed for ontology %s; extraction result unaffected", ontology_id, exc_info=True)
