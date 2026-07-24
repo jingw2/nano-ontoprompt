@@ -48,8 +48,14 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
     qc.invalidateQueries({ queryKey: ['files', ontologyId] })
   }, [ontologyId, qc, t])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
+    // noClick: react-dropzone's built-in click handling does extra async-ish
+    // work before calling input.click(), which Safari's "must open the file
+    // dialog synchronously within the user gesture" rule frequently drops
+    // (drag-drop keeps working since it doesn't go through this path).
+    // Calling open() directly from a plain onClick below keeps it synchronous.
+    noClick: true,
     accept: {
       'application/pdf': ['.pdf'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
@@ -73,6 +79,7 @@ export default function FilesTab({ ontologyId }: { ontologyId: string }) {
   return (
     <div className="space-y-4">
       <div {...getRootProps()}
+        onClick={() => { if (!uploadState) open() }}
         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
           uploadState ? 'border-black bg-gray-50 cursor-default' :
           isDragActive ? 'border-black bg-gray-50' : 'border-gray-300 hover:border-gray-400'

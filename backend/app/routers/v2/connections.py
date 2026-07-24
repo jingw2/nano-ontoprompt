@@ -87,11 +87,37 @@ class TestConfigBody(BaseModel):
     config: dict = {}
 
 
+def _build_db_config(raw_config: dict, db_type: str) -> dict:
+    """
+    ConnectorInspector 发送单个字段（host/port/user/password/database）而非
+    connection_string，这里组装成 SQLAlchemy 可用的连接 URL。
+    密码中的特殊字符通过 urllib.parse.quote 编码以避免 URL 解析歧义。
+    """
+    from urllib.parse import quote
+    host = raw_config.get("host", "localhost")
+    port = raw_config.get("port", "3306" if db_type == "mysql" else "5432")
+    user = raw_config.get("user", "")
+    password = raw_config.get("password", "")
+    database = raw_config.get("database", "")
+    # 密码/用户名/库名中的特殊字符（如 @ : / # 空格等）必须 URL 编码，
+    # 否则 SQLAlchemy 的 URL 解析器会将 @ 等视为 URL 结构分隔符而非密码的一部分。
+    # host 不编码（IPv6 地址用 [] 括起，需原样保留）。
+    scheme = "mysql+pymysql" if db_type == "mysql" else "postgresql"
+    conn_str = f"{scheme}://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}/{quote(database, safe='')}"
+    config = dict(raw_config)
+    config["connection_string"] = conn_str
+    return config
+
+
 @router.post("/test-config")
 def test_connection_config(body: TestConfigBody):
     """测试连接配置（无需先创建 Connection，供 Builder 使用）"""
     try:
-        connector = get_connector(body.type, body.config)
+        cfg = body.config
+        if body.type in ("mysql", "postgresql", "postgres"):
+            db_type = "postgres" if "postgres" in body.type else "mysql"
+            cfg = _build_db_config(cfg, db_type)
+        connector = get_connector(body.type, cfg)
         ok = connector.test_connection()
         return {"success": ok}
     except Exception as e:
@@ -111,6 +137,10 @@ def test_connection(connection_id: str, db: Session = Depends(get_db)):
         config = json.loads(encryption_service.decrypt(raw)) if raw else conn.config
     except Exception:
         config = conn.config
+
+    # 与 test-config 一样，ConnectionsTab 存储的是独立字段而非 connection_string
+    if conn.kind in ("mysql", "postgres"):
+        config = _build_db_config(config, conn.kind)
 
     try:
         connector = get_connector(conn.kind, config)

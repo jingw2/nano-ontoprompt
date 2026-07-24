@@ -48,7 +48,7 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
       setUploading(false)
     }
   }, [storedFiles, onChange])
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: true })
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ onDrop, multiple: true, noClick: true })
 
   const hasStoredFiles = storedFiles.length > 0
   const hasDbConfig = sourceType !== 'file' && Object.keys(cv).length > 0
@@ -80,7 +80,7 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
       {sourceType === 'file' && (
         <div>
           <label className="text-xs text-gray-500 mb-1 block">上传文件（支持多选）</label>
-          <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-400'}`}>
+          <div {...getRootProps()} onClick={open} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-400'}`}>
             <input {...getInputProps()} /><Upload size={20} className="mx-auto mb-1 text-gray-400" />
             {uploading ? <p className="text-xs text-blue-500 font-medium">上传中...</p> : isDragActive ? <p className="text-xs text-blue-500 font-medium">松开以添加文件</p> : <p className="text-xs text-gray-500">拖拽文件到此处，或<span className="underline ml-0.5">点击选择</span></p>}
             <p className="text-[10px] text-gray-400 mt-1">支持 CSV/XLSX/JSON/PDF/DOCX 等，可批量多选</p>

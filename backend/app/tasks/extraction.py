@@ -10,13 +10,27 @@ from app.models import (  # noqa: E402, F401
     entity, logic as logic_model, action, relation, extraction_task, rules_config,
 )
 
+# ── 概念/实例分离指令 — 追加到所有提取 Prompt 之后 ───────────────────────────
+# entities 只放概念实体（对齐 Pipeline Mapping：一个类型一条 Entity），
+# 文档中提到的具体命名对象放 instances，按 entity_type 挂到所属概念下。
+CONCEPT_INSTANCE_DIRECTIVE = """
+
+【概念与实例分离，务必遵守】
+entities 数组只填"概念/类型"实体（如"供应商""借款人""贷款产品"），每个概念在全文中只出现一次，
+不要为文档中提到的每个具体命名对象（如具体公司名、具体人名、具体订单号、具体条款标题）单独创建 entity。
+文档中提到的具体命名实例，放入新增的 instances 数组，通过 entity_type 字段关联到其所属概念的 name_cn：
+"instances": [{"entity_type": "所属概念的name_cn", "name_cn": "实例名称", "name_en": "可选", "properties": {"属性1": "值"}, "confidence": 0.9}]
+relations 只在概念之间建立（如 供应商 -[supply]-> 产品），不要在具体实例之间建立关系。"""
+
+
 # ── Extraction results merge (方案A) ───────────────────────────────────────
 def _merge_extraction_results(results: list[dict]) -> dict:
-    """合并多个文件的 LLM 提取结果，按 name_cn 去重实体/规则/动作。"""
+    """合并多个文件的 LLM 提取结果，按 name_cn 去重实体/规则/动作/实例。"""
     all_entities: list[dict] = []
     all_relations: list[dict] = []
     all_logic: list[dict] = []
     all_actions: list[dict] = []
+    all_instances: list[dict] = []
 
     # 收集全部
     for r in results:
@@ -36,6 +50,9 @@ def _merge_extraction_results(results: list[dict]) -> dict:
         for a in (r.get("actions") or []):
             if isinstance(a, dict):
                 all_actions.append(a)
+        for inst in (r.get("instances") or []):
+            if isinstance(inst, dict):
+                all_instances.append(inst)
 
     # 实体去重（按 name_cn，保留属性最丰富的）
     seen_entities: dict[str, dict] = {}
@@ -90,11 +107,21 @@ def _merge_extraction_results(results: list[dict]) -> dict:
         if name not in seen_actions:
             seen_actions[name] = a
 
+    # 实例去重（按 entity_type + name_cn 唯一）
+    seen_instances: set = set()
+    instances = []
+    for inst in all_instances:
+        key = (inst.get("entity_type", ""), inst.get("name_cn", ""))
+        if key[0] and key[1] and key not in seen_instances:
+            seen_instances.add(key)
+            instances.append(inst)
+
     return {
         "entities": entities,
         "relations": relations,
         "logic_rules": list(seen_logic.values()),
         "actions": list(seen_actions.values()),
+        "instances": instances,
     }
 
 
@@ -269,7 +296,7 @@ def run_extraction(self, task_id: str):
             "api_key":  decrypt(model_cfg.api_key_encrypted or ""),
             "api_base": model_cfg.api_base,
         }
-        prompt_content = prompt.content
+        prompt_content = prompt.content + CONCEPT_INSTANCE_DIRECTIVE
         constraints = task.parameters.get("constraints", [])
         if constraints:
             prompt_content += "\n\n" + "\n".join(constraints)
@@ -398,6 +425,8 @@ def run_extraction(self, task_id: str):
             props = e_data.get("properties") or e_data.get("attributes") or e_data.get("attrs") or {}
             if not isinstance(props, dict):
                 props = {}
+            # 与 Pipeline Mapping 的概念实体约定对齐 — Entity 表只存概念，标记 is_concept
+            props = {**props, "is_concept": True}
             name_abbr = _resolve_name_abbr(e_data, props)
 
             if name_cn in existing_ent_map:
@@ -432,6 +461,45 @@ def run_extraction(self, task_id: str):
                 entity_name_to_id[e_data["name_en"]] = eid
 
         # 实体写完先 commit 一次，缩短大事务窗口，避免 saving 阶段 SQLite 写冲突
+        db.commit()
+
+        # ── 写入实例数据（EntityInstance 表）— 挂在概念实体下，对齐 Pipeline Mapping ──
+        from app.models.entity_instance import EntityInstance
+        import hashlib as _hl
+        for inst_data in result.get("instances", []):
+            if not isinstance(inst_data, dict):
+                continue
+            inst_name = inst_data.get("name_cn") or inst_data.get("name", "")
+            entity_type = inst_data.get("entity_type", "")
+            if not inst_name or not entity_type:
+                continue
+
+            concept_id = _fuzzy_resolve_entity(entity_type, entity_name_to_id)
+            if not concept_id:
+                # LLM 引用了未在 entities 中声明的概念 — 自动创建，避免实例数据丢失
+                concept_id = str(uuid.uuid4())
+                db.add(Entity(
+                    id=concept_id, ontology_id=task.ontology_id,
+                    name_cn=entity_type, type=entity_type,
+                    description=f"{entity_type} — 从实例数据自动创建的概念实体",
+                    properties={"is_concept": True, "source": "auto"}, confidence=0.7,
+                ))
+                entity_name_to_id[entity_type] = concept_id
+
+            inst_props = inst_data.get("properties") or {}
+            if not isinstance(inst_props, dict):
+                inst_props = {}
+            inst_props = {
+                **inst_props,
+                "name_cn": inst_name,
+                "name_en": inst_data.get("name_en", ""),
+                "object_type": entity_type,
+            }
+            stable_id = str(uuid.UUID(_hl.md5(f"{task.ontology_id}:{concept_id}:{inst_name}".encode()).hexdigest()))
+            db.merge(EntityInstance(
+                id=stable_id, entity_id=concept_id, ontology_id=task.ontology_id,
+                row_identity=inst_name, row_data=inst_props,
+            ))
         db.commit()
 
         # ── Fix 2+4: upsert relations (by source_id, target_id, type) ────────

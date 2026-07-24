@@ -58,12 +58,13 @@ function FileUploadZone({ files, onFilesChange }: { files: File[]; onFilesChange
     onFilesChange([...files, ...accepted])
   }, [files, onFilesChange])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: true })
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ onDrop, multiple: true, noClick: true })
 
   return (
     <div>
       <div
         {...getRootProps()}
+        onClick={open}
         className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors
           ${isDragActive ? 'border-black bg-gray-50' : 'border-gray-200 hover:border-gray-400'}`}
       >

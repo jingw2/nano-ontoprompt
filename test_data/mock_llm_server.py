@@ -20,13 +20,9 @@ ACTION_VERB_RE = re.compile(r'(通知|触发|审批|发送|上报|冻结|暂停|
 
 
 def heuristic_extract(text: str) -> dict:
+    """概念/实例分离（对齐 Pipeline Mapping）：具体组织名进 instances，
+    只有文档段落标题这类概念性条目才作为 entities。"""
     entities, seen = [], set()
-
-    for m in ORG_RE.findall(text):
-        if m not in seen and len(seen) < 12:
-            seen.add(m)
-            entities.append({"name_cn": m, "name_en": "", "type": "Organization",
-                             "description": f"文档中提到的组织: {m}", "properties": {}, "confidence": 0.9})
 
     headings = [h.strip() for h in HEADING_RE.findall(text) if 2 <= len(h.strip()) <= 20]
     for h in headings[:10]:
@@ -35,14 +31,19 @@ def heuristic_extract(text: str) -> dict:
             entities.append({"name_cn": h, "name_en": "", "type": "Concept",
                              "description": f"文档章节概念: {h}", "properties": {}, "confidence": 0.85})
 
+    instances, seen_org = [], set()
+    org_matches = [m for m in ORG_RE.findall(text) if m not in seen_org and not seen_org.add(m)][:12]
+    if org_matches:
+        entities.append({"name_cn": "组织机构", "name_en": "Organization", "type": "Organization",
+                         "description": "文档中提到的组织机构概念", "properties": {}, "confidence": 0.9})
+        for m in org_matches:
+            instances.append({"entity_type": "组织机构", "name_cn": m, "name_en": "",
+                              "properties": {}, "confidence": 0.9})
+
     relations = []
     concepts = [e["name_cn"] for e in entities if e["type"] == "Concept"]
-    orgs = [e["name_cn"] for e in entities if e["type"] == "Organization"]
     for i in range(len(concepts) - 1):
         relations.append({"source": concepts[i], "target": concepts[i + 1], "type": "related_to"})
-    for o in orgs:
-        if concepts:
-            relations.append({"source": o, "target": concepts[0], "type": "involved_in"})
 
     logic_rules = []
     rules = IF_THEN_RE.findall(text) + [
@@ -63,7 +64,8 @@ def heuristic_extract(text: str) -> dict:
             actions.append({"name_cn": name, "name_en": "", "description": f"文档中的动作: {name}",
                             "trigger_condition": "", "linked_entities": concepts[:1], "confidence": 0.75})
 
-    return {"entities": entities, "relations": relations, "logic_rules": logic_rules, "actions": actions}
+    return {"entities": entities, "instances": instances, "relations": relations,
+            "logic_rules": logic_rules, "actions": actions}
 
 
 def heuristic_infer_relations(user_content: str) -> dict:

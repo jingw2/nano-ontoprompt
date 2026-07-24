@@ -12,8 +12,9 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
         {"role": "user", "content": (
             "请从以下文档中尽可能全面地提取本体信息，以JSON格式返回。\n"
             "要求：\n"
-            "1. 实体要穷举——包括概念类（如供应商分级）和文中提到的具体实例（如公司名、产品名、物料名等）\n"
-            "2. 关系要密集——每个实体至少参与1条关系，重点识别层级（IS-A、PART-OF）和实例化（INSTANCE-OF）关系\n"
+            "1. entities 只放概念/类型实体（如供应商分级、产品类别），不要为文中提到的具体公司名、产品名、"
+            "物料名等命名实例单独建 entity——这些具体实例请放入 instances 数组\n"
+            "2. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系\n"
             "3. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
             f"文档内容：\n\n{text}"
         )},

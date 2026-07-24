@@ -108,6 +108,12 @@ export default function EntityDetailPage() {
     enabled: !!oid,
   })
 
+  const { data: instances = [] } = useQuery({
+    queryKey: ['entity-instances', oid, eid],
+    queryFn: () => ontologyApi.listEntityInstances(oid!, eid!) as any,
+    enabled: !!oid && !!eid,
+  })
+
   const { data: allLogic = [] } = useQuery({
     queryKey: ['logic', oid],
     queryFn: () => ontologyApi.listLogic(oid!) as any,
@@ -118,12 +124,6 @@ export default function EntityDetailPage() {
     queryKey: ['actions', oid],
     queryFn: () => ontologyApi.listActions(oid!) as any,
     enabled: !!oid,
-  })
-
-  const { data: relatedData } = useQuery({
-    queryKey: ['entity-related', oid, eid],
-    queryFn: () => ontologyApi.getEntityRelated(oid!, eid!),
-    enabled: !!oid && !!eid,
   })
 
   const updateMut = useMutation({
@@ -393,6 +393,40 @@ export default function EntityDetailPage() {
         )}
       </div>
 
+      {/* Instance data — row-level records under this concept entity */}
+      {instances.length > 0 && (
+        <div className="bg-white border rounded-xl p-6">
+          <h3 className="font-semibold mb-4">实例数据（{instances.length}）</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">名称</th>
+                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">属性</th>
+                </tr>
+              </thead>
+              <tbody>
+                {instances.map((inst: any) => {
+                  const { name_cn, name_en, object_type, ...rest } = inst.row_data ?? {}
+                  return (
+                    <tr key={inst.id} className="border-t align-top">
+                      <td className="px-3 py-2 text-xs font-medium text-gray-700 whitespace-nowrap">
+                        {name_cn || inst.row_identity}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-gray-500">
+                        {Object.entries(rest).length > 0
+                          ? Object.entries(rest).map(([k, v]) => `${k}: ${v}`).join('  ·  ')
+                          : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Related Entities (graph) — editable */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
@@ -521,62 +555,6 @@ export default function EntityDetailPage() {
           color="purple"
         />
       </div>
-
-      {/* Related Logic Rules (from /related endpoint) */}
-      {(relatedData?.logic ?? []).length > 0 && (
-        <div className="bg-white border rounded-xl p-6">
-          <div className="mt-0 border-t-0">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">
-              关联逻辑规则（{relatedData!.logic.length}）
-            </h3>
-            <div className="space-y-2">
-              {relatedData!.logic.map((lr: any) => (
-                <Link
-                  key={lr.id}
-                  to={`/ontologies/${oid}/logic/${lr.id}`}
-                  className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  <div>
-                    <span className="text-sm font-medium">{lr.name_cn}</span>
-                    {lr.name_en && <span className="text-xs text-gray-400 ml-2">{lr.name_en}</span>}
-                    {lr.formula && <p className="text-xs text-gray-500 mt-0.5 font-mono truncate max-w-sm">{lr.formula}</p>}
-                  </div>
-                  <span className="text-xs text-gray-400 shrink-0 ml-2">
-                    置信度 {((lr.confidence ?? 1) * 100).toFixed(0)}%
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Related Actions (from /related endpoint) */}
-      {(relatedData?.actions ?? []).length > 0 && (
-        <div className="bg-white border rounded-xl p-6">
-          <h3 className="text-sm font-medium text-gray-700 mb-3">
-            关联动作（{relatedData!.actions.length}）
-          </h3>
-          <div className="space-y-2">
-            {relatedData!.actions.map((ac: any) => (
-              <Link
-                key={ac.id}
-                to={`/ontologies/${oid}/actions/${ac.id}`}
-                className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium">{ac.name_cn}</span>
-                  {ac.name_en && <span className="text-xs text-gray-400 ml-2">{ac.name_en}</span>}
-                  {ac.description && <p className="text-xs text-gray-500 mt-0.5 truncate">{ac.description}</p>}
-                </div>
-                <span className="text-xs text-gray-400 shrink-0 ml-2">
-                  置信度 {((ac.confidence ?? 1) * 100).toFixed(0)}%
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Delete Confirm */}
       {showDeleteConfirm && (

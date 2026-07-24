@@ -24,8 +24,10 @@ export const ontologyApi = {
   createEntity: (oid: string, body: Partial<Entity>) => apiClient.post<Entity>(`/ontologies/${oid}/entities`, body),
   updateEntity: (oid: string, eid: string, body: Partial<Entity>) => apiClient.put<Entity>(`/ontologies/${oid}/entities/${eid}`, body),
   deleteEntity: (oid: string, eid: string) => apiClient.delete(`/ontologies/${oid}/entities/${eid}`),
-  getEntityRelated: (oid: string, eid: string) =>
-    apiClient.get<{ logic: any[]; actions: any[] }>(`/ontologies/${oid}/entities/${eid}/related`),
+  listEntityInstances: (oid: string, eid: string) =>
+    apiClient.get<{ id: string; row_identity: string; row_data: Record<string, unknown>; created_at: string }[]>(
+      `/ontologies/${oid}/entities/${eid}/instances`
+    ),
 
   // Logic
   listLogic: (oid: string) => apiClient.get<LogicRule[]>(`/ontologies/${oid}/logic`),

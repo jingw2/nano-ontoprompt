@@ -11,8 +11,12 @@ CONNECTOR_REGISTRY: dict[str, type[ConnectorBase]] = {
     "file": FileConnector,
     "mysql": SQLConnector,
     "postgres": SQLConnector,
+    # 前端 ConnectorInspector 发送的 source_type 值与后端期望值不一致，加别名对齐
+    "postgresql": SQLConnector,
     "mongo": MongoConnector,
+    "mongodb": MongoConnector,
     "rest": RestConnector,
+    "rest_api": RestConnector,
 }
 
 
