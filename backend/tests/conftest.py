@@ -8,9 +8,13 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.database import Base
 from app.deps import get_db
+from app.limiter import limiter
 from app.services.auth_service import hash_password
 from app.models.user import User
 import uuid
+
+# 测试环境关闭限流，避免连续登录/注册被 429
+limiter.enabled = False
 
 # 每次 pytest 运行使用独立的临时 SQLite, 避免并发运行互相锁库
 _db_fd, _db_path = tempfile.mkstemp(prefix="ontoprompt_test_", suffix=".db")

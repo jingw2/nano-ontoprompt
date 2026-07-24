@@ -2,7 +2,7 @@ import os
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.file import UploadedFile
 from app.models.ontology import OntologyProject
 from app.schemas.file import FileOut
@@ -49,7 +49,7 @@ async def upload_file(
     ontology_id: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _=Depends(get_current_user)
+    _=Depends(require_editor)
 ):
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
@@ -93,7 +93,7 @@ async def upload_file(
     return {"data": _file_out(db_file)}
 
 @router.delete("/{file_id}", status_code=204)
-def delete_file(ontology_id: str, file_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_file(ontology_id: str, file_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
     f = db.query(UploadedFile).filter(UploadedFile.id == file_id, UploadedFile.ontology_id == ontology_id).first()
     if not f:
         raise HTTPException(404, "File not found")

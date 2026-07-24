@@ -24,6 +24,7 @@ PyYAML==6.0.2
 aiofiles==24.1.0
 python-dotenv==1.0.1
 json-repair>=0.30
+slowapi==0.1.9
 # v2 dependencies
 neo4j==5.26.0
 chromadb==0.5.20

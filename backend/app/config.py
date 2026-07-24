@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     uploads_dir: str = "./uploads"
     access_token_expire_minutes: int = 1440  # 24h
 
+    # CORS - 逗号分隔的来源列表，可通过环境变量配置
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
     # 上传限制
     max_upload_mb: int = 200
     allowed_upload_extensions: str = "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt"

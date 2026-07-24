@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user
+from app.limiter import limiter
 from app.schemas.auth import LoginRequest, TokenResponse, RegisterRequest, PasswordChangeRequest
 from app.schemas.user import UserOut
 from app.services.auth_service import authenticate_user, create_access_token, hash_password, verify_password
@@ -10,7 +11,8 @@ import uuid
 router = APIRouter()
 
 @router.post("/login")
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
     user = authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -18,7 +20,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     return {"data": {"access_token": token, "token_type": "bearer"}, "message": "ok"}
 
 @router.post("/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register(request: Request, body: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter((User.username == body.username) | (User.email == body.email)).first():
         raise HTTPException(status_code=409, detail="Username or email already exists")
     user = User(

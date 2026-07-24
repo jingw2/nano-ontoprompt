@@ -56,7 +56,7 @@ def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = De
             try:
                 run_extraction(task.id)
             except Exception:
-                pass
+                logger.exception("synchronous extraction failed for task %s", task.id)
         threading.Thread(target=run_sync, daemon=True).start()
 
     return {"data": {"task_id": task.id}, "message": "Extraction queued"}

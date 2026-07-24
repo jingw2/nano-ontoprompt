@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_admin, require_editor
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 # 确保 Dataset 模型先导入以解析 FK
 import app.models.v2.dataset  # noqa: F401
@@ -73,7 +73,7 @@ class ValidateResult(BaseModel):
 
 # ── CRUD ──────────────────────────────────────────────────────────
 
-@router.post("", response_model=PipelineResponse, status_code=201)
+@router.post("", response_model=PipelineResponse, status_code=201, dependencies=[Depends(require_editor)])
 def create_pipeline(body: PipelineCreate, db: Session = Depends(get_db)):
     """创建新 Pipeline。支持旧 steps 格式和新 nodes/edges DSL。"""
     # 重名校验
@@ -153,7 +153,7 @@ def get_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     return _format_pipeline(pl)
 
 
-@router.put("/{pipeline_id}", response_model=PipelineResponse)
+@router.put("/{pipeline_id}", response_model=PipelineResponse, dependencies=[Depends(require_editor)])
 def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depends(get_db)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
@@ -168,7 +168,7 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
     return _format_pipeline(pl)
 
 
-@router.delete("/{pipeline_id}")
+@router.delete("/{pipeline_id}", dependencies=[Depends(require_admin)])
 def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:

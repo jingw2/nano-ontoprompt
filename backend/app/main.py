@@ -9,12 +9,17 @@ v1 兼容：/api/v1/* 路由全部保留
 """
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
+import logging
 from app.database import engine, Base, SessionLocal
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
@@ -25,6 +30,35 @@ from app.routers.v2 import curated as curated_v2
 from app.routers.v2 import mappings as mappings_v2
 from app.routers.v2 import incremental as incremental_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
+
+def _run_schema_migration():
+    """统一 schema 迁移入口。
+
+    生产环境通过 Alembic 管理迁移；开发环境若库未纳入 Alembic 版本管理
+    （如由 create_all 建起的旧库），则回退到 create_all 兜底并 stamp 到最新版本。
+    """
+    import os
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+
+    alembic_ini = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+    cfg = AlembicConfig(alembic_ini)
+    if os.environ.get("DATABASE_URL"):
+        cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+
+    try:
+        # 已存在表但未纳入 alembic 版本管理时，stamp 到基线再升级
+        insp = inspect(engine)
+        existing_tables = set(insp.get_table_names())
+        has_alembic_version = "alembic_version" in existing_tables
+        if existing_tables and not has_alembic_version:
+            command.stamp(cfg, "0001_full_baseline")
+        command.upgrade(cfg, "head")
+    except Exception:
+        # 开发环境兜底：alembic 失败时用 create_all 保证表结构就位
+        logger.warning("alembic upgrade failed; falling back to Base.metadata.create_all", exc_info=True)
+        Base.metadata.create_all(bind=engine)
+
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -41,44 +75,7 @@ def _seed_db():
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
         from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
         from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
-        Base.metadata.create_all(bind=engine)
-
-        # Lightweight column migrations — create_all skips existing tables
-        with engine.connect() as conn:
-
-            columns = {col["name"] for col in inspect(conn).get_columns("extraction_tasks")}
-            if "validation_report" not in columns:
-                conn.execute(text("ALTER TABLE extraction_tasks ADD COLUMN validation_report JSON"))
-                conn.commit()
-            entity_columns = {col["name"] for col in inspect(conn).get_columns("entities")}
-            if "name_abbr" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN name_abbr VARCHAR(50)"))
-                conn.commit()
-            if "snomed_id" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN snomed_id VARCHAR(50)"))
-                conn.commit()
-            if "canonical_id" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
-                conn.commit()
-            for stmt in [
-                "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
-                "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
-                "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'simple_llm'",
-                "ALTER TABLE v2_pipelines ADD COLUMN domain VARCHAR(100) DEFAULT '通用'",
-                "ALTER TABLE v2_pipelines ADD COLUMN description TEXT DEFAULT ''",
-                "ALTER TABLE v2_pipelines ADD COLUMN definition JSON",
-                "ALTER TABLE v2_pipelines ADD COLUMN branch VARCHAR(50) DEFAULT 'main'",
-                "ALTER TABLE v2_pipelines ADD COLUMN version INTEGER DEFAULT 1",
-                "ALTER TABLE logic_rules ADD COLUMN enabled BOOLEAN DEFAULT 1",
-                "ALTER TABLE logic_rules ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
-                "ALTER TABLE actions ADD COLUMN enabled BOOLEAN DEFAULT 1",
-                "ALTER TABLE actions ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
-            ]:
-                try:
-                    conn.execute(text(stmt))
-                    conn.commit()
-                except Exception:
-                    pass  # column already exists or sqlite limitation
+        _run_schema_migration()
 
         seed_admin(db)
 
@@ -134,14 +131,21 @@ async def lifespan(app: FastAPI):
         from app.services.v2.graph.index_setup import setup_indexes
         setup_indexes()
     except Exception:
-        pass  # Neo4j 不可用时不影响启动
+        logger.warning("Neo4j index setup skipped (unavailable); startup continues", exc_info=True)
     yield
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
 
+# 注册限流器 - 保护 Auth 等敏感端点
+from app.limiter import limiter
+from slowapi.middleware import SlowAPIMiddleware
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

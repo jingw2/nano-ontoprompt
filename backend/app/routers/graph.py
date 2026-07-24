@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.entity import Entity
 from app.models.relation import Relation
 from app.models.ontology import OntologyProject
@@ -129,7 +129,7 @@ def create_relation(
     ontology_id: str,
     body: dict,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user)
+    _=Depends(require_editor)
 ):
     from app.models.relation import Relation
     import uuid
@@ -146,7 +146,7 @@ def create_relation(
     return {"data": {"id": relation.id, "source": relation.source_entity, "target": relation.target_entity, "type": relation.type}}
 
 @router.delete("/relations/{relation_id}", status_code=204)
-def delete_relation(ontology_id: str, relation_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_relation(ontology_id: str, relation_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
     r = db.query(Relation).filter(Relation.id == relation_id, Relation.ontology_id == ontology_id).first()
     if not r:
         raise HTTPException(404, "Not found")

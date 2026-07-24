@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.ontology import OntologyProject
 from app.models.entity import Entity
 from app.models.relation import Relation
@@ -32,7 +32,7 @@ def list_ontologies(
     return {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
 
 @router.post("", status_code=201)
-def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     existing = db.query(OntologyProject).filter(OntologyProject.name.ilike(body.name)).first()
     if existing:
         raise HTTPException(status_code=409, detail={"error": "DUPLICATE_NAME", "message": f"Ontology 名称「{body.name}」已存在", "existing_id": existing.id})
@@ -50,7 +50,7 @@ def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_
     return {"data": OntologyOut.model_validate(p).model_dump()}
 
 @router.put("/{ontology_id}")
-def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
@@ -60,7 +60,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     return {"data": OntologyOut.model_validate(p).model_dump()}
 
 @router.delete("/{ontology_id}", status_code=204)
-def delete_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
