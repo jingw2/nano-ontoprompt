@@ -147,48 +147,51 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
 
       <div className="bg-white border rounded-lg overflow-hidden">
         {isLoading ? <p className="py-8 text-center text-gray-400">{t('common.loading')}</p> : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                {sortableColumns.map(col => (
-                  <th key={col.key} className="px-4 py-3 text-left text-gray-500 text-xs font-medium">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(col.key)}
-                      className="inline-flex items-center gap-1 hover:text-gray-800"
-                    >
-                      {col.label}
-                      <SortIcon column={col.key} />
-                    </button>
-                  </th>
-                ))}
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('entities.col_actions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayedEntities.map(e => {
-                const { labelCn, abbr } = parseEntityDisplay(e)
-                const displayAbbr = e.name_abbr?.trim() || abbr
-                return (
-                <tr key={e.id} className="border-b hover:bg-gray-50 cursor-pointer"
-                  onClick={() => navigate(`/ontologies/${ontologyId}/entities/${e.id}`)}>
-                  <td className="px-4 py-3 font-medium">{labelCn}</td>
-                  <td className="px-4 py-3 text-gray-500 font-mono text-xs">{displayAbbr || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500">{e.name_en || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-green-700">{e.canonical_id || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500">{e.type || '—'}</td>
-                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{e.description || '—'}</td>
-                  <td className="px-4 py-3 w-32"><ConfidenceBar value={e.confidence} /></td>
-                  <td className="px-4 py-3" onClick={ev => ev.stopPropagation()}>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => navigate(`/ontologies/${ontologyId}/entities/${e.id}`)} title={t('common.edit')} className="p-1.5 rounded text-blue-500 hover:bg-blue-50"><Pencil size={14} /></button>
-                      <button onClick={() => setDeleteTarget(e)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-max">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  {sortableColumns.map(col => (
+                    <th key={col.key} className="px-4 py-3 text-left text-gray-500 text-xs font-medium">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(col.key)}
+                        className="inline-flex items-center gap-1 hover:text-gray-800"
+                      >
+                        {col.label}
+                        <SortIcon column={col.key} />
+                      </button>
+                    </th>
+                  ))}
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">{t('entities.col_actions')}</th>
                 </tr>
-              )})}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {displayedEntities.map(e => {
+                  const { labelCn, abbr } = parseEntityDisplay(e)
+                  const displayAbbr = e.name_abbr?.trim() || abbr
+                  const desc = e.description || ''
+                  return (
+                  <tr key={e.id} className="group border-b hover:bg-gray-50 cursor-pointer"
+                    onClick={() => navigate(`/ontologies/${ontologyId}/entities/${e.id}`)}>
+                    <td className="px-4 py-3 font-medium">{labelCn}</td>
+                    <td className="px-4 py-3 text-gray-500 font-mono text-xs">{displayAbbr || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500">{e.name_en || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-green-700">{e.canonical_id || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500">{e.type || '—'}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={desc}>{desc || '—'}</td>
+                    <td className="px-4 py-3 w-32"><ConfidenceBar value={e.confidence} /></td>
+                    <td className="px-4 py-3 sticky right-0 bg-white group-hover:bg-gray-50 z-10 border-l border-gray-200" onClick={ev => ev.stopPropagation()}>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => navigate(`/ontologies/${ontologyId}/entities/${e.id}`)} title={t('common.edit')} className="p-1.5 rounded text-blue-500 hover:bg-blue-50"><Pencil size={14} /></button>
+                        <button onClick={() => setDeleteTarget(e)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )})}
+              </tbody>
+            </table>
+          </div>
         )}
         {!isLoading && displayedEntities.length === 0 && (
           <p className="text-center text-gray-400 py-8">{searchQ || typeFilter ? '无匹配结果' : t('entities.empty')}</p>

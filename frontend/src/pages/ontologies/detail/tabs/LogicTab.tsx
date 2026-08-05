@@ -90,65 +90,69 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
       {/* Rules table */}
       <div className="bg-white border rounded-lg overflow-hidden">
         {isLoading ? <p className="py-8 text-center text-gray-400">{t('common.loading')}</p> : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">公式</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类型</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">置信度</th>
-                <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
-                <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((r: any) => {
-                const linkedEntities = parseLinkedEntities(r.linked_entities)
-                const status = r.status || 'draft'
-                const enabled = r.enabled !== false
-                return (
-                  <tr key={r.id} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium">{r.name_cn || r.name || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate">{r.formula || '—'}</td>
-                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.description || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || 'rule'}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1 flex-wrap">
-                        {linkedEntities.map((e: string) => (
-                          <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-1.5 py-0.5 rounded border ${
-                        status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
-                        status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                        'bg-gray-50 text-gray-600'
-                      }`}>{status}</span>
-                    </td>
-                    <td className="px-4 py-3 w-28"><ConfidenceBar value={r.confidence} /></td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => toggleMut.mutate(r.id)} className="text-gray-500 hover:text-black">
-                        {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="inline-flex items-center gap-3">
-                        <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)}
-                          title={t('common.edit')} className="p-1.5 rounded text-blue-600 hover:bg-blue-50"><Pencil size={14} /></button>
-                        <button onClick={() => setDeleteTarget(r)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-max">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">公式</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类型</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">置信度</th>
+                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
+                  <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any) => {
+                  const linkedEntities = parseLinkedEntities(r.linked_entities)
+                  const status = r.status || 'draft'
+                  const enabled = r.enabled !== false
+                  const formula = r.formula || ''
+                  const description = r.description || ''
+                  return (
+                    <tr key={r.id} className="group border-b hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium">{r.name_cn || r.name || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate" title={formula}>{formula || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={description}>{description || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || 'rule'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1 flex-wrap">
+                          {linkedEntities.map((e: string) => (
+                            <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                          status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                          status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                          'bg-gray-50 text-gray-600'
+                        }`}>{status}</span>
+                      </td>
+                      <td className="px-4 py-3 w-28"><ConfidenceBar value={r.confidence} /></td>
+                      <td className="px-4 py-3 text-center">
+                        <button onClick={() => toggleMut.mutate(r.id)} className="text-gray-500 hover:text-black">
+                          {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-right sticky right-0 bg-white group-hover:bg-gray-50 z-10 border-l border-gray-200">
+                        <div className="inline-flex items-center gap-3">
+                          <button onClick={() => navigate(`/ontologies/${ontologyId}/logic/${r.id}`)}
+                            title={t('common.edit')} className="p-1.5 rounded text-blue-600 hover:bg-blue-50"><Pencil size={14} /></button>
+                          <button onClick={() => setDeleteTarget(r)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
         {!isLoading && filtered.length === 0 && <p className="text-center text-gray-400 py-8">{searchQ ? '无匹配结果' : t('logic.empty')}</p>}
       </div>
