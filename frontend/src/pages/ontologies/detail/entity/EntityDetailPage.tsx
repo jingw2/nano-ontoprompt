@@ -183,9 +183,9 @@ export default function EntityDetailPage() {
   const incomingEdges = edges.filter(e => e.data.target === eid)
   const outgoingEdges = edges.filter(e => e.data.source === eid)
 
-  // linked_entities 可能存实体显示名(简易 LLM)或实体类型名(Pipeline Mapping),
-  // 两者都匹配。
-  const matchKeys = [entity.name_cn, entity.name_en, entity.type].filter(Boolean) as string[]
+  // linked_entities 可能存实体 ID(UUID)、实体显示名(简易 LLM)或实体类型名(Pipeline Mapping),
+  // 三者都匹配。
+  const matchKeys = [entity.id, entity.name_cn, entity.name_en, entity.type].filter(Boolean) as string[]
   const linkedHit = (linked?: string[]) => (linked ?? []).some(x => matchKeys.includes(x))
 
   const relatedLogic = (allLogic as LogicRule[]).filter(r => linkedHit(r.linked_entities))
@@ -213,28 +213,28 @@ export default function EntityDetailPage() {
   // Logic link helpers
   const removeFromLogic = (rule: LogicRule) => {
     const next = (rule.linked_entities ?? []).filter(
-      n => n !== entity.name_cn && n !== entity.name_en
+      n => n !== entity.id && n !== entity.name_cn && n !== entity.name_en
     )
     updateLogicMut.mutate({ lid: rule.id, linked_entities: next })
   }
   const addToLogic = (ruleId: string) => {
     const rule = (allLogic as LogicRule[]).find(r => r.id === ruleId)
     if (!rule) return
-    const next = [...(rule.linked_entities ?? []), entity.name_cn]
+    const next = [...(rule.linked_entities ?? []), entity.id]
     updateLogicMut.mutate({ lid: rule.id, linked_entities: next })
   }
 
   // Action link helpers
   const removeFromAction = (action: Action) => {
     const next = (action.linked_entities ?? []).filter(
-      n => n !== entity.name_cn && n !== entity.name_en
+      n => n !== entity.id && n !== entity.name_cn && n !== entity.name_en
     )
     updateActionLinkMut.mutate({ aid: action.id, linked_entities: next })
   }
   const addToAction = (actionId: string) => {
     const action = (allActions as Action[]).find(a => a.id === actionId)
     if (!action) return
-    const next = [...(action.linked_entities ?? []), entity.name_cn]
+    const next = [...(action.linked_entities ?? []), entity.id]
     updateActionLinkMut.mutate({ aid: action.id, linked_entities: next })
   }
 
