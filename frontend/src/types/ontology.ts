@@ -65,6 +65,8 @@ export interface Action {
   linked_logic_ids: string[]
   confidence: number
   version: string
+  status?: string
+  enabled?: boolean
   created_at: string
   updated_at: string
 }

@@ -34,6 +34,8 @@ class ActionOut(BaseModel):
     linked_logic_ids: List[str]
     confidence: float
     version: str
+    status: Optional[str] = None
+    enabled: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
     model_config = {"from_attributes": True}
