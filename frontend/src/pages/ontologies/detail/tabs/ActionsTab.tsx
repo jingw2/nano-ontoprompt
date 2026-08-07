@@ -56,61 +56,64 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
       </div>
       <div className="bg-white border rounded-lg overflow-hidden">
         {isLoading ? <p className="py-8 text-center text-gray-400">{t('common.loading')}</p> : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类别</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
-                <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
-                <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
-                <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-max">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类别</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
+                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
+                    <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">操作</th>
+                </tr>
+              </thead>
+              <tbody>
               {(actions as any[]).map(a => {
                 const le = (typeof a.linked_entities === 'string' ? JSON.parse(a.linked_entities || '[]') : a.linked_entities) || []
                 const category = a.action_category || a.execution_rule || 'crud'
                 const status = a.status || 'draft'
                 const enabled = a.enabled !== false
+                const description = a.description || ''
                 return (
-                  <tr key={a.id} className="border-b hover:bg-gray-50">
+                  <tr key={a.id} className="group border-b hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium">{a.name_cn}</td>
                     <td className="px-4 py-3">
                       <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{category}</span>
                     </td>
-                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{a.description || '—'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1 flex-wrap">
-                        {le.map((e: string) => (
-                          <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-1.5 py-0.5 rounded border ${
-                        status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
-                        status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                        'bg-gray-50 text-gray-600'
-                      }`}>{status}</span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => toggleMut.mutate(a.id)} className="text-gray-500 hover:text-black">
-                        {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-right" onClick={ev => ev.stopPropagation()}>
-                      <div className="inline-flex items-center gap-3">
-                        <button onClick={() => navigate(`/ontologies/${ontologyId}/actions/${a.id}`)} title={t('common.edit')} className="p-1.5 rounded text-blue-500 hover:bg-blue-50"><Pencil size={14} /></button>
-                        <button onClick={() => setDeleteTarget(a)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={description}>{description || '—'}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1 flex-wrap">
+                          {le.map((e: string) => (
+                            <span key={e} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{e}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                          status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
+                          status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                          'bg-gray-50 text-gray-600'
+                        }`}>{status}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button onClick={() => toggleMut.mutate(a.id)} className="text-gray-500 hover:text-black">
+                          {enabled ? <ToggleRight size={16} className="text-green-600" /> : <ToggleLeft size={16} className="text-gray-400" />}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-right sticky right-0 bg-white group-hover:bg-gray-50 z-10 border-l border-gray-200" onClick={ev => ev.stopPropagation()}>
+                        <div className="inline-flex items-center gap-3">
+                          <button onClick={() => navigate(`/ontologies/${ontologyId}/actions/${a.id}`)} title={t('common.edit')} className="p-1.5 rounded text-blue-500 hover:bg-blue-50"><Pencil size={14} /></button>
+                          <button onClick={() => setDeleteTarget(a)} title={t('common.delete')} className="p-1.5 rounded text-red-500 hover:bg-red-50"><Trash2 size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
         {!isLoading && (actions as Action[]).length === 0 && <p className="text-center text-gray-400 py-8">{t('actions.empty')}</p>}
       </div>
