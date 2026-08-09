@@ -42,6 +42,9 @@ celerybeat-schedule
 # Test artifacts
 test-results/
 
+# Star history timestamp cache
+scripts/.star-history-cache.json
+
 # Internal / agent-only files (不进行 git 同步)
 AGENTS.md
 CLAUDE.md
