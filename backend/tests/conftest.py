@@ -3,7 +3,7 @@ import os
 import tempfile
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 # 应用级引擎（lifespan/_seed_db 使用 app.database.SessionLocal）指向独立的临时
@@ -65,8 +65,35 @@ def _create_sqlite_compatible_tables(bind):
             table.create(bind=bind, checkfirst=True)
             created.append(table)
         except Exception:
-            continue
+            try:
+                _create_columns_only(table, bind)
+                created.append(table)
+            except Exception:
+                continue
     return created
+
+
+def _create_columns_only(table, bind):
+    """Create a table with its columns only (no CHECK/unique/FK constraints).
+
+    PostgreSQL CHECK expressions (regex operators, pgcrypto integrity) cannot
+    execute on SQLite even though they compile.  Tables the application writes
+    during unit tests (e.g. auth_refresh_families/tokens) still need their
+    column shape on the harness database; constraint semantics stay enforced
+    only by the real PostgreSQL migration.
+    """
+    definitions = []
+    for column in table.columns:
+        column_type = column.type.dialect_impl(bind.dialect)
+        nullable = "NULL" if column.nullable else "NOT NULL"
+        definitions.append(f"{column.name} {column_type.compile(dialect=bind.dialect)} {nullable}")
+    with bind.begin() as connection:
+        connection.execute(text(f"CREATE TABLE {table.name} ({', '.join(definitions)})"))
+    for index in table.indexes:
+        try:
+            index.create(bind=bind, checkfirst=True)
+        except Exception:
+            continue
 
 
 # 应用引擎的临时库：一次性建立当前里程碑的 SQLite 兼容 schema，使 lifespan 的
