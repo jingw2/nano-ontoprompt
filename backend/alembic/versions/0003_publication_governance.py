@@ -19,6 +19,10 @@ from app.services.publication.preflight import (
     downgrade_identity_foundation,
     upgrade_identity_foundation,
 )
+from app.services.ontology_access import (
+    downgrade_access_foundation,
+    upgrade_access_foundation,
+)
 
 
 revision = "0003_publication_governance"
@@ -269,9 +273,11 @@ def upgrade() -> None:
     upgrade_release_foundation()
     upgrade_audit_foundation()
     upgrade_identity_foundation()
+    upgrade_access_foundation()
 
 
 def downgrade() -> None:
+    downgrade_access_foundation()
     downgrade_identity_foundation()
     downgrade_audit_foundation()
     downgrade_release_foundation()

@@ -23,6 +23,7 @@ from app.models.entity_property_definition import (
     EntityPropertyDefinition,
     OntologyMigrationFinding,
 )
+from app.models.ontology_access import OntologyProjectAccessGrant
 
 
 def load_all_models():
@@ -41,6 +42,7 @@ def load_all_models():
         EntityPropertyDefinition,
         OntologyMigrationFinding,
     )
+    from app.models.ontology_access import OntologyProjectAccessGrant  # noqa: F401
 
     return Base.metadata
 
@@ -67,5 +69,6 @@ __all__ = [
     "GovernanceAuditChainHead",
     "EntityPropertyDefinition",
     "OntologyMigrationFinding",
+    "OntologyProjectAccessGrant",
     "load_all_models",
 ]

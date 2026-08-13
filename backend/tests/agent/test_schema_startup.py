@@ -165,6 +165,7 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "governance_audit_chain_heads",
         "entity_property_definitions",
         "ontology_migration_findings",
+        "ontology_project_access_grants",
     } <= after
 
 

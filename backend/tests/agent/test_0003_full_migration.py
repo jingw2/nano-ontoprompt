@@ -37,6 +37,7 @@ NEW_0003_TABLES = {
     "governance_audit_chain_heads",
     "entity_property_definitions",
     "ontology_migration_findings",
+    "ontology_project_access_grants",
 }
 # Tables modeled before their migration exists: entity_instances arrives in
 # 0006_agent_runtime; audit_tasks is a dormant legacy model without a migrated
@@ -119,6 +120,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_release_foundation",
         "upgrade_audit_foundation",
         "upgrade_identity_foundation",
+        "upgrade_access_foundation",
     ):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.upgrade()
@@ -127,9 +129,11 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_release_foundation",
         "upgrade_audit_foundation",
         "upgrade_identity_foundation",
+        "upgrade_access_foundation",
     ]
     calls.clear()
     for helper in (
+        "downgrade_access_foundation",
         "downgrade_identity_foundation",
         "downgrade_audit_foundation",
         "downgrade_release_foundation",
@@ -138,6 +142,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.downgrade()
     assert calls == [
+        "downgrade_access_foundation",
         "downgrade_identity_foundation",
         "downgrade_audit_foundation",
         "downgrade_release_foundation",
