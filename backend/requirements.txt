@@ -34,3 +34,6 @@ pymongo==4.10.1
 pyarrow==18.1.0
 pandas>=2.2
 python-crontab==3.2.0
+
+# agent runtime
+langgraph==1.2.9
