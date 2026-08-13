@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+from app.models.security_domain import DEFAULT_SECURITY_DOMAIN_ID
 
 class OntologyProject(Base):
     __tablename__ = "ontology_projects"
@@ -15,5 +16,16 @@ class OntologyProject(Base):
     status: Mapped[str] = mapped_column(String(20), default="draft")
     build_mode: Mapped[str] = mapped_column(String(30), default="simple_llm", nullable=True)
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    security_domain_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("security_domains.id", ondelete="RESTRICT"),
+        nullable=False,
+        default=DEFAULT_SECURITY_DOMAIN_ID,
+    )
+    latest_published_release_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("ontology_releases.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

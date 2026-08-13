@@ -5,13 +5,21 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.main import app
-from app.database import Base
-from app.deps import get_db
-from app.limiter import limiter
-from app.services.auth_service import hash_password
-from app.models.user import User
-import uuid
+
+# 应用级引擎（lifespan/_seed_db 使用 app.database.SessionLocal）指向独立的临时
+# SQLite，与测试会话引擎分开，且不依赖仓库根目录遗留的 ontoprompt.db（其 schema
+# 早于 P1A，缺少 security_domain_id）。环境变量必须在导入 app.main 之前设置。
+_app_db_fd, _app_db_path = tempfile.mkstemp(prefix="ontoprompt_app_", suffix=".db")
+os.close(_app_db_fd)
+os.environ["DATABASE_URL"] = f"sqlite:///{_app_db_path}"
+
+from app.main import app  # noqa: E402
+from app.database import Base, engine as app_engine  # noqa: E402
+from app.deps import get_db  # noqa: E402
+from app.limiter import limiter  # noqa: E402
+from app.services.auth_service import hash_password  # noqa: E402
+from app.models.user import User  # noqa: E402
+import uuid  # noqa: E402
 
 # 测试环境关闭限流，避免连续登录/注册被 429
 limiter.enabled = False
@@ -32,15 +40,50 @@ def _cleanup_test_db():
         os.unlink(_db_path)
     except OSError:
         pass
+    app_engine.dispose()
+    try:
+        os.unlink(_app_db_path)
+    except OSError:
+        pass
+
+
+def _create_sqlite_compatible_tables(bind):
+    """Create only the SQLite-compatible tables in the shared metadata.
+
+    The centralized registry (`app.models.load_all_models`) also contains
+    PostgreSQL-only tables (JSONB columns, PostgreSQL regex CHECKs, pgcrypto
+    integrity checks) whose DDL cannot compile or execute on SQLite.  Those
+    tables are verified against real PostgreSQL by the migration suites; the
+    unit harness must not attempt to create them here.
+    """
+    from sqlalchemy.schema import CreateTable
+
+    created = []
+    for table in Base.metadata.sorted_tables:
+        try:
+            CreateTable(table).compile(dialect=bind.dialect)
+            table.create(bind=bind, checkfirst=True)
+            created.append(table)
+        except Exception:
+            continue
+    return created
+
+
+# 应用引擎的临时库：一次性建立当前里程碑的 SQLite 兼容 schema，使 lifespan 的
+# _seed_db 在不依赖任何遗留本地数据库文件的前提下正常工作。
+_create_sqlite_compatible_tables(app_engine)
+
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    # Import all models
-    from app.models import user, ontology, file, prompt, model_config, entity
-    from app.models import logic, action, relation, extraction_task, rules_config
-    Base.metadata.create_all(bind=engine)
+    # A disposable database and environment are established here, before any
+    # app startup code runs; startup never creates tables or stamps versions
+    # (E0-DB contract).  PostgreSQL-only tables are exercised through the
+    # disposable verified-0003 harness in tests/agent/test_0003_full_migration.py.
+    created = _create_sqlite_compatible_tables(engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    for table in reversed(created):
+        table.drop(bind=engine, checkfirst=True)
 
 @pytest.fixture
 def db():

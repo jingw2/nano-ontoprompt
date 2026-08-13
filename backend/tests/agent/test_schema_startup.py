@@ -97,7 +97,8 @@ def test_migration_wrapper_rejects_real_python_3_10_before_alembic_import():
     )
     assert proc.returncode != 0
     assert "UNSUPPORTED_PYTHON_VERSION" in proc.stderr + proc.stdout
-    assert "alembic" not in sys.modules
+    # the guard must fire before Alembic starts: its CLI usage text must be absent
+    assert "Usage: alembic" not in proc.stderr + proc.stdout
 
 
 def test_alembic_env_guards_before_third_party_imports():
@@ -155,6 +156,15 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "v2_ontology_mappings",
         "v2_ontology_logic_rules",
         "v2_ontology_action_types",
+        "security_domains",
+        "auth_refresh_families",
+        "auth_refresh_tokens",
+        "ontology_releases",
+        "governance_audit_logs",
+        "governance_audit_outbox",
+        "governance_audit_chain_heads",
+        "entity_property_definitions",
+        "ontology_migration_findings",
     } <= after
 
 

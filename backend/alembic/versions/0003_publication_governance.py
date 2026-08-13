@@ -7,6 +7,19 @@ Revises: 0002_entity_identifiers
 from alembic import op
 import sqlalchemy as sa
 
+from alembic_helpers.publication_release import (
+    downgrade_release_foundation,
+    upgrade_release_foundation,
+)
+from app.services.governance_audit import (
+    downgrade_audit_foundation,
+    upgrade_audit_foundation,
+)
+from app.services.publication.preflight import (
+    downgrade_identity_foundation,
+    upgrade_identity_foundation,
+)
+
 
 revision = "0003_publication_governance"
 down_revision = "0002_entity_identifiers"
@@ -50,6 +63,16 @@ def preflight_pgcrypto() -> None:
             raise RuntimeError("PGCRYPTO_DIGEST_PRIVILEGE_REQUIRED")
     except Exception as exc:
         raise RuntimeError("PGCRYPTO_DIGEST_PRIVILEGE_REQUIRED") from exc
+    # Ensure the pgcrypto extension schema stays resolvable so the immutable
+    # release integrity CHECK (digest(manifest_bytes, 'sha256')) can be
+    # created even when the caller's search_path omits the extension schema.
+    current_path = bind.execute(sa.text("SHOW search_path")).scalar_one()
+    entries = [entry.strip().strip('"') for entry in current_path.split(",") if entry.strip()]
+    if row.nspname not in entries:
+        bind.execute(
+            sa.text("SELECT set_config('search_path', :path, true)"),
+            {"path": ", ".join(entries + [row.nspname])},
+        )
 
 
 def upgrade_domain_foundation() -> None:
@@ -243,7 +266,13 @@ def downgrade_domain_foundation() -> None:
 def upgrade() -> None:
     preflight_pgcrypto()
     upgrade_domain_foundation()
+    upgrade_release_foundation()
+    upgrade_audit_foundation()
+    upgrade_identity_foundation()
 
 
 def downgrade() -> None:
+    downgrade_identity_foundation()
+    downgrade_audit_foundation()
+    downgrade_release_foundation()
     downgrade_domain_foundation()

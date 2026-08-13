@@ -11,12 +11,36 @@ from app.models.extraction_task import ExtractionTask
 from app.models.rules_config import RulesConfig
 from app.models.audit_task import AuditTask
 from app.models.entity_instance import EntityInstance
+from app.models.security_domain import SecurityDomain
+from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken
+from app.models.ontology_release import OntologyRelease
+from app.models.governance_audit import (
+    GovernanceAuditLog,
+    GovernanceAuditOutbox,
+    GovernanceAuditChainHead,
+)
+from app.models.entity_property_definition import (
+    EntityPropertyDefinition,
+    OntologyMigrationFinding,
+)
 
 
 def load_all_models():
     """Register every ORM model implemented in the current milestone."""
     from app.database import Base
     from app.models.v2 import action, connection, curated, dataset, logic, mapping, pipeline  # noqa: F401
+    from app.models.security_domain import SecurityDomain  # noqa: F401
+    from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken  # noqa: F401
+    from app.models.ontology_release import OntologyRelease  # noqa: F401
+    from app.models.governance_audit import (  # noqa: F401
+        GovernanceAuditLog,
+        GovernanceAuditOutbox,
+        GovernanceAuditChainHead,
+    )
+    from app.models.entity_property_definition import (  # noqa: F401
+        EntityPropertyDefinition,
+        OntologyMigrationFinding,
+    )
 
     return Base.metadata
 
@@ -34,5 +58,14 @@ __all__ = [
     "RulesConfig",
     "AuditTask",
     "EntityInstance",
+    "SecurityDomain",
+    "AuthRefreshFamily",
+    "AuthRefreshToken",
+    "OntologyRelease",
+    "GovernanceAuditLog",
+    "GovernanceAuditOutbox",
+    "GovernanceAuditChainHead",
+    "EntityPropertyDefinition",
+    "OntologyMigrationFinding",
     "load_all_models",
 ]
