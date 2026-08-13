@@ -1,4 +1,5 @@
 import ast
+import json
 import pathlib
 import subprocess
 import sys
@@ -102,3 +103,33 @@ def test_guard_imports_stdlib_only():
 def test_pyproject_declares_python_floor():
     metadata = tomllib.loads(PYPROJECT_PATH.read_text())
     assert metadata["project"]["requires-python"] == REQUIRED_PYTHON_FLOOR
+
+
+def test_packaging_build_evaluates_and_emits_python_floor(tmp_path):
+    report_path = tmp_path / "pip-report.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-deps",
+            "--report",
+            str(report_path),
+            ".",
+        ],
+        cwd=BACKEND_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            "RED_E0_PY: packaging build is broken (setuptools flat-layout "
+            "discovers app/uploads/alembic):\n" + (proc.stderr or proc.stdout)
+        )
+    installed = json.loads(report_path.read_text())["install"]
+    assert len(installed) == 1
+    metadata = installed[0]["metadata"]
+    assert metadata["name"] == "ontoprompt-backend"
+    assert metadata["requires_python"] == REQUIRED_PYTHON_FLOOR
