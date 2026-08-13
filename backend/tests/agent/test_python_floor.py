@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -9,9 +10,20 @@ import pytest
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[2]
 GUARD_PATH = BACKEND_DIR / "scripts" / "check_python_version.py"
+ENTRYPOINT_PATH = BACKEND_DIR / "scripts" / "guarded_entrypoint.py"
+BOOTSTRAP_PATH = BACKEND_DIR / "scripts" / "bootstrap_backend.py"
 PYPROJECT_PATH = BACKEND_DIR / "pyproject.toml"
 UNSUPPORTED_PYTHON_VERSION = "UNSUPPORTED_PYTHON_VERSION"
 REQUIRED_PYTHON_FLOOR = ">=3.11"
+
+
+def _run_entrypoint(*args, env=None):
+    return subprocess.run(
+        [sys.executable, str(ENTRYPOINT_PATH), *args],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
 
 
 def _run_guard(*args):
@@ -55,6 +67,140 @@ def test_e0_py_red_contract():
     proc = _run_guard()
     if proc.returncode != 0:
         pytest.fail(f"RED_E0_PY: guard failed under supported Python: {proc.stderr}")
+
+
+def test_e0_py_entrypoint_red_contract():
+    if not ENTRYPOINT_PATH.exists():
+        pytest.fail("RED_E0_PY_ENTRYPOINT: guarded launcher is missing")
+
+    proc = _run_entrypoint(sys.executable, "-c", "print('guarded-target')")
+    if proc.returncode != 0 or proc.stdout.strip() != "guarded-target":
+        pytest.fail(
+            "RED_E0_PY_ENTRYPOINT: guarded launcher did not exec the target: "
+            + (proc.stderr or proc.stdout)
+        )
+
+
+def test_e0_py_bootstrap_red_contract():
+    if not BOOTSTRAP_PATH.exists():
+        pytest.fail("RED_E0_PY_BOOTSTRAP: guarded dependency bootstrap is missing")
+
+
+def test_entrypoint_rejects_python_3_10_before_target_side_effect(tmp_path):
+    marker = tmp_path / "target-ran"
+    runner = (
+        "import runpy, sys;"
+        "sys.version_info = (3, 10, 20, 'final', 0);"
+        f"sys.path.insert(0, {str(ENTRYPOINT_PATH.parent)!r});"
+        f"sys.argv = ['guarded_entrypoint.py', {sys.executable!r}, '-c', "
+        f"\"from pathlib import Path; Path({str(marker)!r}).write_text('ran')\"];"
+        f"runpy.run_path({str(ENTRYPOINT_PATH)!r}, run_name='__main__')"
+    )
+    proc = subprocess.run([sys.executable, "-c", runner], capture_output=True, text=True)
+
+    assert proc.returncode != 0
+    assert UNSUPPORTED_PYTHON_VERSION in proc.stderr + proc.stdout
+    assert not marker.exists()
+
+
+def test_entrypoint_preserves_argv_environment_exit_and_process(tmp_path):
+    target = tmp_path / "target.py"
+    target.write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv, 'env': os.environ['E0_PY_ENV'], "
+        "'pid': os.getpid()}))\n"
+        "raise SystemExit(23)\n"
+    )
+    env = dict(os.environ, E0_PY_ENV="preserved")
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(ENTRYPOINT_PATH),
+            "--",
+            sys.executable,
+            str(target),
+            "literal;not-a-shell",
+            "$(not-expanded)",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    launcher_pid = proc.pid
+    stdout, stderr = proc.communicate()
+
+    assert proc.returncode == 23, stderr
+    result = json.loads(stdout)
+    assert result == {
+        "argv": [str(target), "literal;not-a-shell", "$(not-expanded)"],
+        "env": "preserved",
+        "pid": launcher_pid,
+    }
+
+
+def test_entrypoint_empty_command_has_stable_safe_usage():
+    secret = "must-not-leak"
+    proc = _run_entrypoint(env=dict(os.environ, E0_PY_SECRET=secret))
+
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr == "GUARDED_ENTRYPOINT_USAGE: command required\n"
+    assert secret not in proc.stderr
+
+
+def test_entrypoint_imports_stdlib_only():
+    tree = ast.parse(ENTRYPOINT_PATH.read_text())
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.append(node.module.split(".")[0])
+    unknown = sorted(set(imported) - set(sys.stdlib_module_names) - {"check_python_version"})
+    assert not unknown, f"entrypoint imports non-stdlib modules: {unknown}"
+
+
+def test_bootstrap_guards_before_exec_and_uses_absolute_requirements(monkeypatch):
+    import importlib.util
+
+    monkeypatch.syspath_prepend(str(BOOTSTRAP_PATH.parent))
+    spec = importlib.util.spec_from_file_location("bootstrap_backend", BOOTSTRAP_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module, "require_supported_python", lambda: calls.append("guard"))
+
+    def capture_exec(file, argv, env):
+        calls.append((file, argv, env))
+
+    monkeypatch.setattr(module.os, "execvpe", capture_exec)
+    module.main()
+
+    assert calls[0] == "guard"
+    file, argv, env = calls[1]
+    assert file == sys.executable
+    assert argv == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        str(BACKEND_DIR / "requirements.txt"),
+    ]
+    assert env is os.environ
+
+
+def test_bootstrap_imports_stdlib_only():
+    tree = ast.parse(BOOTSTRAP_PATH.read_text())
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.append(node.module.split(".")[0])
+    unknown = sorted(set(imported) - set(sys.stdlib_module_names) - {"check_python_version"})
+    assert not unknown, f"bootstrap imports non-stdlib modules: {unknown}"
 
 
 def test_require_supported_python_accepts_current_runtime():
