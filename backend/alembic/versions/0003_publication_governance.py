@@ -27,6 +27,10 @@ from app.services.publication.cutover import (
     downgrade_cutover_guards,
     upgrade_cutover_guards,
 )
+from alembic_helpers.legacy_runtime import (
+    downgrade_legacy_runtime_tables,
+    upgrade_legacy_runtime_tables,
+)
 
 
 revision = "0003_publication_governance"
@@ -279,9 +283,11 @@ def upgrade() -> None:
     upgrade_identity_foundation()
     upgrade_access_foundation()
     upgrade_cutover_guards()
+    upgrade_legacy_runtime_tables()
 
 
 def downgrade() -> None:
+    downgrade_legacy_runtime_tables()
     downgrade_cutover_guards()
     downgrade_access_foundation()
     downgrade_identity_foundation()

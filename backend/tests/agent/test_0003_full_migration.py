@@ -38,11 +38,13 @@ NEW_0003_TABLES = {
     "entity_property_definitions",
     "ontology_migration_findings",
     "ontology_project_access_grants",
+    "entity_instances",
+    "audit_tasks",
 }
-# Tables modeled before their migration exists: entity_instances arrives in
-# 0006_agent_runtime; audit_tasks is a dormant legacy model without a migrated
-# table.  The registry diff must allow exactly these.
-LATER_REVISION_TABLES = {"entity_instances", "audit_tasks"}
+# Every modeled table now exists in the 0003 migrated schema: the
+# LEGACY-SCHEMA mini-packet added entity_instances and audit_tasks, so the
+# registry diff must allow no extras.
+LATER_REVISION_TABLES = set()
 
 
 def test_p1a_integrate_red_contract():
@@ -122,6 +124,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_identity_foundation",
         "upgrade_access_foundation",
         "upgrade_cutover_guards",
+        "upgrade_legacy_runtime_tables",
     ):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.upgrade()
@@ -132,9 +135,11 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_identity_foundation",
         "upgrade_access_foundation",
         "upgrade_cutover_guards",
+        "upgrade_legacy_runtime_tables",
     ]
     calls.clear()
     for helper in (
+        "downgrade_legacy_runtime_tables",
         "downgrade_cutover_guards",
         "downgrade_access_foundation",
         "downgrade_identity_foundation",
@@ -145,6 +150,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.downgrade()
     assert calls == [
+        "downgrade_legacy_runtime_tables",
         "downgrade_cutover_guards",
         "downgrade_access_foundation",
         "downgrade_identity_foundation",
