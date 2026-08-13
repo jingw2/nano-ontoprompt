@@ -23,6 +23,10 @@ from app.services.ontology_access import (
     downgrade_access_foundation,
     upgrade_access_foundation,
 )
+from app.services.publication.cutover import (
+    downgrade_cutover_guards,
+    upgrade_cutover_guards,
+)
 
 
 revision = "0003_publication_governance"
@@ -274,9 +278,11 @@ def upgrade() -> None:
     upgrade_audit_foundation()
     upgrade_identity_foundation()
     upgrade_access_foundation()
+    upgrade_cutover_guards()
 
 
 def downgrade() -> None:
+    downgrade_cutover_guards()
     downgrade_access_foundation()
     downgrade_identity_foundation()
     downgrade_audit_foundation()
