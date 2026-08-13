@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, Boolean, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 from app.models.security_domain import DEFAULT_SECURITY_DOMAIN_ID
@@ -27,5 +27,7 @@ class OntologyProject(Base):
         ForeignKey("ontology_releases.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    working_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    is_dirty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

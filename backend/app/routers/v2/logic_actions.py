@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_editor
+from app.services.publication.working_copy import OntologyWorkingCopyService
 from app.models.user import User
 from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine
 from app.models.v2.action import OntologyActionType, OntologyActionRun
@@ -62,54 +63,58 @@ def list_logic_rules(ontology_id: str, logic_type: str = "", db: Session = Depen
 
 
 @router.post("/{ontology_id}/logic", status_code=201)
-def create_logic_rule(ontology_id: str, body: LogicRuleCreate, db: Session = Depends(get_db)):
-    rule = OntologyLogicRule(
-        ontology_id=ontology_id, name=body.name, logic_type=body.logic_type,
-        description=body.description, target_entity_type=body.target_entity_type,
-        expression=body.expression, source_type=body.source_type,
-        severity=body.severity, enabled=body.enabled,
-    )
-    db.add(rule); db.commit(); db.refresh(rule)
-    return {"id": rule.id, "name": rule.name, "status": rule.status}
+def create_logic_rule(ontology_id: str, body: LogicRuleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    def _write():
+        rule = OntologyLogicRule(
+            ontology_id=ontology_id, name=body.name, logic_type=body.logic_type,
+            description=body.description, target_entity_type=body.target_entity_type,
+            expression=body.expression, source_type=body.source_type,
+            severity=body.severity, enabled=body.enabled,
+        )
+        db.add(rule); db.flush()
+        return {"id": rule.id, "name": rule.name, "status": rule.status}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.create", callback=_write)
 
 
 @router.put("/{ontology_id}/logic/{rule_id}")
-def update_logic_rule(ontology_id: str, rule_id: str, body: LogicRuleCreate, db: Session = Depends(get_db)):
+def update_logic_rule(ontology_id: str, rule_id: str, body: LogicRuleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     rule = db.query(OntologyLogicRule).filter(
         OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
     ).first()
     if not rule:
         raise HTTPException(404, "Logic rule not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(rule, k, v)
-    rule.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"id": rule.id, "status": "updated"}
+    def _write():
+        for k, v in body.model_dump(exclude_unset=True).items():
+            setattr(rule, k, v)
+        rule.updated_at = datetime.now(timezone.utc)
+        return {"id": rule.id, "status": "updated"}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.update", callback=_write)
 
 
 @router.post("/{ontology_id}/logic/{rule_id}/review")
-def review_logic_rule(ontology_id: str, rule_id: str, body: LogicReviewRequest, db: Session = Depends(get_db)):
+def review_logic_rule(ontology_id: str, rule_id: str, body: LogicReviewRequest, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     rule = db.query(OntologyLogicRule).filter(
         OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
     ).first()
     if not rule:
         raise HTTPException(404, "Logic rule not found")
-    if body.enabled is not None:
-        rule.enabled = body.enabled
-    if body.severity is not None:
-        rule.severity = body.severity
-    if body.status is not None:
-        if body.status not in ("draft", "reviewed", "disabled", "published"):
-            raise HTTPException(400, "Invalid logic status")
-        rule.status = body.status
-    if body.notes:
-        ref = dict(rule.source_ref or {})
-        ref["review_notes"] = body.notes
-        ref["reviewed_at"] = datetime.now(timezone.utc).isoformat()
-        rule.source_ref = ref
-    rule.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"id": rule.id, "enabled": rule.enabled, "status": rule.status, "severity": rule.severity}
+    def _write():
+        if body.enabled is not None:
+            rule.enabled = body.enabled
+        if body.severity is not None:
+            rule.severity = body.severity
+        if body.status is not None:
+            if body.status not in ("draft", "reviewed", "disabled", "published"):
+                raise HTTPException(400, "Invalid logic status")
+            rule.status = body.status
+        if body.notes:
+            ref = dict(rule.source_ref or {})
+            ref["review_notes"] = body.notes
+            ref["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+            rule.source_ref = ref
+        rule.updated_at = datetime.now(timezone.utc)
+        return {"id": rule.id, "enabled": rule.enabled, "status": rule.status, "severity": rule.severity}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.review", callback=_write)
 
 
 @router.post("/{ontology_id}/logic/{rule_id}/test")
@@ -123,18 +128,22 @@ def test_logic_rule(ontology_id: str, rule_id: str, body: LogicTestRequest, db: 
 
 
 @router.delete("/{ontology_id}/logic/{rule_id}")
-def delete_logic_rule(ontology_id: str, rule_id: str, db: Session = Depends(get_db)):
+def delete_logic_rule(ontology_id: str, rule_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     rule = db.query(OntologyLogicRule).filter(
         OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
     ).first()
     if not rule:
         raise HTTPException(404, "Logic rule not found")
-    db.delete(rule); db.commit()
-    return {"status": "deleted"}
+    def _write():
+        db.delete(rule); db.flush()
+        return {"status": "deleted"}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.delete", callback=_write)
 
 
 @router.post("/{ontology_id}/logic/publish")
-def publish_logic_rules_v2(ontology_id: str, db: Session = Depends(get_db)):
+def publish_logic_rules_v2(ontology_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
+    """Direct tool publication is closed; use the Ontology compiler (P1C)."""
+    raise HTTPException(status_code=403, detail="PUBLICATION_NOT_ENABLED")
     from app.models.logic import LogicRule as LogicRuleV1
 
     rules = db.query(OntologyLogicRule).filter(
@@ -159,7 +168,7 @@ def publish_logic_rules_v2(ontology_id: str, db: Session = Depends(get_db)):
 # ── Logic: Discovery ────────────────────────────────────────────
 
 @router.post("/{ontology_id}/logic/discover")
-def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db)):
+def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     """发现 Logic Rules（同步写入 v2 + v1 表，供前端 LogicTab 读取）"""
     from app.services.v2.mapping.mapping_service import MappingService
     from app.models.logic import LogicRule as LogicRuleV1
@@ -214,10 +223,12 @@ def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db)):
                 description=qdesc, formula=qtype, confidence=qconf,
                 enabled=True, status="draft",
             ))
-    db.commit()
-    total_v1 = db.query(LogicRuleV1).filter(LogicRuleV1.ontology_id == ontology_id).count()
-    total_v2 = db.query(OntologyLogicRule).filter(OntologyLogicRule.ontology_id == ontology_id).count()
-    return {"discovered": len(created), "total_v2": total_v2, "total_v1": total_v1}
+    db.flush()
+    def _result():
+        total_v1 = db.query(LogicRuleV1).filter(LogicRuleV1.ontology_id == ontology_id).count()
+        total_v2 = db.query(OntologyLogicRule).filter(OntologyLogicRule.ontology_id == ontology_id).count()
+        return {"discovered": len(created), "total_v2": total_v2, "total_v1": total_v1}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.discover", callback=_result)
 
 
 # ── State Machines ──────────────────────────────────────────────
@@ -275,50 +286,53 @@ def list_action_types(ontology_id: str, category: str = "", db: Session = Depend
 
 
 @router.post("/{ontology_id}/actions", status_code=201)
-def create_action_type(ontology_id: str, body: ActionTypeCreate, db: Session = Depends(get_db)):
-    act = OntologyActionType(
-        ontology_id=ontology_id, name=body.name, action_category=body.action_category,
-        description=body.description, target_entity_type=body.target_entity_type,
-        parameters=body.parameters, submission_criteria=body.submission_criteria,
-        effects=body.effects, side_effects=body.side_effects,
-        permission_rules=body.permission_rules, enabled=body.enabled,
-    )
-    db.add(act); db.commit(); db.refresh(act)
-    return {"id": act.id, "name": act.name, "status": act.status}
+def create_action_type(ontology_id: str, body: ActionTypeCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    def _write():
+        act = OntologyActionType(
+            ontology_id=ontology_id, name=body.name, action_category=body.action_category,
+            description=body.description, target_entity_type=body.target_entity_type,
+            parameters=body.parameters, submission_criteria=body.submission_criteria,
+            effects=body.effects, side_effects=body.side_effects,
+            permission_rules=body.permission_rules, enabled=body.enabled,
+        )
+        db.add(act); db.flush()
+        return {"id": act.id, "name": act.name, "status": act.status}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.create", callback=_write)
 
 
 @router.post("/{ontology_id}/actions/{action_id}/review")
-def review_action_type(ontology_id: str, action_id: str, body: ActionReviewRequest, db: Session = Depends(get_db)):
+def review_action_type(ontology_id: str, action_id: str, body: ActionReviewRequest, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     act = db.query(OntologyActionType).filter(
         OntologyActionType.id == action_id, OntologyActionType.ontology_id == ontology_id
     ).first()
     if not act:
         raise HTTPException(404, "Action type not found")
-    if body.enabled is not None:
-        act.enabled = body.enabled
-    if body.status is not None:
-        if body.status not in ("draft", "reviewed", "disabled", "published"):
-            raise HTTPException(400, "Invalid action status")
-        act.status = body.status
-    if body.permission_rules is not None:
-        act.permission_rules = body.permission_rules
-    if body.submission_criteria is not None:
-        act.submission_criteria = body.submission_criteria
-    if body.notes:
-        side_effects = list(act.side_effects or [])
-        side_effects.append({
-            "type": "review_note",
-            "notes": body.notes,
-            "reviewed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        act.side_effects = side_effects
-    act.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"id": act.id, "enabled": act.enabled, "status": act.status}
+    def _write():
+        if body.enabled is not None:
+            act.enabled = body.enabled
+        if body.status is not None:
+            if body.status not in ("draft", "reviewed", "disabled", "published"):
+                raise HTTPException(400, "Invalid action status")
+            act.status = body.status
+        if body.permission_rules is not None:
+            act.permission_rules = body.permission_rules
+        if body.submission_criteria is not None:
+            act.submission_criteria = body.submission_criteria
+        if body.notes:
+            side_effects = list(act.side_effects or [])
+            side_effects.append({
+                "type": "review_note",
+                "notes": body.notes,
+                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            act.side_effects = side_effects
+        act.updated_at = datetime.now(timezone.utc)
+        return {"id": act.id, "enabled": act.enabled, "status": act.status}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.review", callback=_write)
 
 
 @router.post("/{ontology_id}/actions/discover")
-def discover_actions(ontology_id: str, db: Session = Depends(get_db)):
+def discover_actions(ontology_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     """发现 Actions（同步写入 v2 + v1 表，供前端 ActionsTab 读取）"""
     from app.services.v2.mapping.mapping_service import MappingService
     from app.models.action import Action as ActionV1
@@ -367,25 +381,31 @@ def discover_actions(ontology_id: str, db: Session = Depends(get_db)):
                 description=adesc, confidence=aconf,
                 enabled=True, status="draft",
             ))
-    db.commit()
-    tv1 = db.query(ActionV1).filter(ActionV1.ontology_id == ontology_id).count()
-    tv2 = db.query(OntologyActionType).filter(OntologyActionType.ontology_id == ontology_id).count()
-    return {"discovered": len(created), "total_v2": tv2, "total_v1": tv1}
+    db.flush()
+    def _result():
+        tv1 = db.query(ActionV1).filter(ActionV1.ontology_id == ontology_id).count()
+        tv2 = db.query(OntologyActionType).filter(OntologyActionType.ontology_id == ontology_id).count()
+        return {"discovered": len(created), "total_v2": tv2, "total_v1": tv1}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.discover", callback=_result)
 
 
 @router.delete("/{ontology_id}/actions/{action_id}")
-def delete_action_type(ontology_id: str, action_id: str, db: Session = Depends(get_db)):
+def delete_action_type(ontology_id: str, action_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     act = db.query(OntologyActionType).filter(
         OntologyActionType.id == action_id, OntologyActionType.ontology_id == ontology_id
     ).first()
     if not act:
         raise HTTPException(404, "Action type not found")
-    db.delete(act); db.commit()
-    return {"status": "deleted"}
+    def _write():
+        db.delete(act); db.flush()
+        return {"status": "deleted"}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.delete", callback=_write)
 
 
 @router.post("/{ontology_id}/actions/publish")
-def publish_actions_v2(ontology_id: str, db: Session = Depends(get_db)):
+def publish_actions_v2(ontology_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
+    """Direct tool publication is closed; use the Ontology compiler (P1C)."""
+    raise HTTPException(status_code=403, detail="PUBLICATION_NOT_ENABLED")
     from app.models.action import Action as ActionV1
 
     actions = db.query(OntologyActionType).filter(

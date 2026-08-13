@@ -31,6 +31,10 @@ from alembic_helpers.legacy_runtime import (
     downgrade_legacy_runtime_tables,
     upgrade_legacy_runtime_tables,
 )
+from app.services.publication.working_copy import (
+    downgrade_working_copy_foundation,
+    upgrade_working_copy_foundation,
+)
 
 
 revision = "0003_publication_governance"
@@ -284,9 +288,11 @@ def upgrade() -> None:
     upgrade_access_foundation()
     upgrade_cutover_guards()
     upgrade_legacy_runtime_tables()
+    upgrade_working_copy_foundation()
 
 
 def downgrade() -> None:
+    downgrade_working_copy_foundation()
     downgrade_legacy_runtime_tables()
     downgrade_cutover_guards()
     downgrade_access_foundation()

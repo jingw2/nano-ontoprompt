@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "closure": "OntologyWorkingCopyService.mutate",
+  "fail_closed_error": "PUBLICATION_NOT_ENABLED",
+  "public_prefixes": {
+    "app/routers/ontologies.py": "/api/v1/ontologies/{ontology_id}",
+    "app/routers/entities.py": "/api/v1/ontologies/{ontology_id}/entities",
+    "app/routers/graph.py": "/api/v1/ontologies/{ontology_id}/graph",
+    "app/routers/logic.py": "/api/v1/ontologies/{ontology_id}/logic",
+    "app/routers/actions.py": "/api/v1/ontologies/{ontology_id}/actions",
+    "app/routers/v2/logic_actions.py": "/api/v2/ontologies/{ontology_id}"
+  },
+  "writers": [
+    {"router": "app/routers/ontologies.py", "method": "PUT", "path": "/{ontology_id}", "operation": "ontology.update", "closure": "mutate"},
+    {"router": "app/routers/entities.py", "method": "POST", "path": "", "operation": "entity.create", "closure": "mutate"},
+    {"router": "app/routers/entities.py", "method": "PUT", "path": "/{entity_id}", "operation": "entity.update", "closure": "mutate"},
+    {"router": "app/routers/entities.py", "method": "DELETE", "path": "/{entity_id}", "operation": "entity.delete", "closure": "mutate"},
+    {"router": "app/routers/graph.py", "method": "POST", "path": "/relations", "operation": "relation.create", "closure": "mutate"},
+    {"router": "app/routers/graph.py", "method": "DELETE", "path": "/relations/{relation_id}", "operation": "relation.delete", "closure": "mutate"},
+    {"router": "app/routers/logic.py", "method": "POST", "path": "", "operation": "logic.create", "closure": "mutate"},
+    {"router": "app/routers/logic.py", "method": "PUT", "path": "/{logic_id}", "operation": "logic.update", "closure": "mutate"},
+    {"router": "app/routers/logic.py", "method": "DELETE", "path": "/{logic_id}", "operation": "logic.delete", "closure": "mutate"},
+    {"router": "app/routers/logic.py", "method": "POST", "path": "/{logic_id}/toggle", "operation": "logic.toggle", "closure": "mutate"},
+    {"router": "app/routers/logic.py", "method": "POST", "path": "/publish", "operation": "logic.publish", "closure": "fail_closed"},
+    {"router": "app/routers/actions.py", "method": "POST", "path": "", "operation": "action.create", "closure": "mutate"},
+    {"router": "app/routers/actions.py", "method": "PUT", "path": "/{action_id}", "operation": "action.update", "closure": "mutate"},
+    {"router": "app/routers/actions.py", "method": "DELETE", "path": "/{action_id}", "operation": "action.delete", "closure": "mutate"},
+    {"router": "app/routers/actions.py", "method": "POST", "path": "/{action_id}/toggle", "operation": "action.toggle", "closure": "mutate"},
+    {"router": "app/routers/actions.py", "method": "POST", "path": "/publish", "operation": "action.publish", "closure": "fail_closed"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/logic", "operation": "v2logic.create", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "PUT", "path": "/{ontology_id}/logic/{rule_id}", "operation": "v2logic.update", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/logic/{rule_id}/review", "operation": "v2logic.review", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "DELETE", "path": "/{ontology_id}/logic/{rule_id}", "operation": "v2logic.delete", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/logic/publish", "operation": "v2logic.publish", "closure": "fail_closed"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/logic/discover", "operation": "v2logic.discover", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/actions", "operation": "v2action.create", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/actions/{action_id}/review", "operation": "v2action.review", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "DELETE", "path": "/{ontology_id}/actions/{action_id}", "operation": "v2action.delete", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/actions/discover", "operation": "v2action.discover", "closure": "mutate"},
+    {"router": "app/routers/v2/logic_actions.py", "method": "POST", "path": "/{ontology_id}/actions/publish", "operation": "v2action.publish", "closure": "fail_closed"}
+  ]
+}

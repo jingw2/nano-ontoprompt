@@ -8,6 +8,8 @@ from app.models.entity import Entity
 from app.models.relation import Relation
 from app.models.user import User
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
+from app.services.ontology_access import creator_grant
+from app.services.publication.working_copy import OntologyWorkingCopyService
 import uuid
 
 router = APIRouter()
@@ -39,7 +41,10 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     project = OntologyProject(id=str(uuid.uuid4()), name=body.name, domain=body.domain,
                                description=body.description, build_mode=body.build_mode or "simple_llm",
                                created_by=current_user.id)
-    db.add(project); db.commit(); db.refresh(project)
+    db.add(project); db.flush()
+    # atomically insert the exact creator grant (P1A-ACCESS contract)
+    creator_grant(db, project.id, current_user)
+    db.refresh(project)
     return {"data": OntologyOut.model_validate(project).model_dump()}
 
 @router.get("/{ontology_id}")
@@ -50,14 +55,16 @@ def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_
     return {"data": OntologyOut.model_validate(p).model_dump()}
 
 @router.put("/{ontology_id}")
-def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
+def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
-    for k, v in body.model_dump(exclude_none=True).items():
-        setattr(p, k, v)
-    db.commit(); db.refresh(p)
-    return {"data": OntologyOut.model_validate(p).model_dump()}
+    def _write():
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(p, k, v)
+        db.flush()
+        return {"data": OntologyOut.model_validate(p).model_dump()}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="ontology.update", callback=_write)
 
 @router.delete("/{ontology_id}", status_code=204)
 def delete_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):

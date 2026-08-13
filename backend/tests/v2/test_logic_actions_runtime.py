@@ -1,10 +1,16 @@
 from app.models.entity import Entity
 from app.models.action import Action
 from app.models.logic import LogicRule
+from app.models.ontology import OntologyProject
 from app.models.v2.logic import OntologyLogicRule
 from app.models.v2.action import OntologyActionRun, OntologyActionType
 from app.routers.actions import publish_actions
 from app.routers.logic import publish_logic_rules
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
 from app.routers.v2.logic_actions import (
     ActionReviewRequest,
     ActionRunRequest,
@@ -59,6 +65,7 @@ def test_run_published_set_property_action(db):
 
 
 def test_logic_review_and_executable_test(db):
+    db.add(OntologyProject(id="ont-runtime-2", name="ont-runtime-2", domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     rule = OntologyLogicRule(
         id="logic-1",
         ontology_id="ont-runtime-2",
@@ -77,6 +84,7 @@ def test_logic_review_and_executable_test(db):
         "logic-1",
         LogicReviewRequest(status="reviewed", enabled=True, notes="approved"),
         db,
+        SimpleNamespace(id="runtime-editor"),
     )
     result = run_logic_rule_test(
         "ont-runtime-2",
@@ -92,6 +100,7 @@ def test_logic_review_and_executable_test(db):
 
 
 def test_action_review_updates_submission_criteria(db):
+    db.add(OntologyProject(id="ont-runtime-3", name="ont-runtime-3", domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     action = OntologyActionType(
         id="action-review-1",
         ontology_id="ont-runtime-3",
@@ -113,6 +122,7 @@ def test_action_review_updates_submission_criteria(db):
             notes="needs reason",
         ),
         db,
+        SimpleNamespace(id="runtime-editor"),
     )
 
     db.refresh(action)
@@ -146,6 +156,7 @@ def test_action_runtime_rejects_missing_required_parameter(db):
 
 def test_v1_logic_publish_syncs_v2_status(db):
     ontology_id = "ont-runtime-5"
+    db.add(OntologyProject(id=ontology_id, name=ontology_id, domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     db.add(LogicRule(
         id="logic-v1",
         ontology_id=ontology_id,
@@ -166,14 +177,17 @@ def test_v1_logic_publish_syncs_v2_status(db):
     ))
     db.commit()
 
-    publish_logic_rules(ontology_id, db)
-
-    assert db.query(LogicRule).filter_by(id="logic-v1").first().status == "published"
-    assert db.query(OntologyLogicRule).filter_by(id="logic-v2").first().status == "published"
+    with pytest.raises(HTTPException) as exc:
+        publish_logic_rules(ontology_id, db)
+    assert "PUBLICATION_NOT_ENABLED" in str(exc.value.detail)
+    # direct tool publication is closed; nothing is published
+    assert db.query(LogicRule).filter_by(id="logic-v1").first().status == "draft"
+    assert db.query(OntologyLogicRule).filter_by(id="logic-v2").first().status == "draft"
 
 
 def test_v1_action_publish_syncs_v2_status(db):
     ontology_id = "ont-runtime-6"
+    db.add(OntologyProject(id=ontology_id, name=ontology_id, domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     db.add(Action(
         id="action-v1",
         ontology_id=ontology_id,
@@ -193,7 +207,9 @@ def test_v1_action_publish_syncs_v2_status(db):
     ))
     db.commit()
 
-    publish_actions(ontology_id, db)
-
-    assert db.query(Action).filter_by(id="action-v1").first().status == "published"
-    assert db.query(OntologyActionType).filter_by(id="action-v2").first().status == "published"
+    with pytest.raises(HTTPException) as exc:
+        publish_actions(ontology_id, db)
+    assert "PUBLICATION_NOT_ENABLED" in str(exc.value.detail)
+    # direct tool publication is closed; nothing is published
+    assert db.query(Action).filter_by(id="action-v1").first().status == "draft"
+    assert db.query(OntologyActionType).filter_by(id="action-v2").first().status == "draft"

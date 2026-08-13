@@ -125,6 +125,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_access_foundation",
         "upgrade_cutover_guards",
         "upgrade_legacy_runtime_tables",
+        "upgrade_working_copy_foundation",
     ):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.upgrade()
@@ -136,9 +137,11 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         "upgrade_access_foundation",
         "upgrade_cutover_guards",
         "upgrade_legacy_runtime_tables",
+        "upgrade_working_copy_foundation",
     ]
     calls.clear()
     for helper in (
+        "downgrade_working_copy_foundation",
         "downgrade_legacy_runtime_tables",
         "downgrade_cutover_guards",
         "downgrade_access_foundation",
@@ -150,6 +153,7 @@ def test_migration_calls_upstream_helpers_in_normative_order(monkeypatch):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.downgrade()
     assert calls == [
+        "downgrade_working_copy_foundation",
         "downgrade_legacy_runtime_tables",
         "downgrade_cutover_guards",
         "downgrade_access_foundation",
