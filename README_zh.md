@@ -105,8 +105,8 @@ docker compose -f docker-compose.v2.yml up --build
 # 后端
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head                                  # 开发模式也可依赖启动时自动建表
+python scripts/bootstrap_backend.py
+python scripts/run_migrations.py upgrade head
 uvicorn app.main:app --reload --port 8000
 
 # 前端(另开终端)

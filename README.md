@@ -105,8 +105,8 @@ Open [http://localhost:5173](http://localhost:5173). Default credentials: `admin
 # Backend
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head                                  # or rely on auto create_all in dev
+python scripts/bootstrap_backend.py
+python scripts/run_migrations.py upgrade head
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (separate terminal)

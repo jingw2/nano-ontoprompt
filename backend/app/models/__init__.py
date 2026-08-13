@@ -12,6 +12,14 @@ from app.models.rules_config import RulesConfig
 from app.models.audit_task import AuditTask
 from app.models.entity_instance import EntityInstance
 
+
+def load_all_models():
+    """Register every ORM model implemented in the current milestone."""
+    from app.database import Base
+    from app.models.v2 import action, connection, curated, dataset, logic, mapping, pipeline  # noqa: F401
+
+    return Base.metadata
+
 __all__ = [
     "User",
     "OntologyProject",
@@ -26,4 +34,5 @@ __all__ = [
     "RulesConfig",
     "AuditTask",
     "EntityInstance",
+    "load_all_models",
 ]

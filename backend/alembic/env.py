@@ -1,3 +1,11 @@
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from check_python_version import require_supported_python  # noqa: E402
+
+require_supported_python()
+
 import os
 from logging.config import fileConfig
 
@@ -24,22 +32,9 @@ if database_url:
 # for 'autogenerate' support
 # Import Base and all models so that autogenerate can detect them.
 from app.database import Base  # noqa: E402
-from app.models import (  # noqa: E402, F401
-    user,
-    ontology,
-    file,
-    prompt,
-    model_config,
-    entity,
-    logic,
-    action,
-    relation,
-    extraction_task,
-    rules_config,
-)
-from app.models.v2 import connection, dataset, pipeline, curated, mapping  # noqa: E402, F401
+from app.models import load_all_models  # noqa: E402
 
-target_metadata = Base.metadata
+target_metadata = load_all_models()
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

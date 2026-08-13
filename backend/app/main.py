@@ -13,10 +13,10 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import logging
-from app.database import engine, Base, SessionLocal
+from app.database import SessionLocal
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,35 +30,6 @@ from app.routers.v2 import curated as curated_v2
 from app.routers.v2 import mappings as mappings_v2
 from app.routers.v2 import incremental as incremental_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
-
-def _run_schema_migration():
-    """统一 schema 迁移入口。
-
-    生产环境通过 Alembic 管理迁移；开发环境若库未纳入 Alembic 版本管理
-    （如由 create_all 建起的旧库），则回退到 create_all 兜底并 stamp 到最新版本。
-    """
-    import os
-    from alembic import command
-    from alembic.config import Config as AlembicConfig
-
-    alembic_ini = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
-    cfg = AlembicConfig(alembic_ini)
-    if os.environ.get("DATABASE_URL"):
-        cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
-
-    try:
-        # 已存在表但未纳入 alembic 版本管理时，stamp 到基线再升级
-        insp = inspect(engine)
-        existing_tables = set(insp.get_table_names())
-        has_alembic_version = "alembic_version" in existing_tables
-        if existing_tables and not has_alembic_version:
-            command.stamp(cfg, "0001_full_baseline")
-        command.upgrade(cfg, "head")
-    except Exception:
-        # 开发环境兜底：alembic 失败时用 create_all 保证表结构就位
-        logger.warning("alembic upgrade failed; falling back to Base.metadata.create_all", exc_info=True)
-        Base.metadata.create_all(bind=engine)
-
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -75,8 +46,6 @@ def _seed_db():
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
         from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
         from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
-        _run_schema_migration()
-
         seed_admin(db)
 
         # 重启时清理遗留的 running 任务 — daemon 线程被杀后 task 会永久卡在 85%
