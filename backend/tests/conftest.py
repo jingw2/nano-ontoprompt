@@ -86,7 +86,8 @@ def _create_columns_only(table, bind):
     for column in table.columns:
         column_type = column.type.dialect_impl(bind.dialect)
         nullable = "NULL" if column.nullable else "NOT NULL"
-        definitions.append(f"{column.name} {column_type.compile(dialect=bind.dialect)} {nullable}")
+        default_clause = _server_default_clause(column)
+        definitions.append(f"{column.name} {column_type.compile(dialect=bind.dialect)} {nullable}{default_clause}")
     with bind.begin() as connection:
         connection.execute(text(f"CREATE TABLE {table.name} ({', '.join(definitions)})"))
     for index in table.indexes:
@@ -94,6 +95,19 @@ def _create_columns_only(table, bind):
             index.create(bind=bind, checkfirst=True)
         except Exception:
             continue
+
+
+def _server_default_clause(column):
+    """Render a column's server_default so NOT NULL inserts keep working on SQLite."""
+    server_default = column.server_default
+    if server_default is None:
+        return ""
+    arg = server_default.arg
+    if isinstance(arg, str):
+        return f" DEFAULT '{arg}'"
+    if hasattr(arg, "text"):
+        return f" DEFAULT {arg.text}"
+    return ""
 
 
 # 应用引擎的临时库：一次性建立当前里程碑的 SQLite 兼容 schema，使 lifespan 的
