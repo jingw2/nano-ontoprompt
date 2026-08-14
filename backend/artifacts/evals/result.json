@@ -2,7 +2,7 @@
   "adapter": "fake",
   "adapter_version": "1.0.0",
   "case_count": 185,
-  "cases_sha256": "5a93cab2d87106771ec927d183b5618833e6f98178a35d8c6f5b165f0999f147",
+  "cases_sha256": "890da973671ad82c4c05e92f527450f2795e1e86018dc045b0b5047d419d0b19",
   "gates": {
     "citations_grounded": {
       "denominator": 40,
@@ -12,7 +12,7 @@
       "threshold": "precision>=0.95 recall>=0.9"
     },
     "clarification": {
-      "denominator": 20,
+      "denominator": 25,
       "failures": [],
       "observed": 1.0,
       "passed": true,
@@ -70,7 +70,7 @@
   },
   "manifest": "core-v1",
   "passed": true,
-  "run_id": "8fd4992c267fdcc2",
+  "run_id": "3f03429f29ddafa7",
   "scores": {
     "core-v1-0001": {
       "case_id": "core-v1-0001",

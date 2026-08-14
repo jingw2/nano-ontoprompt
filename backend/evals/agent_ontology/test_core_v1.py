@@ -89,6 +89,25 @@ def test_manifest_gate_denominators_match_cases():
         )
 
 
+def test_i7_clarification_and_unnecessary_clarification_gates():
+    """I-7: the clarification gate counts all 25 app-state/clarification cases
+    (20 must interrupt + 5 unnecessary cases assert no-clarification), while
+    the ≤0.15 unnecessary-clarification rate gate is kept over the 5 cases."""
+    manifest = _load_manifest()
+    cases = _load_cases()
+    clarification = [c for c in cases if "clarification" in c["gates"]]
+    assert len(clarification) == 25
+    unnecessary = [c for c in cases if "unnecessary_clarification" in c["gates"]]
+    assert len(unnecessary) == 5
+    # every unnecessary case also belongs to the 25-case clarification gate
+    assert all("clarification" in c["gates"] for c in unnecessary)
+    assert all(c["expectations"].get("clarification_not_required") for c in unnecessary)
+    spec = manifest["release_gates"]["clarification"]
+    assert spec == {"denominator": 25, "mode": "zero_tolerance"}
+    rate = manifest["release_gates"]["unnecessary_clarification"]
+    assert rate["denominator"] == 5 and rate["threshold_upper"] == 0.15
+
+
 def test_perfect_result_passes_every_release_gate():
     from evals.agent_ontology.validators import evaluate_gates, score_case
 

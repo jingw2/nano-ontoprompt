@@ -7,6 +7,15 @@ citation recall/precision, exact parameters, interrupt/error, terminal
 records (no duplicates), replay gaps, reconciliation entry, and unnecessary
 clarification.  `evaluate_gates` maps case scores onto the manifest's release
 gates (zero-tolerance vs point estimates) and reports the exact boundaries.
+
+The `clarification` gate counts all 25 application-state/clarification cases:
+the 20 clarification cases must interrupt with a clarification (a missing
+clarification is a zero-tolerance miss), and the 5 unnecessary-clarification
+cases must NOT ask one (an unnecessary clarification fails the case and
+therefore the gate) — their correct decision is `clarification_asked = false`.
+Those same 5 cases additionally drive the `unnecessary_clarification` rate
+gate (denominator 5, observed bad-rate `<=0.15`): every unnecessary
+clarification increments that gate's failure count.
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@
   },
   "case_count": 185,
   "case_file": "core-v1.jsonl",
-  "cases_sha256": "5a93cab2d87106771ec927d183b5618833e6f98178a35d8c6f5b165f0999f147",
+  "cases_sha256": "890da973671ad82c4c05e92f527450f2795e1e86018dc045b0b5047d419d0b19",
   "categories": {
     "application_state_clarification": 25,
     "checkpoint_worker_sse": 30,
@@ -21,7 +21,7 @@
       "recall": 0.9
     },
     "clarification": {
-      "denominator": 20,
+      "denominator": 25,
       "mode": "zero_tolerance"
     },
     "core_authorization_policy": {
