@@ -36,6 +36,14 @@ DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
 TEST_FERNET_KEY = Fernet.generate_key().decode()
 os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
 
+
+@pytest.fixture(autouse=True)
+def _pin_encryption_key():
+    # Other agent test modules define their own ENCRYPTION_KEY; pin ours for
+    # every in-process decrypt so module import order cannot break it.
+    os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
+    yield
+
 NEW_0004_TABLES = {
     "model_config_versions",
     "model_credentials",
