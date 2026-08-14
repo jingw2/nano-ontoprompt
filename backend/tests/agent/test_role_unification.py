@@ -63,8 +63,10 @@ def _route_dependency_calls(route):
 def test_endpoint_allow_deny_inventory_no_bypass():
     """Every write route carries an editor-or-admin dependency, except the
     explicitly exempt public/read-only/system surfaces: auth endpoints,
-    read-only graph queries (cypher/ask/search) and incremental worker
-    callbacks."""
+    read-only graph queries (cypher/ask/search), incremental worker
+    callbacks, and the granular-capability Agent/application routes whose
+    Section 12 authorization is grant/session-owner/designated-actor based
+    (checked inside the route body, not via an editor-or-admin dependency)."""
     from app.deps import require_admin, require_editor
 
     exempt = {
@@ -79,6 +81,20 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v2/incremental/connections/{connection_id}/sync-complete"),
         ("POST", "/api/v2/incremental/pipeline-runs/{run_id}/complete"),
         ("POST", "/api/v2/incremental/reviews/{review_id}/approve-trigger"),
+        # I-BACKEND registration: granular-capability Agent/application routes
+        ("POST", "/api/v1/ontologies/{ontology_id}/access-grants"),
+        ("POST", "/api/v1/ontologies/{ontology_id}/access-grants/{grant_id}/revisions"),
+        ("POST", "/api/v1/ontologies/{ontology_id}/access-grants/{grant_id}/revoke"),
+        ("PATCH", "/api/v1/ontologies/{ontology_id}/migration-remediations/{kind}/{item_id}"),
+        ("POST", "/api/v1/agents/{agent_id}/sessions"),
+        ("DELETE", "/api/v1/agent-sessions/{session_id}"),
+        ("POST", "/api/v1/agent-sessions/{session_id}/turns"),
+        ("POST", "/api/v1/agent-turns/{turn_id}/cancel"),
+        ("POST", "/api/v1/agent-turns/{turn_id}/stream-ticket"),
+        ("POST", "/api/v1/agent-approvals/{approval_id}/approve"),
+        ("POST", "/api/v1/agent-approvals/{approval_id}/reject"),
+        ("POST", "/api/v1/agent-clarifications/{clarification_id}/answer"),
+        ("POST", "/api/v1/agent-sessions/{session_id}/application-state"),
     }
     bypasses = []
     for route in app.routes:

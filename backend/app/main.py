@@ -7,6 +7,15 @@ v1 兼容：/api/v1/* 路由全部保留
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
+# I-BACKEND: refuse unsupported Python before any third-party import
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from check_python_version import require_supported_python
+
+require_supported_python()
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -24,7 +33,19 @@ from app.routers import auth, users, overview, ontologies, files, prompts, model
 from app.routers.models import admin_router as models_admin_router
 from app.routers.ontology_data_grants import router as data_grants_router
 from app.routers.application_state_schemas import router as app_state_schemas_router
-from app.routers.agents import router as agents_router
+from app.routers import (
+    agents as agents_module,
+    agent_approvals,
+    agent_application_state,
+    agent_clarifications,
+    agent_events,
+    agent_reconciliations,
+    agent_turns,
+    ontology_access_grants,
+    ontology_lifecycle,
+    ontology_remediations,
+    security_domains,
+)
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
 from app.routers.v2 import pipelines as pipelines_v2
@@ -116,6 +137,14 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+# I-BACKEND: browser-hardening headers (F0-SECURITY export) + 24h idempotency
+# key persistence (Section 12).  The idempotency middleware only inspects
+# mutation requests that carry an Idempotency-Key; reads/SSE pass through.
+from app.middleware.security_headers import create_security_headers_middleware
+from app.middleware.idempotency import create_idempotency_middleware
+app.add_middleware(create_security_headers_middleware())
+app.add_middleware(create_idempotency_middleware())
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
@@ -141,8 +170,24 @@ app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(models_admin_router)
 app.include_router(data_grants_router, prefix="/api/v1/ontology-data-grants", tags=["data-grants"])
 app.include_router(app_state_schemas_router, prefix="/api/v2/application-state-schemas", tags=["application-state-schemas"])
-app.include_router(agents_router, prefix="/api/v1/agents", tags=["agents"])
+app.include_router(agents_module.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
+
+# I-BACKEND: core Agent API routers (Section 12 registration)
+app.include_router(ontology_lifecycle.router, prefix="/api/v1/ontologies", tags=["ontology-lifecycle"])
+app.include_router(ontology_access_grants.router, prefix="/api/v1/ontologies", tags=["ontology-access-grants"])
+app.include_router(ontology_access_grants.admin_router, prefix="/api/v1", tags=["ontology-admin"])
+app.include_router(ontology_remediations.router, prefix="/api/v1/ontologies", tags=["ontology-remediations"])
+app.include_router(security_domains.router, prefix="/api/v1", tags=["security-domains"])
+app.include_router(agent_turns.router, prefix="/api/v1", tags=["agent-turns"])
+app.include_router(agent_events.router, prefix="/api/v1", tags=["agent-events"])
+app.include_router(agent_approvals.router, prefix="/api/v1", tags=["agent-approvals"])
+app.include_router(agent_clarifications.router, prefix="/api/v1", tags=["agent-clarifications"])
+# agent_audit is an alias of agent_application_state.router (same object); the
+# application-state router carries both the state and audit read routes.
+app.include_router(agent_application_state.router, prefix="/api/v1", tags=["agent-application-state"])
+app.include_router(agent_reconciliations.router, prefix="/api/v1", tags=["agent-reconciliations"])
+
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"])
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"])
 app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"])

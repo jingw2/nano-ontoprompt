@@ -80,6 +80,28 @@ _RUNTIME_OPERATIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/api/v2/ontologies/{ontology_id}/search/semantic"): frozenset({"discover", "read_instances"}),
     ("GET", "/api/v2/ontologies/{ontology_id}/state-machines"): frozenset({"read_schema"}),
     ("GET", "/api/v2/ontologies/{ontology_id}/action-runs"): frozenset({"execute_read_logic"}),
+    # I-BACKEND registration: the Agent application/runtime plane.  Session
+    # owner + run grant routes classify as runtime so no registered core
+    # method is "unknown"; the tool gateway only queries ontology keys above.
+    ("GET", "/api/v1/agents/{agent_id}/sessions"): frozenset({"run"}),
+    ("POST", "/api/v1/agents/{agent_id}/sessions"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-sessions/{session_id}"): frozenset({"run"}),
+    ("DELETE", "/api/v1/agent-sessions/{session_id}"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-sessions/{session_id}/messages"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-sessions/{session_id}/turns"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-turns/{turn_id}"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-turns/{turn_id}/cancel"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-turns/{turn_id}/stream-ticket"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-turns/{turn_id}/events"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-turns/{turn_id}/stream"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-approvals/{approval_id}"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-approvals/{approval_id}/approve"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-approvals/{approval_id}/reject"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-clarifications/{clarification_id}"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-clarifications/{clarification_id}/answer"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-sessions/{session_id}/application-state"): frozenset({"run"}),
+    ("POST", "/api/v1/agent-sessions/{session_id}/application-state"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-turns/{turn_id}/audit"): frozenset({"run"}),
 }
 
 # Endpoints that operate on the design/lifecycle plane (OntologyProjectAccessGrant).
@@ -108,6 +130,7 @@ _PLATFORM_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/ontology-data-grants",
     "/api/v1/agents",
+    "/api/v1/security-domains",
     "/api/v2/application-state-schemas",
     "/api/v2/incremental",
     "/health",
