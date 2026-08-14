@@ -251,7 +251,9 @@ def create_agent_version(agent_id: str, body: AgentBasicVersionRequest, db: Sess
 def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _require_agent_grant(db, current_user.id, agent_id, "view_config")
     rows = db.execute(text(
-        "SELECT id, version_no, name, description, config_hash, created_at "
+        "SELECT id, version_no, name, description, config_hash, "
+        "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
+        "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
         "FROM agent_versions WHERE agent_id = :id ORDER BY version_no"
     ), {"id": agent_id}).mappings().all()
     return {"data": {"items": [AgentVersionOut(**dict(r)).model_dump() for r in rows],

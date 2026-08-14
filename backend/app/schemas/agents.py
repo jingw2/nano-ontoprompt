@@ -31,6 +31,14 @@ class AgentVersionOut(BaseModel):
     name: str
     description: Optional[str] = None
     config_hash: str
+    default_model_config_version_id: Optional[str] = None
+    default_model_name: Optional[str] = None
+    system_prompt: Optional[str] = None
+    memory_settings: Optional[dict] = None
+    application_state_schema_version_id: Optional[str] = None
+    change_note: Optional[str] = None
+    prompt_generation_id: Optional[str] = None
+    created_by: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
