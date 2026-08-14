@@ -63,7 +63,8 @@ def versioning_schema_present(db) -> bool:
             return any(row["name"] == "status" for row in columns)
         row = db.execute(text(
             "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'model_configs' AND column_name = 'status'"
+            "WHERE table_name = 'model_configs' AND column_name = 'status' "
+            "AND table_schema = current_schema()"
         )).scalar_one_or_none()
         return row is not None
     except Exception:
