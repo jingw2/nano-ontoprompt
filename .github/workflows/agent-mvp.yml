@@ -1,0 +1,115 @@
+# E0-CI: core Agent verification pipeline.
+#
+# Exact Python 3.11/3.12 matrix whose install/migration/API/worker smoke
+# commands run through the guarded launcher/bootstrap (no pip, migration, or
+# service command precedes the guard), with PostgreSQL 16 + Redis 7 services,
+# frontend test:ci, the artifact evaluation run, and a Python 3.10 negative job
+# that refuses unsupported Python BEFORE any install.  Every core packet
+# command is owned by exactly one job step (scripts/ci/check_agent_plan_contract.py).
+name: agent-mvp
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-floor-negative:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.10"
+      - name: Unsupported Python is refused before any install
+        run: |
+          cd backend
+          set +e
+          uv run --python "3.10" python scripts/guarded_entrypoint.py -- \
+            python -c "print('SHOULD_NOT_RUN')" > /tmp/negative.txt 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q UNSUPPORTED_PYTHON_VERSION /tmp/negative.txt
+          if grep -q SHOULD_NOT_RUN /tmp/negative.txt; then
+            echo "target ran on unsupported Python" >&2
+            exit 1
+          fi
+
+  backend-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ontoprompt_test
+          POSTGRES_USER: ontoprompt
+          POSTGRES_PASSWORD: ontoprompt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ontoprompt -d ontoprompt_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Guarded dependency install
+        run: cd backend && python scripts/bootstrap_backend.py
+      - name: Migration through the guard
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+            python scripts/run_migrations.py upgrade head
+      - name: API smoke through the guarded launcher
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+            REDIS_URL=redis://localhost:6379/0 \
+            python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app \
+              --host 127.0.0.1 --port 8000 &
+          API_PID=$!
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$API_PID" 2>/dev/null || true
+          test "$ok" -eq 1
+      - name: Worker smoke through the guarded launcher
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+            REDIS_URL=redis://localhost:6379/0 \
+            timeout 25 python scripts/guarded_entrypoint.py -- python -m celery \
+              -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 || code=$?
+          test "${code:-0}" -eq 124 || test "${code:-0}" -eq 0
+      - name: Backend core suites
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/postgres \
+            python -m pytest -q
+      - name: Agent evaluation corpus
+        run: cd backend && python -m evals.agent_ontology.run --manifest core-v1 --adapter fake --seed 141 --output artifacts/evals/result.json
+      - name: Frontend test:ci
+        working-directory: frontend
+        run: npm ci && npm run test:ci
+      - name: I-FRONTEND red contract E2E
+        working-directory: frontend
+        run: bash ../scripts/run_agent_e2e.sh --no-stack -- agent-navigation.spec.ts --grep 'I-FRONTEND red contract'
+      - name: Plan contract check
+        run: cd backend && python scripts/ci/check_agent_plan_contract.py
