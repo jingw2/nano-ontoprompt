@@ -209,3 +209,67 @@ def test_agent_catalog_filters(ctx):
             assert all("api_key" not in m for m in items)
     finally:
         app.dependency_overrides.clear()
+
+
+def test_agent_list_contract_and_archive(ctx):
+    """I-5: cursor pagination (limit 1-100 default 50), q/id/name/UTC date
+    filters, stable created_at DESC, id DESC ordering, and DELETE archive 204."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _create_agent(session, editor_id, model_version, app_schema, name="Alpha Agent")
+    _create_agent(session, editor_id, model_version, app_schema, name="Beta Agent")
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+    viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # viewer without a grant sees nothing (access-filtered)
+            assert c.get("/api/v1/agents", headers=viewer_headers).json()["data"]["items"] == []
+            # default limit 50, has_more false, stable order by created_at DESC
+            page = c.get("/api/v1/agents", headers=editor_headers).json()["data"]
+            assert len(page["items"]) == 2
+            assert page["has_more"] is False
+            assert page["next_cursor"] is None
+            assert [a["name"] for a in page["items"]] == ["Beta Agent", "Alpha Agent"]
+            assert all(a["can_edit"] is True for a in page["items"])
+            # limit=1 cursor pagination: first page has_more, second page is the rest
+            first = c.get("/api/v1/agents", params={"limit": 1}, headers=editor_headers).json()["data"]
+            assert len(first["items"]) == 1
+            assert first["has_more"] is True
+            assert first["next_cursor"]
+            second = c.get("/api/v1/agents", params={"limit": 1, "cursor": first["next_cursor"]}, headers=editor_headers).json()["data"]
+            assert len(second["items"]) == 1
+            assert second["has_more"] is False
+            assert {first["items"][0]["agent_id"], second["items"][0]["agent_id"]} == \
+                {a["agent_id"] for a in page["items"]}
+            # limit bounds
+            assert c.get("/api/v1/agents", params={"limit": 0}, headers=editor_headers).status_code == 422
+            assert c.get("/api/v1/agents", params={"limit": 101}, headers=editor_headers).status_code == 422
+            # tampered cursor rejected
+            assert c.get("/api/v1/agents", params={"cursor": "forged"}, headers=editor_headers).status_code == 422
+            # name filter
+            named = c.get("/api/v1/agents", params={"name": "alpha"}, headers=editor_headers).json()["data"]
+            assert [a["name"] for a in named["items"]] == ["Alpha Agent"]
+            # id exact-UUID-or-prefix filter
+            beta_id = next(a["agent_id"] for a in page["items"] if a["name"] == "Beta Agent")
+            by_id = c.get("/api/v1/agents", params={"id": beta_id}, headers=editor_headers).json()["data"]
+            assert [a["agent_id"] for a in by_id["items"]] == [beta_id]
+            by_prefix = c.get("/api/v1/agents", params={"id": beta_id[:8]}, headers=editor_headers).json()["data"]
+            assert [a["agent_id"] for a in by_prefix["items"]] == [beta_id]
+            # q search matches name substring or id prefix
+            q_hit = c.get("/api/v1/agents", params={"q": "beta"}, headers=editor_headers).json()["data"]
+            assert [a["name"] for a in q_hit["items"]] == ["Beta Agent"]
+            # date filters: [created_from, created_before) with a future from excludes everything
+            future = "2999-01-01T00:00:00Z"
+            assert c.get("/api/v1/agents", params={"created_from": future}, headers=editor_headers).json()["data"]["items"] == []
+            # DELETE archive -> 204 with no body; second delete -> 404
+            r = c.delete(f"/api/v1/agents/{beta_id}", headers=editor_headers)
+            assert r.status_code == 204
+            assert r.content == b""
+            detail = c.get(f"/api/v1/agents/{beta_id}", headers=editor_headers).json()["data"]
+            assert detail["status"] == "archived"
+            assert c.delete(f"/api/v1/agents/{beta_id}", headers=editor_headers).status_code == 404
+    finally:
+        app.dependency_overrides.clear()

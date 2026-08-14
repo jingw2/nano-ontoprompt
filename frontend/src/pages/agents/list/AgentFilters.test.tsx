@@ -2,22 +2,38 @@ import '@/i18n'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import AgentFilters from './AgentFilters'
+import AgentFilters, { type AgentFilterValues } from './AgentFilters'
+
+const EMPTY: AgentFilterValues = { id: '', name: '', createdFrom: '', createdTo: '' }
 
 describe('P2C-LIST filters', () => {
-  it('debounces search input into the onChange callback', async () => {
-    const onChange = vi.fn()
-    render(<AgentFilters search="" status="" onChange={onChange} />)
-    await userEvent.type(screen.getByPlaceholderText('搜索 Agent 名称…'), 'sup')
-    expect(onChange).not.toHaveBeenCalled()
-    await new Promise(r => setTimeout(r, 350))
-    expect(onChange).toHaveBeenCalledWith({ search: 'sup' })
+  it('collects ID/name/UTC-from/to inputs and applies them on Filter', async () => {
+    const onApply = vi.fn()
+    render(<AgentFilters values={EMPTY} onApply={onApply} onClear={vi.fn()} />)
+    await userEvent.type(screen.getByLabelText('ID'), 'a-1')
+    await userEvent.type(screen.getByLabelText('Name'), 'Support')
+    await userEvent.type(screen.getByLabelText('Created from'), '2026-08-01T00:00:00Z')
+    await userEvent.type(screen.getByLabelText('Created to'), '2026-08-31T23:59:59Z')
+    await userEvent.click(screen.getByRole('button', { name: 'Filter' }))
+    expect(onApply).toHaveBeenCalledWith({
+      id: 'a-1', name: 'Support',
+      createdFrom: '2026-08-01T00:00:00Z', createdTo: '2026-08-31T23:59:59Z',
+    })
   })
 
-  it('emits status changes immediately', async () => {
-    const onChange = vi.fn()
-    render(<AgentFilters search="" status="" onChange={onChange} />)
-    await userEvent.selectOptions(screen.getByRole('combobox'), 'archived')
-    expect(onChange).toHaveBeenCalledWith({ status: 'archived' })
+  it('keeps Filter disabled until a value differs from the applied filters', async () => {
+    const onApply = vi.fn()
+    render(<AgentFilters values={{ id: 'a-1', name: '', createdFrom: '', createdTo: '' }} onApply={onApply} onClear={vi.fn()} />)
+    expect((screen.getByRole('button', { name: 'Filter' }) as HTMLButtonElement).disabled).toBe(true)
+    await userEvent.type(screen.getByLabelText('Name'), 'Support')
+    await userEvent.click(screen.getByRole('button', { name: 'Filter' }))
+    expect(onApply).toHaveBeenCalledWith({ id: 'a-1', name: 'Support', createdFrom: '', createdTo: '' })
+  })
+
+  it('emits clear filters', async () => {
+    const onClear = vi.fn()
+    render(<AgentFilters values={EMPTY} onApply={vi.fn()} onClear={onClear} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(onClear).toHaveBeenCalled()
   })
 })

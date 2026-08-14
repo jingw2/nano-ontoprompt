@@ -6,12 +6,17 @@ catalog endpoints return only what the principal's grants and role ceiling
 permit; the model catalog is redacted and excludes blocked/archived
 identities.
 """
+import base64
+import hashlib
+import hmac
 import re
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_db, get_current_user, require_editor
 from app.models.user import User
 from app.schemas.agents import (
@@ -31,6 +36,30 @@ from app.services.agent.catalog import agent_catalog_models, agent_catalog_ontol
 router = APIRouter()
 
 _IDEMPOTENCY_PATTERN = re.compile(r"^[\x21-\x7e]{16,128}$")
+
+_MAX_LIMIT = 100
+_DEFAULT_LIMIT = 50
+
+
+def _sign_cursor(raw: str) -> str:
+    return hmac.new(settings.secret_key.encode(), raw.encode(), hashlib.sha256).hexdigest()
+
+
+def _encode_cursor(created_at: datetime, agent_id: str) -> str:
+    raw = f"{created_at.isoformat()}|{agent_id}"
+    return base64.urlsafe_b64encode(f"{raw}.{_sign_cursor(raw)}".encode()).decode()
+
+
+def _decode_cursor(cursor: str):
+    try:
+        decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+        raw, sig = decoded.rsplit(".", 1)
+        if not hmac.compare_digest(sig, _sign_cursor(raw)):
+            return None
+        created_at_s, agent_id = raw.split("|", 1)
+        return datetime.fromisoformat(created_at_s), agent_id
+    except Exception:
+        return None
 
 
 def _require_idempotency_key(key: str | None) -> None:
@@ -60,28 +89,92 @@ def _require_agent_grant(db: Session, user_id: str, agent_id: str, capability: s
         raise HTTPException(404, detail="Not found")
 
 
-def _agent_out(db: Session, agent_id: str) -> dict:
+def _agent_out(db: Session, agent_id: str, user_id: str | None = None) -> dict:
     row = db.execute(text(
-        "SELECT a.id, a.status, a.visibility, v.version_no, v.name, v.config_hash, "
-        "(SELECT count(*) FROM agent_versions av WHERE av.agent_id = a.id) AS versions_count "
+        "SELECT a.id, a.status, a.visibility, a.created_at, v.version_no, v.name, v.config_hash, "
+        "(SELECT count(*) FROM agent_versions av WHERE av.agent_id = a.id) AS versions_count, "
+        "(SELECT count(*) FROM agent_access_grants g "
+        " WHERE g.agent_id = a.id AND g.user_id = :uid AND g.status = 'active' "
+        " AND g.capabilities::text LIKE '%\"edit\"%') AS can_edit "
         "FROM agents a LEFT JOIN agent_versions v ON v.id = a.active_version_id "
         "WHERE a.id = :id"
-    ), {"id": agent_id}).mappings().one()
+    ), {"id": agent_id, "uid": user_id or ""}).mappings().one()
     return AgentOut(agent_id=row["id"], status=row["status"], visibility=row["visibility"],
                     name=row["name"], version_no=row["version_no"],
-                    config_hash=row["config_hash"], versions_count=row["versions_count"]).model_dump()
+                    config_hash=row["config_hash"], versions_count=row["versions_count"],
+                    created_at=row["created_at"], can_edit=bool(row["can_edit"])).model_dump()
 
 
 @router.get("")
-def list_agents(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_agents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    cursor: str | None = Query(None),
+    q: str | None = Query(None),
+    id: str | None = Query(None),
+    name: str | None = Query(None),
+    created_from: datetime | None = Query(None),
+    created_before: datetime | None = Query(None),
+):
+    """Access-filtered agent list: stable `created_at DESC, id DESC` keyset
+    pagination with an opaque signed cursor and q/id/name/date filters."""
+    filters = []
+    params: dict = {"uid": current_user.id, "fetch": limit + 1}
+    if cursor:
+        pos = _decode_cursor(cursor)
+        if pos is None:
+            raise HTTPException(422, detail="CURSOR_INVALID")
+        cursor_at, cursor_id = pos
+        filters.append("(a.created_at < CAST(:cursor_at AS timestamptz) "
+                       "OR (a.created_at = CAST(:cursor_at AS timestamptz) AND a.id < :cursor_id))")
+        params["cursor_at"] = cursor_at
+        params["cursor_id"] = cursor_id
+    if q:
+        # general search: name substring OR id prefix
+        filters.append("(v.name ILIKE :q_like OR a.id::text LIKE :q_prefix)")
+        params["q_like"] = f"%{q}%"
+        params["q_prefix"] = f"{q}%"
+    if id:
+        # exact UUID or explicit prefix
+        filters.append("(a.id::text = :id_exact OR a.id::text LIKE :id_prefix)")
+        params["id_exact"] = id
+        params["id_prefix"] = f"{id}%"
+    if name:
+        filters.append("v.name ILIKE :name_like")
+        params["name_like"] = f"%{name}%"
+    if created_from:
+        filters.append("a.created_at >= :created_from")
+        params["created_from"] = created_from
+    if created_before:
+        filters.append("a.created_at < :created_before")
+        params["created_before"] = created_before
+    where = " AND ".join(filters) if filters else "TRUE"
     rows = db.execute(text(
-        "SELECT a.id FROM agents a "
+        "SELECT a.id, a.status, a.visibility, a.created_at, v.version_no, v.name, v.config_hash, "
+        "(SELECT count(*) FROM agent_versions av WHERE av.agent_id = a.id) AS versions_count, "
+        "(SELECT count(*) FROM agent_access_grants g "
+        " WHERE g.agent_id = a.id AND g.user_id = :uid AND g.status = 'active' "
+        " AND g.capabilities::text LIKE '%\"edit\"%') AS can_edit "
+        "FROM agents a "
         "JOIN agent_access_grants g ON g.agent_id = a.id AND g.user_id = :uid "
         "AND g.status = 'active' AND g.capabilities::text LIKE '%\"view_config\"%' "
-        "ORDER BY a.created_at DESC"
-    ), {"uid": current_user.id}).scalars().all()
-    return {"data": {"items": [_agent_out(db, aid) for aid in rows],
-                     "next_cursor": None, "has_more": False}}
+        "LEFT JOIN agent_versions v ON v.id = a.active_version_id "
+        f"WHERE {where} "
+        "ORDER BY a.created_at DESC, a.id DESC "
+        "LIMIT :fetch"
+    ), params).mappings().all()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = None
+    if has_more and page:
+        last = page[-1]
+        next_cursor = _encode_cursor(last["created_at"], last["id"])
+    items = [AgentOut(agent_id=r["id"], status=r["status"], visibility=r["visibility"],
+                      name=r["name"], version_no=r["version_no"], config_hash=r["config_hash"],
+                      versions_count=r["versions_count"], created_at=r["created_at"],
+                      can_edit=bool(r["can_edit"])).model_dump() for r in page]
+    return {"data": {"items": items, "next_cursor": next_cursor, "has_more": has_more}}
 
 
 @router.post("", status_code=201)
@@ -112,7 +205,7 @@ def catalog_models(db: Session = Depends(get_db), current_user: User = Depends(r
     return {"data": {"items": agent_catalog_models(db, {"discover"}), "next_cursor": None, "has_more": False}}
 
 
-@router.post("/{agent_id}/archive")
+@router.delete("/{agent_id}", status_code=204)
 def archive_agent(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     _require_agent_grant(db, current_user.id, agent_id, "edit")
     result = db.execute(text(
@@ -122,13 +215,13 @@ def archive_agent(agent_id: str, db: Session = Depends(get_db), current_user: Us
     if result.rowcount != 1:
         raise HTTPException(404, detail="Not found")
     db.commit()
-    return {"data": {"agent_id": agent_id, "status": "archived"}}
+    return None
 
 
 @router.get("/{agent_id}")
 def get_agent(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _require_agent_grant(db, current_user.id, agent_id, "view_config")
-    return {"data": _agent_out(db, agent_id)}
+    return {"data": _agent_out(db, agent_id, current_user.id)}
 
 
 @router.post("/{agent_id}/versions", status_code=201)

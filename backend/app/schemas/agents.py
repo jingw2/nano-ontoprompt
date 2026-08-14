@@ -42,3 +42,5 @@ class AgentOut(BaseModel):
     version_no: Optional[int] = None
     config_hash: Optional[str] = None
     versions_count: int = 0
+    created_at: Optional[datetime] = None
+    can_edit: bool = False

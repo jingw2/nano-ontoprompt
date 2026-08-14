@@ -8,6 +8,8 @@ export interface AgentListItem {
   version_no?: number | null
   config_hash?: string | null
   versions_count: number
+  created_at?: string | null
+  can_edit?: boolean
 }
 
 export interface AgentListPage {
@@ -16,9 +18,17 @@ export interface AgentListPage {
   has_more: boolean
 }
 
+export interface AgentListParams {
+  q?: string
+  id?: string
+  name?: string
+  created_from?: string
+  created_before?: string
+  cursor?: string | null
+  limit?: number
+}
+
 export const agentsListApi = {
-  list: (params?: { search?: string; domain?: string; status?: string; page?: number }) =>
-    apiClient.get<AgentListPage>('/agents', { params }),
-  archive: (agentId: string, reason?: string) =>
-    apiClient.post<{ agent_id: string; status: string }>(`/agents/${agentId}/archive`, { reason }),
+  list: (params?: AgentListParams) => apiClient.get<AgentListPage>('/agents', { params }),
+  archive: (agentId: string) => apiClient.delete<void>(`/agents/${agentId}`),
 }
