@@ -9,6 +9,7 @@ it.  The `publication_write` dependency rejects pre-bridge builds.
 
 PostgreSQL-marked tests use TEST_DATABASE_URL; SQLite never substitutes.
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -247,3 +248,95 @@ def test_zz_old_build_rejection_dependency(cutover_db):
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         engine.dispose()
+
+
+def test_zz_delete_guard_blocks_instance_relation_and_release_references():
+    """I-1: post-latch guards reject definition deletes with instance/edge/
+    release references and never cascade."""
+    import hashlib
+
+    from app.services.publication.cutover import activate_cutover
+
+    Session, session_engine, engine, schema = _fresh_cutover_schema()
+    try:
+        creator_id, ontology_id = _seed_ontology_user(Session)
+        entity_id = str(uuid.uuid4())
+        other_id = str(uuid.uuid4())
+        with Session() as session:
+            session.execute(text(
+                "INSERT INTO entities (id, ontology_id, name_cn, properties, confidence, version, created_at, updated_at) "
+                "VALUES (:a, :o, '甲', '{}'::jsonb, 1.0, 'v0.1', now(), now()), "
+                "(:b, :o, '乙', '{}'::jsonb, 1.0, 'v0.1', now(), now())"
+            ), {"a": entity_id, "b": other_id, "o": ontology_id})
+            # an instance row referencing the entity (legacy CASCADE FK)
+            session.execute(text(
+                "INSERT INTO entity_instances (id, entity_id, ontology_id, row_identity, row_data, created_at) "
+                "VALUES (:id, :e, :o, 'row-1', CAST(:row_data AS json), now())"
+            ), {"id": str(uuid.uuid4()), "e": entity_id, "o": ontology_id, "row_data": json.dumps({"a": 1})})
+            # a relation edge referencing the entity
+            session.execute(text(
+                "INSERT INTO relations (id, ontology_id, source_entity, target_entity, type, properties, confidence, created_at) "
+                "VALUES (:id, :o, :src, :tgt, 'REL', '{}'::json, 0.9, now())"
+            ), {"id": str(uuid.uuid4()), "o": ontology_id, "src": entity_id, "tgt": other_id})
+            # a release whose manifest references the entity stable id
+            manifest_bytes = json.dumps({
+                "manifest_version": "ontology-manifest-v1",
+                "compiler_version": "ontology-compiler-v1",
+                "policy_compiler_version": "restricted-policy-dsl-v1",
+                "aggregate_tool_schema_hash": "a" * 64,
+                "ontology": {"id": ontology_id, "name": "x", "security_domain_id": "00000000-0000-0000-0000-000000000001", "description": None, "build_mode": "simple_llm"},
+                "release": {"version_no": 1, "version": "v1"},
+                "entities": [{"id": entity_id, "name": "甲", "type": "object", "description": None, "property_definitions": []}],
+                "relations": [], "logic_rules": [], "state_machines": [], "actions": [], "tool_descriptors": [],
+            }, ensure_ascii=False).encode()
+            session.execute(text(
+                "INSERT INTO ontology_releases (id, ontology_id, version_no, version, manifest_bytes, manifest_projection, schema_hash, created_by) "
+                "VALUES ('20000000-0000-0000-0000-0000000000a1', :o, 1, 'v1', :bytes, CAST(:projection AS jsonb), :hash, :creator)"
+            ), {"o": ontology_id, "bytes": manifest_bytes, "projection": manifest_bytes.decode(),
+                "hash": hashlib.sha256(manifest_bytes).digest(), "creator": creator_id})
+            session.commit()
+        with Session() as session:
+            activate_cutover(session, actor_id=creator_id, build_manifest_hash="bridge")
+
+        # post-latch: deleting an entity with an instance row is blocked, zero cascades
+        with Session() as session:
+            savepoint = session.begin_nested()
+            with pytest.raises(DBAPIError, match="DEFINITION_IN_USE"):
+                session.execute(text("DELETE FROM entities WHERE id=:id"), {"id": entity_id})
+            savepoint.rollback()
+            assert session.execute(text(
+                "SELECT count(*) FROM entity_instances WHERE entity_id=:id"
+            ), {"id": entity_id}).scalar_one() == 1  # nothing cascaded
+        # post-latch: deleting a relation referenced by a release is blocked
+        relation_id = None
+        with Session() as session:
+            relation_id = session.execute(text(
+                "SELECT id FROM relations WHERE ontology_id=:o LIMIT 1"
+            ), {"o": ontology_id}).scalar_one()
+            relation_manifest = json.dumps({
+                "manifest_version": "ontology-manifest-v1",
+                "compiler_version": "ontology-compiler-v1",
+                "policy_compiler_version": "restricted-policy-dsl-v1",
+                "aggregate_tool_schema_hash": "a" * 64,
+                "ontology": {"id": ontology_id, "name": "x", "security_domain_id": "00000000-0000-0000-0000-000000000001", "description": None, "build_mode": "simple_llm"},
+                "release": {"version_no": 2, "version": "v2"},
+                "entities": [], "logic_rules": [], "state_machines": [], "actions": [], "tool_descriptors": [],
+                "relations": [{"id": relation_id, "name": "r", "source_entity_id": entity_id, "target_entity_id": other_id, "cardinality": "one", "direction": "out", "properties": []}],
+            }, ensure_ascii=False).encode()
+            session.execute(text(
+                "INSERT INTO ontology_releases (id, ontology_id, version_no, version, manifest_bytes, manifest_projection, schema_hash, created_by) "
+                "VALUES ('20000000-0000-0000-0000-0000000000a2', :o, 2, 'v2', :bytes, CAST(:projection AS jsonb), :hash, :creator)"
+            ), {"o": ontology_id, "bytes": relation_manifest, "projection": relation_manifest.decode(),
+                "hash": hashlib.sha256(relation_manifest).digest(), "creator": creator_id})
+            session.commit()
+        with Session() as session:
+            savepoint = session.begin_nested()
+            with pytest.raises(DBAPIError, match="DEFINITION_IN_USE"):
+                session.execute(text("DELETE FROM relations WHERE id=:id"), {"id": relation_id})
+            savepoint.rollback()
+            assert session.execute(text(
+                "SELECT count(*) FROM relations WHERE id=:id"
+            ), {"id": relation_id}).scalar_one() == 1
+    finally:
+        session_engine.dispose()
+        _drop_schema(engine, schema)

@@ -175,6 +175,19 @@ def upgrade_cutover_guards() -> None:
             EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_migration_findings WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
               INTO referenced;
             IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_instances WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.relations WHERE source_entity = %L OR target_entity = %L)', TG_TABLE_SCHEMA, OLD.id, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"entities":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+          ELSIF TG_TABLE_NAME = 'relations' THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"relations":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
           END IF;
           RETURN OLD;
         END;
