@@ -8,6 +8,7 @@ import AgentInfoTab from './AgentInfoTab'
 import SystemPromptTab from './SystemPromptTab'
 import ToolConfigTab from './ToolConfigTab'
 import MemoryConfigTab from './MemoryConfigTab'
+import AgentApplicationTab from '../application/AgentApplicationTab'
 
 type TabKey = 'basic' | 'prompt' | 'tools' | 'memory' | 'application'
 
@@ -101,9 +102,7 @@ export default function AgentDetailPage() {
           onSaved={handleSaved} onDirtyChange={setDirty} />
       )}
       {activeTab === 'application' && (
-        <div className="p-6 text-gray-400 text-sm" data-testid="application-tab">
-          {t('agent.detail.application_later', 'Agent Application 将在后续版本提供')}
-        </div>
+        <AgentApplicationTab agentId={id} />
       )}
     </div>
   )

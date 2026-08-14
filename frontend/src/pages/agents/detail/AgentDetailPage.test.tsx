@@ -164,12 +164,14 @@ describe('P2C-DETAIL', () => {
     expect((textarea as HTMLTextAreaElement).value).toContain('Generated system prompt')
   })
 
-  it('renders the Tools and Memory tabs and keeps Application as a placeholder', async () => {
+  it('renders the Tools and Memory tabs and the live Application tab', async () => {
     setRole('editor')
     detailHandlers()
     server.use(
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [{ id: 'o-1', name: 'Supply Ontology', status: 'published' }], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
     )
     await renderDetail()
     await screen.findAllByText('Support Agent')
@@ -178,6 +180,7 @@ describe('P2C-DETAIL', () => {
     await userEvent.click(screen.getByRole('button', { name: /Memory/ }))
     expect(await screen.findByTestId('memory-config-tab')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Agent Application/ }))
-    expect(await screen.findByTestId('application-tab')).toBeTruthy()
+    expect(await screen.findByTestId('agent-application-tab')).toBeTruthy()
+    expect(screen.getByTestId('session-sidebar')).toBeTruthy()
   })
 })
