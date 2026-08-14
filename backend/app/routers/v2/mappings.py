@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
 from app.deps import get_current_user
+from app.models.user import User
+from app.services.publication.working_copy import OntologyWorkingCopyService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -60,21 +62,23 @@ def suggest_mapping(ontology_id: str, body: SuggestRequest, db: Session = Depend
 
 
 @router.post("/{ontology_id}/mappings")
-def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db)):
+def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.services.v2.mapping.mapping_service import MappingService
-    svc = MappingService(db)
-    field_mapping = dict(body.field_mapping or {})
-    if body.property_mappings:
-        field_mapping["__properties__"] = body.property_mappings
-    mapping = svc.create_mapping(
-        ontology_id=ontology_id,
-        curated_dataset_id=body.curated_dataset_id,
-        entity_class=body.entity_class,
-        field_mapping=field_mapping,
-        primary_key_column=body.primary_key_column,
-        confidence=body.confidence,
-    )
-    return {"mapping_id": mapping.id, "status": mapping.status}
+    def _write():
+        svc = MappingService(db)
+        field_mapping = dict(body.field_mapping or {})
+        if body.property_mappings:
+            field_mapping["__properties__"] = body.property_mappings
+        mapping = svc.create_mapping(
+            ontology_id=ontology_id,
+            curated_dataset_id=body.curated_dataset_id,
+            entity_class=body.entity_class,
+            field_mapping=field_mapping,
+            primary_key_column=body.primary_key_column,
+            confidence=body.confidence,
+        )
+        return {"mapping_id": mapping.id, "status": mapping.status}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="mapping.create", callback=_write)
 
 
 @router.get("/{ontology_id}/mappings")
@@ -118,11 +122,12 @@ def list_mappings(ontology_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply")
-def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Session = Depends(get_db)):
+def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.services.v2.mapping.mapping_service import MappingService
-    svc = MappingService(db)
-    result = svc.apply_mapping(mapping_id, data)
-    return result
+    def _write():
+        svc = MappingService(db)
+        return svc.apply_mapping(mapping_id, data)
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="mapping.apply", callback=_write)
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply-from-dataset")
@@ -146,17 +151,18 @@ def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = 
     except Exception as e:
         raise HTTPException(500, f"Failed to read curated dataset: {e}")
 
-    svc = MappingService(db)
-    result = svc.apply_mapping(mapping_id, data)
-    return result
+    def _write():
+        svc = MappingService(db)
+        return svc.apply_mapping(mapping_id, data)
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="mapping.apply-from-dataset", callback=_write)
 
 
 @router.post("/{ontology_id}/mappings/build-all")
-def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
+def build_all_mappings(ontology_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.services.v2.mapping.mapping_service import MappingService
     from app.models.v2.mapping import OntologyLinkMapping
-    svc = MappingService(db)
-    try:
+    def _write():
+        svc = MappingService(db)
         result = svc.build_all(ontology_id)
         active_links = db.query(OntologyLinkMapping).filter(
             OntologyLinkMapping.ontology_id == ontology_id,
@@ -169,8 +175,7 @@ def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
         result["link_mappings_configured"] = active_links
         result["link_mappings_inferred"] = inferred_links
         return result
-    except Exception as e:
-        raise HTTPException(500, detail=str(e))
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="mapping.build-all", callback=_write)
 
 
 class LinkMappingCreate(BaseModel):
@@ -182,7 +187,7 @@ class LinkMappingCreate(BaseModel):
 
 
 @router.post("/{ontology_id}/link-mappings")
-def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db)):
+def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.v2.mapping import OntologyLinkMapping
     from app.services.v2.dataset_service import DatasetService
 
@@ -206,19 +211,19 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
     if match_count == 0:
         raise HTTPException(400, "Link mapping produced 0 matches; choose different source/target keys")
 
-    lm = OntologyLinkMapping(
-        ontology_id=ontology_id,
-        src_dataset_id=body.src_dataset_id,
-        tgt_dataset_id=body.tgt_dataset_id,
-        relation_type=body.relation_type,
-        src_key=body.src_key,
-        tgt_key=body.tgt_key,
-        status="active",
-    )
-    db.add(lm)
-    db.commit()
-    db.refresh(lm)
-    return {"link_mapping_id": lm.id, "relation_type": lm.relation_type, "match_count": match_count}
+    def _write():
+        lm = OntologyLinkMapping(
+            ontology_id=ontology_id,
+            src_dataset_id=body.src_dataset_id,
+            tgt_dataset_id=body.tgt_dataset_id,
+            relation_type=body.relation_type,
+            src_key=body.src_key,
+            tgt_key=body.tgt_key,
+            status="active",
+        )
+        db.add(lm); db.flush()
+        return {"link_mapping_id": lm.id, "relation_type": lm.relation_type, "match_count": match_count}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="mapping.link-create", callback=_write)
 
 
 @router.get("/{ontology_id}/link-mappings")

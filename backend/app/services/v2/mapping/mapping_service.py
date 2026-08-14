@@ -48,7 +48,7 @@ class MappingService:
         concept_id = str(_uuid.UUID(
             _hl.md5(f"{mapping.ontology_id}:{mapping.entity_class}:concept".encode()).hexdigest()
         ))
-        existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+        existing = self._db.get(Entity, concept_id)
         if not existing:
             name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', mapping.entity_class).replace('_', ' ').title()
             self._db.add(Entity(
@@ -93,7 +93,7 @@ class MappingService:
             concept_id = str(_uuid.UUID(
                 _hl.md5(f"{ontology_id}:{ec}:concept".encode()).hexdigest()
             ))
-            existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+            existing = self._db.get(Entity, concept_id)
             if not existing:
                 name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', ec).replace('_', ' ').title()
                 self._db.add(Entity(
@@ -219,7 +219,7 @@ class MappingService:
             "concept_entities_created": concept_count,
             "total_instances": sum(r.get("instances_written", 0) for r in entity_results),
             "total_concepts": concept_count,
-            "total_entities": concept_count,
+            "total_entities": sum(r.get("instances_written", 0) for r in entity_results),
             "total_relations": sum(r.get("count", 0) for r in relation_results),
             "total_logic": logic_result.get("total_v2", 0),
             "total_actions": action_result.get("total_v2", 0),
@@ -556,7 +556,7 @@ class MappingService:
                     if not self._db.query(Entity).filter(Entity.id == tgt_eid).first():
                         continue
                     rel = Relation(
-                        id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, rel_type, "fk_inference"),
+                        id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, f"{rel_type}:{col}", "fk_inference"),
                         ontology_id=ontology_id,
                         source_entity=src_eid, target_entity=tgt_eid,
                         type=rel_type,
@@ -991,7 +991,7 @@ class MappingService:
                 _hl.md5(f"{mapping.ontology_id}:{mapping.entity_class}:concept".encode()).hexdigest()
             ))
             # Ensure concept entity exists
-            existing = self._db.query(Entity).filter(Entity.id == concept_id).first()
+            existing = self._db.get(Entity, concept_id)
             if not existing:
                 name_cn = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', mapping.entity_class).replace('_', ' ').title()
                 self._db.add(Entity(

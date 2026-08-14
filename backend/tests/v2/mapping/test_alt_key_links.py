@@ -70,8 +70,12 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id,
                                      Relation.type == "HAS_SUPPLIER").all()
-    # D1 → 天钢+芯联, D2 → 聚合+芯联(mentioned_supplier) = 4 个去重实体对
-    assert len(rels) == 4
+    # Plan §5: Entity is schema/concept metadata, so every mapping maps to ONE
+    # concept entity and relations link concepts.  organizations and
+    # mentioned_supplier both hit the supplier concept via the alternate key,
+    # producing one deduplicated relation per matched column (regression: the
+    # two columns must not collapse into a duplicate INSERT crash on rerun).
+    assert len(rels) == 2
     via = {(r.properties or {}).get("via") for r in rels}
     assert "alternate_key" in via
 
@@ -117,4 +121,7 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id).all()
     pairs = {(r.source_entity, r.target_entity) for r in rels}
-    assert len(pairs) == 2  # PO1→SUP001, PO2→SUP002, 无重复
+    # Plan §5: concept entities — the PurchaseOrder concept links to the
+    # Supplier concept exactly once; exploded rows dedupe and rerun never
+    # crashes on a duplicate INSERT.
+    assert len(pairs) == 1
