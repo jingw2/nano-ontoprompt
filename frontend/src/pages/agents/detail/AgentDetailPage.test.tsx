@@ -164,7 +164,7 @@ describe('P2C-DETAIL', () => {
     expect((textarea as HTMLTextAreaElement).value).toContain('Generated system prompt')
   })
 
-  it('renders the Tools tab and keeps Memory/Application as placeholders', async () => {
+  it('renders the Tools and Memory tabs and keeps Application as a placeholder', async () => {
     setRole('editor')
     detailHandlers()
     server.use(
@@ -176,7 +176,7 @@ describe('P2C-DETAIL', () => {
     await userEvent.click(screen.getByRole('button', { name: /Tools/ }))
     expect(await screen.findByTestId('tool-config-tab')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Memory/ }))
-    expect(await screen.findByTestId('memory-tab')).toBeTruthy()
+    expect(await screen.findByTestId('memory-config-tab')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Agent Application/ }))
     expect(await screen.findByTestId('application-tab')).toBeTruthy()
   })

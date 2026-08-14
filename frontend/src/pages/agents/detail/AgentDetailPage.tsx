@@ -7,6 +7,7 @@ import AgentHeader from './AgentHeader'
 import AgentInfoTab from './AgentInfoTab'
 import SystemPromptTab from './SystemPromptTab'
 import ToolConfigTab from './ToolConfigTab'
+import MemoryConfigTab from './MemoryConfigTab'
 
 type TabKey = 'basic' | 'prompt' | 'tools' | 'memory' | 'application'
 
@@ -96,9 +97,8 @@ export default function AgentDetailPage() {
         <ToolConfigTab agentId={id} canEdit={canEdit} onDirtyChange={setDirty} />
       )}
       {activeTab === 'memory' && (
-        <div className="p-6 text-gray-400 text-sm" data-testid="memory-tab">
-          {t('agent.detail.memory_later', 'Memory 配置将在后续版本提供')}
-        </div>
+        <MemoryConfigTab agentId={id} activeVersion={activeVersion} canEdit={canEdit}
+          onSaved={handleSaved} onDirtyChange={setDirty} />
       )}
       {activeTab === 'application' && (
         <div className="p-6 text-gray-400 text-sm" data-testid="application-tab">
