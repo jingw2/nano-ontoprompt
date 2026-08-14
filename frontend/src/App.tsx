@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { refreshAccessToken } from '@/api/client'
 import Layout from '@/components/Layout'
 import LoginPage from '@/pages/login/LoginPage'
 import RegisterPage from '@/pages/register/RegisterPage'
@@ -32,10 +34,34 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return token ? <Layout>{children}</Layout> : <Navigate to="/login" replace />
 }
 
+// Boot-time session restore: after a reload the in-memory bearer is gone, so
+// reacquire it once through the same-origin rotating refresh cookie (F0
+// contract) before letting the route guards decide. Logout revokes that
+// cookie server-side, so a cleared session stays logged out.
+function SessionRestore({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore(s => s.token)
+  const [checked, setChecked] = useState(token !== null)
+  useEffect(() => {
+    if (checked) return
+    let cancelled = false
+    refreshAccessToken().finally(() => {
+      if (!cancelled) setChecked(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [checked])
+  if (!checked) {
+    return <div className="min-h-screen flex items-center justify-center text-gray-400">…</div>
+  }
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <BrowserRouter>
+        <SessionRestore>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
@@ -67,6 +93,7 @@ export default function App() {
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Routes>
+        </SessionRestore>
       </BrowserRouter>
     </QueryClientProvider>
   )

@@ -10,14 +10,14 @@ type ApiClient = {
 
 type RetriableConfig = AxiosRequestConfig & { _retried?: boolean }
 
-function readCookie(name: string): string | null {
+export function readCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`))
   return match ? decodeURIComponent(match[1] ?? '') : null
 }
 
 let refreshing: Promise<string | null> | null = null
 
-function refreshAccessToken(): Promise<string | null> {
+export function refreshAccessToken(): Promise<string | null> {
   if (refreshing) return refreshing
   refreshing = (async () => {
     try {

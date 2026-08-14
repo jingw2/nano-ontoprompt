@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
+import { authApi } from '@/api/auth'
 import { useUIStore } from '@/stores/uiStore'
 import { useTranslation } from 'react-i18next'
 import {
@@ -134,7 +135,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </button>
 
         <button
-          onClick={() => { logout(); navigate('/login') }}
+          onClick={() => { void authApi.logout().finally(() => { logout(); navigate('/login') }) }}
           className={`flex items-center gap-2 p-4 text-sm text-gray-500 hover:text-black border-t ${collapsed ? 'justify-center' : ''}`}
         >
           <LogOut size={16} /> {!collapsed && t('nav.logout')}
