@@ -49,6 +49,18 @@ LATER_REVISION_TABLES = {
     "model_config_versions",
     "model_credentials",
     "model_migration_findings",
+    "agents",
+    "agent_versions",
+    "agent_access_grants",
+    "application_state_schema_registries",
+    "application_state_schema_versions",
+    "tool_providers",
+    "tool_connections",
+    "tool_connection_versions",
+    "prompt_generations",
+    "agent_ontology_bindings",
+    "agent_external_tool_bindings",
+    "agent_retrieval_sources",
 }
 
 

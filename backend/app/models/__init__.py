@@ -29,6 +29,18 @@ from app.models.model_version import (
     ModelCredential,
     ModelMigrationFinding,
 )
+from app.models.agent import Agent, AgentVersion, AgentAccessGrant
+from app.models.agent_config import (
+    ApplicationStateSchemaRegistry,
+    ApplicationStateSchemaVersion,
+    ToolProvider,
+    ToolConnection,
+    ToolConnectionVersion,
+    PromptGeneration,
+    AgentOntologyBinding,
+    AgentExternalToolBinding,
+    AgentRetrievalSource,
+)
 
 
 def load_all_models():
@@ -52,6 +64,18 @@ def load_all_models():
         ModelConfigVersion,
         ModelCredential,
         ModelMigrationFinding,
+    )
+    from app.models.agent import Agent, AgentVersion, AgentAccessGrant  # noqa: F401
+    from app.models.agent_config import (  # noqa: F401
+        ApplicationStateSchemaRegistry,
+        ApplicationStateSchemaVersion,
+        ToolProvider,
+        ToolConnection,
+        ToolConnectionVersion,
+        PromptGeneration,
+        AgentOntologyBinding,
+        AgentExternalToolBinding,
+        AgentRetrievalSource,
     )
 
     return Base.metadata
@@ -83,5 +107,17 @@ __all__ = [
     "ModelConfigVersion",
     "ModelCredential",
     "ModelMigrationFinding",
+    "Agent",
+    "AgentVersion",
+    "AgentAccessGrant",
+    "ApplicationStateSchemaRegistry",
+    "ApplicationStateSchemaVersion",
+    "ToolProvider",
+    "ToolConnection",
+    "ToolConnectionVersion",
+    "PromptGeneration",
+    "AgentOntologyBinding",
+    "AgentExternalToolBinding",
+    "AgentRetrievalSource",
     "load_all_models",
 ]
