@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -52,3 +52,32 @@ class AgentOut(BaseModel):
     versions_count: int = 0
     created_at: Optional[datetime] = None
     can_edit: bool = False
+
+
+class PromptGenerationRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    base_version_no: int
+    model_config_version_id: str
+    model_name: str
+    input_text: str
+
+
+class PromptGenerationDecisionRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    decision: Literal["accepted", "rejected"]
+
+
+class PromptGenerationOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: str
+    agent_id: str
+    base_version_no: int
+    model_config_version_id: str
+    model_name: str
+    input_hash: str
+    output_hash: str
+    output_text: Optional[str] = None
+    status: str
+    requester_id: str
+    requested_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None

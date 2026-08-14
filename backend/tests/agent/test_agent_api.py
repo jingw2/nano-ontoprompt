@@ -273,3 +273,107 @@ def test_agent_list_contract_and_archive(ctx):
             assert c.delete(f"/api/v1/agents/{beta_id}", headers=editor_headers).status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_prompt_generation_routes(ctx):
+    """§12 prompt-generation HTTP contract: POST 202 (sanitized receipt +
+    output_text), GET 200 detail, POST decision 200 accept/reject, double
+    decision -> 409 PROMPT_GENERATION_ALREADY_RESOLVED, Agent-edit auth with
+    existence-hiding 404, Idempotency-Key format validation on writes."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    agent = _create_agent(session, editor_id, model_version, app_schema, name="Prompt Agent")
+    agent_id = agent["agent_id"]
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+    viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # viewer role cannot generate (403 role ceiling)
+            assert c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations",
+                json={"base_version_no": 1, "model_config_version_id": model_version,
+                      "model_name": "gpt-4o", "input_text": "Draft <script>alert(1)</script>"},
+                headers=viewer_headers,
+            ).status_code == 403
+            # an editor without the edit grant gets existence-hiding 404
+            stranger_id = str(uuid.uuid4())
+            session.execute(text(
+                "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+                "VALUES (:id,'stranger','st@t.com','h','editor',true,:d,now(),now())"
+            ), {"id": stranger_id, "d": DEFAULT_DOMAIN})
+            session.commit()
+            stranger_headers = {"Authorization": f"Bearer {create_access_token({'sub': stranger_id, 'role': 'editor'})}"}
+            assert c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations",
+                json={"base_version_no": 1, "model_config_version_id": model_version,
+                      "model_name": "gpt-4o", "input_text": "Draft"},
+                headers={**stranger_headers, "Idempotency-Key": "ag-prompt-stranger-123456"},
+            ).status_code == 404
+            # invalid idempotency key -> 422
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations",
+                json={"base_version_no": 1, "model_config_version_id": model_version,
+                      "model_name": "gpt-4o", "input_text": "Draft"},
+                headers={**editor_headers, "Idempotency-Key": "short"},
+            )
+            assert r.status_code == 422
+            # generate -> 202, sanitized receipt with output_text and hashes
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations",
+                json={"base_version_no": 1, "model_config_version_id": model_version,
+                      "model_name": "gpt-4o", "input_text": "Draft <script>alert(1)</script>"},
+                headers={**editor_headers, "Idempotency-Key": "ag-prompt-1234567890"},
+            )
+            assert r.status_code == 202
+            data = r.json()["data"]
+            assert data["status"] == "pending"
+            assert data["agent_id"] == agent_id
+            assert len(data["input_hash"]) == 64
+            assert data["input_hash"] == data["output_hash"]
+            assert "<script>" not in data["output_text"]
+            assert data["output_text"] == "Draft alert(1)"
+            generation_id = data["id"]
+            # detail -> 200 (Agent edit auth)
+            detail = c.get(f"/api/v1/agents/{agent_id}/prompt-generations/{generation_id}", headers=editor_headers)
+            assert detail.status_code == 200
+            assert detail.json()["data"]["id"] == generation_id
+            # stranger editor detail -> existence-hiding 404
+            assert c.get(f"/api/v1/agents/{agent_id}/prompt-generations/{generation_id}", headers=stranger_headers).status_code == 404
+            # accept -> 200
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations/{generation_id}/decision",
+                json={"decision": "accepted"},
+                headers={**editor_headers, "Idempotency-Key": "ag-prompt-dec-1234567890"},
+            )
+            assert r.status_code == 200
+            assert r.json()["data"]["status"] == "accepted"
+            # double decision -> 409 PROMPT_GENERATION_ALREADY_RESOLVED
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations/{generation_id}/decision",
+                json={"decision": "rejected"},
+                headers={**editor_headers, "Idempotency-Key": "ag-prompt-dec-1234567891"},
+            )
+            assert r.status_code == 409
+            assert "PROMPT_GENERATION_ALREADY_RESOLVED" in r.json()["detail"]
+            # reject a fresh generation -> 200 rejected
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations",
+                json={"base_version_no": 1, "model_config_version_id": model_version,
+                      "model_name": "gpt-4o", "input_text": "Another"},
+                headers={**editor_headers, "Idempotency-Key": "ag-prompt-1234567892"},
+            )
+            gen2 = r.json()["data"]["id"]
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/prompt-generations/{gen2}/decision",
+                json={"decision": "rejected"},
+                headers={**editor_headers, "Idempotency-Key": "ag-prompt-dec-1234567893"},
+            )
+            assert r.status_code == 200
+            assert r.json()["data"]["status"] == "rejected"
+            # unknown generation -> 404
+            assert c.get(f"/api/v1/agents/{agent_id}/prompt-generations/nope", headers=editor_headers).status_code == 404
+    finally:
+        app.dependency_overrides.clear()

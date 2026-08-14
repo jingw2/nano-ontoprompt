@@ -24,6 +24,9 @@ from app.schemas.agents import (
     AgentCreateRequest,
     AgentOut,
     AgentVersionOut,
+    PromptGenerationDecisionRequest,
+    PromptGenerationOut,
+    PromptGenerationRequest,
 )
 from app.services.agent.configuration import (
     AgentConfigConflict,
@@ -32,6 +35,12 @@ from app.services.agent.configuration import (
     save_basic_version,
 )
 from app.services.agent.catalog import agent_catalog_models, agent_catalog_ontologies
+from app.services.agent.prompt_generation import (
+    PromptGenerationError,
+    accept_prompt_generation,
+    record_prompt_generation,
+    reject_prompt_generation,
+)
 
 router = APIRouter()
 
@@ -258,3 +267,86 @@ def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_us
     ), {"id": agent_id}).mappings().all()
     return {"data": {"items": [AgentVersionOut(**dict(r)).model_dump() for r in rows],
                      "next_cursor": None, "has_more": False}}
+
+
+def _sanitize_prompt_text(value: str) -> str:
+    """Sanitized fields only: strip HTML/scripts and control characters, cap
+    length (mirrors the frontend CSP-safe rendering contract)."""
+    import html as _html
+    stripped = _html.unescape(value)
+    stripped = re.sub(r"<[^>]*>", "", stripped)
+    stripped = "".join(ch for ch in stripped if ch == "\n" or ord(ch) >= 32)
+    return stripped[:20000].strip()
+
+
+def _prompt_generation_out(db: Session, generation_id: str) -> dict:
+    row = db.execute(text(
+        "SELECT id, agent_id, base_version_no, model_config_version_id, model_name, "
+        "input_hash, output_hash, status, requester_id, requested_at, accepted_at "
+        "FROM prompt_generations WHERE id = :id"
+    ), {"id": generation_id}).mappings().one_or_none()
+    if row is None:
+        raise HTTPException(404, detail="Not found")
+    return PromptGenerationOut(**dict(row)).model_dump()
+
+
+@router.post("/{agent_id}/prompt-generations", status_code=202)
+def create_prompt_generation(
+    agent_id: str, body: PromptGenerationRequest, db: Session = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    """Record a sanitized prompt generation (202 accepted).  MVP contract:
+    the sanitized draft is the synchronous suggestion baseline — input and
+    output hashes both derive from it and `output_text` is returned for
+    Replace/Append; generation is never auto-activated."""
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_idempotency_key(x_idempotency_key)
+    sanitized = _sanitize_prompt_text(body.input_text)
+    digest = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    try:
+        result = record_prompt_generation(
+            db, actor_id=current_user.id, agent_id=agent_id, base_version_no=body.base_version_no,
+            model_config_version_id=body.model_config_version_id, model_name=body.model_name,
+            input_hash=digest, output_hash=digest,
+        )
+    except PromptGenerationError as exc:
+        raise HTTPException(409, detail=str(exc))
+    out = _prompt_generation_out(db, result["id"])
+    out["output_text"] = sanitized
+    return {"data": out}
+
+
+@router.get("/{agent_id}/prompt-generations/{generation_id}")
+def get_prompt_generation(agent_id: str, generation_id: str, db: Session = Depends(get_db),
+                          current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    row = db.execute(text(
+        "SELECT agent_id FROM prompt_generations WHERE id = :id"
+    ), {"id": generation_id}).mappings().one_or_none()
+    if row is None or row["agent_id"] != agent_id:
+        raise HTTPException(404, detail="Not found")
+    return {"data": _prompt_generation_out(db, generation_id)}
+
+
+@router.post("/{agent_id}/prompt-generations/{generation_id}/decision")
+def decide_prompt_generation(
+    agent_id: str, generation_id: str, body: PromptGenerationDecisionRequest,
+    db: Session = Depends(get_db), current_user: User = Depends(require_editor),
+    x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_idempotency_key(x_idempotency_key)
+    row = db.execute(text(
+        "SELECT agent_id FROM prompt_generations WHERE id = :id"
+    ), {"id": generation_id}).mappings().one_or_none()
+    if row is None or row["agent_id"] != agent_id:
+        raise HTTPException(404, detail="Not found")
+    try:
+        if body.decision == "accepted":
+            accept_prompt_generation(db, actor_id=current_user.id, agent_id=agent_id, generation_id=generation_id)
+        else:
+            reject_prompt_generation(db, actor_id=current_user.id, agent_id=agent_id, generation_id=generation_id)
+    except PromptGenerationError as exc:
+        raise HTTPException(409, detail=str(exc))
+    return {"data": _prompt_generation_out(db, generation_id)}
