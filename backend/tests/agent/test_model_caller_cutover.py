@@ -77,7 +77,7 @@ def test_p2a_callers_red_contract():
 
 
 def _scoped_url(schema: str) -> str:
-    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema}', safe='-=')}"
+    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
 
 
 def _alembic(schema: str, *args, check=True):
@@ -101,6 +101,10 @@ def full_schema():
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     result = _alembic(schema, "upgrade", "0004_roles_model_versions")
     assert result.returncode == 0, result.stderr
+    # M-3: alembic_version must live in the scoped schema (isolation proof)
+    assert engine.connect().execute(text(
+        "SELECT to_regclass(:ref) IS NOT NULL"
+    ), {"ref": f'"{schema}".alembic_version'}).scalar_one() is True
     yield schema, _scoped_url(schema)
     with engine.begin() as connection:
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
