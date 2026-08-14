@@ -213,10 +213,11 @@ def test_data_grant_cross_domain_and_authority_denied(ctx):
                 "capabilities": ["read_instances"],
             }, headers=viewer_headers)
             assert r.status_code == 403
-            # a non-existent grant is existence-hidden (404), never reveals state
+            # a non-existent grant is existence-hidden for an authorized actor
+            editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': ids['dg-editor'], 'role': 'editor'})}"}
             r = client.post("/api/v1/ontology-data-grants/nope/revisions", json={
                 "base_revision": 1, "capabilities": ["read_instances"],
-            }, headers=viewer_headers)
+            }, headers=editor_headers)
             assert r.status_code == 404
     finally:
         app.dependency_overrides.clear()

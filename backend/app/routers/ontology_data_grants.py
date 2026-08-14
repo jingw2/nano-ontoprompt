@@ -8,7 +8,7 @@ Admin or delegated data-governance authority only.
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.user import User
 from app.schemas.ontology_data_grant import (
     CreateDataGrantRequest,
@@ -47,7 +47,7 @@ def list_grants(db: Session = Depends(get_db), current_user: User = Depends(get_
 
 @router.post("", status_code=201)
 def create_grant(body: CreateDataGrantRequest, db: Session = Depends(get_db),
-                 current_user: User = Depends(get_current_user)):
+                 current_user: User = Depends(require_editor)):
     try:
         grant = create_data_grant(db, actor_id=current_user.id, user_id=body.user_id,
                                   ontology_id=body.ontology_id, capabilities=body.capabilities,
@@ -64,7 +64,7 @@ def create_grant(body: CreateDataGrantRequest, db: Session = Depends(get_db),
 
 @router.post("/{grant_id}/revisions", status_code=201)
 def revise_grant(grant_id: str, body: ReviseDataGrantRequest, db: Session = Depends(get_db),
-                 current_user: User = Depends(get_current_user)):
+                 current_user: User = Depends(require_editor)):
     try:
         grant = revise_data_grant(db, actor_id=current_user.id, grant_id=grant_id,
                                   base_revision=body.base_revision,
@@ -77,7 +77,7 @@ def revise_grant(grant_id: str, body: ReviseDataGrantRequest, db: Session = Depe
 
 @router.post("/{grant_id}/revoke")
 def revoke_grant(grant_id: str, body: RevokeDataGrantRequest, db: Session = Depends(get_db),
-                 current_user: User = Depends(get_current_user)):
+                 current_user: User = Depends(require_editor)):
     try:
         grant = revoke_data_grant(db, actor_id=current_user.id, grant_id=grant_id,
                                   base_revision=body.base_revision, reason=body.reason)
