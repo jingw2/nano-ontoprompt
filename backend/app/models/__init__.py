@@ -30,6 +30,7 @@ from app.models.model_version import (
     ModelMigrationFinding,
 )
 from app.models.agent import Agent, AgentVersion, AgentAccessGrant
+from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.agent_config import (
     ApplicationStateSchemaRegistry,
     ApplicationStateSchemaVersion,
@@ -66,6 +67,7 @@ def load_all_models():
         ModelMigrationFinding,
     )
     from app.models.agent import Agent, AgentVersion, AgentAccessGrant  # noqa: F401
+    from app.models.ontology_data_grant import OntologyDataGrant  # noqa: F401
     from app.models.agent_config import (  # noqa: F401
         ApplicationStateSchemaRegistry,
         ApplicationStateSchemaVersion,
@@ -110,6 +112,7 @@ __all__ = [
     "Agent",
     "AgentVersion",
     "AgentAccessGrant",
+    "OntologyDataGrant",
     "ApplicationStateSchemaRegistry",
     "ApplicationStateSchemaVersion",
     "ToolProvider",

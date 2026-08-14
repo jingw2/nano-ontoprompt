@@ -213,6 +213,36 @@ def upgrade_agent_configuration_foundation() -> None:
     op.create_index("ix_agent_access_grants_user", "agent_access_grants", ["user_id"])
 
     op.create_table(
+        "ontology_data_grants",
+        sa.Column("id", UUID, nullable=False),
+        sa.Column("ontology_id", UUID, nullable=False),
+        sa.Column("user_id", UUID, nullable=False),
+        sa.Column("capabilities", sa.JSON(), nullable=False),
+        sa.Column("entity_allowlist", sa.JSON(), nullable=True),
+        sa.Column("property_allowlist", sa.JSON(), nullable=True),
+        sa.Column("relation_allowlist", sa.JSON(), nullable=True),
+        sa.Column("action_allowlist", sa.JSON(), nullable=True),
+        sa.Column("policy_version", sa.String(40), nullable=False, server_default="restricted-policy-dsl-v1"),
+        sa.Column("row_policy", sa.JSON(), nullable=True),
+        sa.Column("revision", sa.BigInteger(), nullable=False, server_default="1"),
+        sa.Column("status", sa.String(20), nullable=False, server_default="active"),
+        sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_by", UUID, nullable=False),
+        sa.Column("revoked_by", UUID, nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.PrimaryKeyConstraint("id", name="pk_ontology_data_grants"),
+        sa.ForeignKeyConstraint(["ontology_id"], ["ontology_projects.id"], name="fk_odg_ontology", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_odg_user", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["created_by"], ["users.id"], name="fk_odg_creator"),
+        sa.ForeignKeyConstraint(["revoked_by"], ["users.id"], name="fk_odg_revoker"),
+        sa.CheckConstraint("status IN ('active', 'revoked', 'expired')", name="ck_ontology_data_grants_status"),
+    )
+    op.create_index("ix_ontology_data_grants_ontology", "ontology_data_grants", ["ontology_id"])
+    op.create_index("ix_ontology_data_grants_user", "ontology_data_grants", ["user_id"])
+
+    op.create_table(
         "agent_ontology_bindings",
         sa.Column("id", UUID, nullable=False),
         sa.Column("agent_version_id", UUID, nullable=False),
@@ -312,6 +342,7 @@ def downgrade_agent_configuration_foundation() -> None:
     op.drop_table("agent_retrieval_sources")
     op.drop_table("agent_external_tool_bindings")
     op.drop_table("agent_ontology_bindings")
+    op.drop_table("ontology_data_grants")
     op.drop_table("agent_access_grants")
     op.drop_constraint("fk_agents_active_version", "agents", type_="foreignkey")
     op.drop_table("agent_versions")

@@ -172,6 +172,7 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "agents",
         "agent_versions",
         "agent_access_grants",
+        "ontology_data_grants",
         "application_state_schema_registries",
         "application_state_schema_versions",
         "tool_providers",

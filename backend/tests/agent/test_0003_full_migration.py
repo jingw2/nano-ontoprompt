@@ -52,6 +52,7 @@ LATER_REVISION_TABLES = {
     "agents",
     "agent_versions",
     "agent_access_grants",
+    "ontology_data_grants",
     "application_state_schema_registries",
     "application_state_schema_versions",
     "tool_providers",

@@ -106,6 +106,7 @@ _PLATFORM_PREFIXES = (
     "/api/v1/overview",
     "/api/v1/settings",
     "/api/v1/admin",
+    "/api/v1/ontology-data-grants",
     "/api/v2/incremental",
     "/health",
 )

@@ -22,6 +22,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit
 from app.routers.models import admin_router as models_admin_router
+from app.routers.ontology_data_grants import router as data_grants_router
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
 from app.routers.v2 import pipelines as pipelines_v2
@@ -136,6 +137,7 @@ app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit"
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(models_admin_router)
+app.include_router(data_grants_router, prefix="/api/v1/ontology-data-grants", tags=["data-grants"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"])
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"])
