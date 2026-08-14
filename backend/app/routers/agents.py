@@ -112,6 +112,19 @@ def catalog_models(db: Session = Depends(get_db), current_user: User = Depends(r
     return {"data": {"items": agent_catalog_models(db, {"discover"}), "next_cursor": None, "has_more": False}}
 
 
+@router.post("/{agent_id}/archive")
+def archive_agent(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    result = db.execute(text(
+        "UPDATE agents SET status = 'archived', updated_at = now() "
+        "WHERE id = :id AND status = 'active'"
+    ), {"id": agent_id})
+    if result.rowcount != 1:
+        raise HTTPException(404, detail="Not found")
+    db.commit()
+    return {"data": {"agent_id": agent_id, "status": "archived"}}
+
+
 @router.get("/{agent_id}")
 def get_agent(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _require_agent_grant(db, current_user.id, agent_id, "view_config")
