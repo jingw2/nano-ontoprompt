@@ -164,14 +164,20 @@ describe('P2C-DETAIL', () => {
     expect((textarea as HTMLTextAreaElement).value).toContain('Generated system prompt')
   })
 
-  it('shows the unavailable tabs as post-MVP placeholders', async () => {
+  it('renders the Tools tab and keeps Memory/Application as placeholders', async () => {
     setRole('editor')
     detailHandlers()
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [{ id: 'o-1', name: 'Supply Ontology', status: 'published' }], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
     await renderDetail()
     await screen.findAllByText('Support Agent')
     await userEvent.click(screen.getByRole('button', { name: /Tools/ }))
-    expect(await screen.findByTestId('tools-tab')).toBeTruthy()
+    expect(await screen.findByTestId('tool-config-tab')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Memory/ }))
     expect(await screen.findByTestId('memory-tab')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /Agent Application/ }))
+    expect(await screen.findByTestId('application-tab')).toBeTruthy()
   })
 })

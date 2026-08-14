@@ -6,6 +6,7 @@ import { agentDetailApi, type AgentDetail, type AgentVersion } from '@/api/agent
 import AgentHeader from './AgentHeader'
 import AgentInfoTab from './AgentInfoTab'
 import SystemPromptTab from './SystemPromptTab'
+import ToolConfigTab from './ToolConfigTab'
 
 type TabKey = 'basic' | 'prompt' | 'tools' | 'memory' | 'application'
 
@@ -92,9 +93,7 @@ export default function AgentDetailPage() {
           onSaved={handleSaved} onDirtyChange={setDirty} />
       )}
       {activeTab === 'tools' && (
-        <div className="p-6 text-gray-400 text-sm" data-testid="tools-tab">
-          {t('agent.detail.tools_later', 'Tools 配置将在后续版本提供')}
-        </div>
+        <ToolConfigTab agentId={id} canEdit={canEdit} onDirtyChange={setDirty} />
       )}
       {activeTab === 'memory' && (
         <div className="p-6 text-gray-400 text-sm" data-testid="memory-tab">
