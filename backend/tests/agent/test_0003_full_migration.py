@@ -49,6 +49,7 @@ LATER_REVISION_TABLES = {
     "model_config_versions",
     "model_credentials",
     "model_migration_findings",
+    "entity_instance_relations",
     "agents",
     "agent_versions",
     "agent_access_grants",

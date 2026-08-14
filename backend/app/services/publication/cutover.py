@@ -201,6 +201,96 @@ def upgrade_cutover_guards() -> None:
         )
 
 
+def upgrade_instance_edge_guards() -> None:
+    """P3A-INSTANCE: extend the delete guard so a relation definition with
+    authoritative instance edges cannot be deleted (I-1 deferral)."""
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION guard_definition_delete() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE latched boolean; referenced boolean;
+        BEGIN
+          EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.publication_activation_latch)', TG_TABLE_SCHEMA)
+            INTO latched;
+          IF NOT latched THEN RETURN OLD; END IF;
+          IF TG_TABLE_NAME = 'entities' THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_property_definitions WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_migration_findings WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_instances WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.relations WHERE source_entity = %L OR target_entity = %L)', TG_TABLE_SCHEMA, OLD.id, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"entities":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+          ELSIF TG_TABLE_NAME = 'relations' THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_instance_relations WHERE relation_definition_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"relations":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+          END IF;
+          RETURN OLD;
+        END;
+        $$
+        """
+    )
+
+
+def downgrade_instance_edge_guards() -> None:
+    """Restore the 0003 guard body (no instance-edge references)."""
+    for table in ("entities", "relations"):
+        op.execute(f"DROP TRIGGER IF EXISTS {table}_delete_guard ON {table}")
+    op.execute("DROP FUNCTION IF EXISTS guard_definition_delete()")
+    op.execute(
+        """
+        CREATE FUNCTION guard_definition_delete() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE latched boolean; referenced boolean;
+        BEGIN
+          EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.publication_activation_latch)', TG_TABLE_SCHEMA)
+            INTO latched;
+          IF NOT latched THEN RETURN OLD; END IF;
+          IF TG_TABLE_NAME = 'entities' THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_property_definitions WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_migration_findings WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.entity_instances WHERE entity_id = %L)', TG_TABLE_SCHEMA, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.relations WHERE source_entity = %L OR target_entity = %L)', TG_TABLE_SCHEMA, OLD.id, OLD.id)
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"entities":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+          ELSIF TG_TABLE_NAME = 'relations' THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.ontology_releases r WHERE r.manifest_projection @> CAST(%L AS jsonb))', TG_TABLE_SCHEMA, '{"relations":[{"id":"' || OLD.id || '"}]}')
+              INTO referenced;
+            IF referenced THEN RAISE EXCEPTION 'DEFINITION_IN_USE'; END IF;
+          END IF;
+          RETURN OLD;
+        END;
+        $$
+        """
+    )
+    for table in ("entities", "relations"):
+        op.execute(
+            f"CREATE TRIGGER {table}_delete_guard BEFORE DELETE ON {table} "
+            "FOR EACH ROW EXECUTE FUNCTION guard_definition_delete()"
+        )
+
+
 def downgrade_cutover_guards() -> None:
     for table in ("entities", "relations"):
         op.execute(f"DROP TRIGGER IF EXISTS {table}_delete_guard ON {table}")

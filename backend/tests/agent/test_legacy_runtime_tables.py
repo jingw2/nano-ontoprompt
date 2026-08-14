@@ -87,6 +87,11 @@ def _orm_columns():
         yield table_name, columns, {index.name: index.unique for index in table.indexes}
 
 
+# Columns a later revision (0006) adds to entity_instances; the ORM registers
+# them, but 0003 must only create the 0003-era shape.
+INSTANCE_0006_COLUMNS = {"revision", "deleted_at", "updated_at"}
+
+
 def test_fresh_0001_to_0003_creates_exact_orm_shapes(legacy_schema):
     schema, engine = legacy_schema
     result = _alembic(schema, "upgrade", "0003_publication_governance")
@@ -96,7 +101,10 @@ def test_fresh_0001_to_0003_creates_exact_orm_shapes(legacy_schema):
     assert {"entity_instances", "audit_tasks"} <= set(inspector.get_table_names())
     for table_name, orm_columns, orm_indexes in _orm_columns():
         reflected = {column["name"]: column for column in inspector.get_columns(table_name)}
-        assert set(reflected) == set(orm_columns), table_name
+        expected = set(orm_columns)
+        if table_name == "entity_instances":
+            expected -= INSTANCE_0006_COLUMNS
+        assert set(reflected) == expected, table_name
         for name, column in reflected.items():
             assert column["nullable"] == orm_columns[name]["nullable"], (table_name, name)
         reflected_indexes = {index["name"]: index["unique"] for index in inspector.get_indexes(table_name)}

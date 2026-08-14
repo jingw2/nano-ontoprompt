@@ -11,6 +11,7 @@ from app.models.extraction_task import ExtractionTask
 from app.models.rules_config import RulesConfig
 from app.models.audit_task import AuditTask
 from app.models.entity_instance import EntityInstance
+from app.models.entity_instance_relation import EntityInstanceRelation
 from app.models.security_domain import SecurityDomain
 from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken
 from app.models.ontology_release import OntologyRelease
@@ -56,6 +57,7 @@ def load_all_models():
         GovernanceAuditOutbox,
         GovernanceAuditChainHead,
     )
+    from app.models.entity_instance_relation import EntityInstanceRelation  # noqa: F401
     from app.models.entity_property_definition import (  # noqa: F401
         EntityPropertyDefinition,
         OntologyMigrationFinding,
@@ -96,6 +98,7 @@ __all__ = [
     "RulesConfig",
     "AuditTask",
     "EntityInstance",
+    "EntityInstanceRelation",
     "SecurityDomain",
     "AuthRefreshFamily",
     "AuthRefreshToken",
