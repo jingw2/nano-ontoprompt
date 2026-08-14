@@ -9,8 +9,9 @@ replay semantics (fresh stream tickets, turn_id replay, publish CAS) apply —
 no stored response or secret is ever replayed by this machinery.
 
 Persistence is raw SQL against the `agent_idempotency_keys` table created by
-`0007_agent_idempotency`; the table is deliberately not registered in the ORM
-metadata so the E0-DB exact table-set contract stays untouched.
+the `0006_agent_runtime` migration (folded from the former 0007 per I-6); the
+table is deliberately not registered in the ORM metadata so the E0-DB exact
+table-set contract stays untouched.
 """
 from __future__ import annotations
 

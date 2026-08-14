@@ -435,7 +435,10 @@ def test_idempotency_middleware_conflicts_on_hash_mismatch(idem_schema):
     assert plain.status_code == 200, plain.text
 
 
-def test_0007_idempotency_migration_upgrade_downgrade_cycle():
+def test_idempotency_migration_upgrade_downgrade_cycle():
+    """The idempotency table folds into 0006 (I-6): the 0006 upgrade creates
+    it and the downgrade drops it; the core Alembic head stays exactly at
+    `0006_agent_runtime` (S4 one-head-per-milestone)."""
     if not TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL required")
     schema = "ibackend_mig_" + uuid.uuid4().hex
@@ -443,21 +446,23 @@ def test_0007_idempotency_migration_upgrade_downgrade_cycle():
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     try:
-        assert _alembic(schema, "upgrade", "head").returncode == 0
+        assert _alembic(schema, "upgrade", "0006_agent_runtime").returncode == 0
         scoped = create_engine(_scoped_url(schema))
         with scoped.begin() as connection:
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            assert version == "0006_agent_runtime"
             tables = set(connection.execute(text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"
             )).scalars())
             assert "agent_idempotency_keys" in tables
-        assert _alembic(schema, "downgrade", "0006_agent_runtime").returncode == 0
+        assert _alembic(schema, "downgrade", "0005_agent_configuration").returncode == 0
         with scoped.begin() as connection:
             tables = set(connection.execute(text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"
             )).scalars())
             assert "agent_idempotency_keys" not in tables
         # re-upgrade restores the table (empty-database upgrade/downgrade cycle)
-        assert _alembic(schema, "upgrade", "head").returncode == 0
+        assert _alembic(schema, "upgrade", "0006_agent_runtime").returncode == 0
         with scoped.begin() as connection:
             tables = set(connection.execute(text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"

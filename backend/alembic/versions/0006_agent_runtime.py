@@ -592,15 +592,47 @@ def downgrade_runtime_artifact_schema() -> None:
         op.drop_table(table)
 
 
+def upgrade_idempotency_foundation() -> None:
+    """Section 12 idempotency-key persistence (I-BACKEND, folded from the
+    former 0007 per I-6): `Idempotency-Key` (16-128 printable ASCII) persisted
+    with actor/route/canonical request hash for 24 hours; same key with a
+    different hash is `409 IDEMPOTENCY_KEY_REUSED`.  The table is deliberately
+    NOT registered in the ORM metadata (E0-DB's exact table-set contract stays
+    untouched); `app.services.idempotency` accesses it with raw SQL."""
+    op.create_table(
+        "agent_idempotency_keys",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("actor_id", sa.String(64), nullable=False),
+        sa.Column("idempotency_key", sa.String(128), nullable=False),
+        sa.Column("route", sa.String(512), nullable=False),
+        sa.Column("request_hash", sa.String(64), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("actor_id", "idempotency_key", name="uq_agent_idempotency_actor_key"),
+    )
+    op.create_index(
+        "ix_agent_idempotency_keys_expires_at",
+        "agent_idempotency_keys",
+        ["expires_at"],
+    )
+
+
+def downgrade_idempotency_foundation() -> None:
+    op.drop_index("ix_agent_idempotency_keys_expires_at", table_name="agent_idempotency_keys")
+    op.drop_table("agent_idempotency_keys")
+
+
 def upgrade() -> None:
     upgrade_instance_revision_foundation()
     upgrade_instance_edge_guards()
     upgrade_runtime_foundation()
     upgrade_runtime_artifact_schema()
     upgrade_derived_index_outbox()
+    upgrade_idempotency_foundation()
 
 
 def downgrade() -> None:
+    downgrade_idempotency_foundation()
     downgrade_derived_index_outbox()
     downgrade_runtime_artifact_schema()
     downgrade_runtime_foundation()

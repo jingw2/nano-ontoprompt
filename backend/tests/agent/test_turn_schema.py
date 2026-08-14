@@ -282,21 +282,21 @@ def test_migration_0006_calls_turndb_helpers_in_order(monkeypatch):
     calls = []
     for helper in ("upgrade_instance_revision_foundation", "upgrade_instance_edge_guards",
                    "upgrade_runtime_foundation", "upgrade_runtime_artifact_schema",
-                   "upgrade_derived_index_outbox"):
+                   "upgrade_derived_index_outbox", "upgrade_idempotency_foundation"):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.upgrade()
     assert calls == ["upgrade_instance_revision_foundation", "upgrade_instance_edge_guards",
                      "upgrade_runtime_foundation", "upgrade_runtime_artifact_schema",
-                     "upgrade_derived_index_outbox"]
+                     "upgrade_derived_index_outbox", "upgrade_idempotency_foundation"]
     calls.clear()
-    for helper in ("downgrade_derived_index_outbox", "downgrade_runtime_foundation",
-                   "downgrade_runtime_artifact_schema", "downgrade_instance_edge_guards",
-                   "downgrade_instance_revision_foundation"):
+    for helper in ("downgrade_idempotency_foundation", "downgrade_derived_index_outbox",
+                   "downgrade_runtime_foundation", "downgrade_runtime_artifact_schema",
+                   "downgrade_instance_edge_guards", "downgrade_instance_revision_foundation"):
         monkeypatch.setattr(module, helper, (lambda name: lambda: calls.append(name))(helper))
     module.downgrade()
-    assert calls == ["downgrade_derived_index_outbox", "downgrade_runtime_artifact_schema",
-                     "downgrade_runtime_foundation", "downgrade_instance_edge_guards",
-                     "downgrade_instance_revision_foundation"]
+    assert calls == ["downgrade_idempotency_foundation", "downgrade_derived_index_outbox",
+                     "downgrade_runtime_artifact_schema", "downgrade_runtime_foundation",
+                     "downgrade_instance_edge_guards", "downgrade_instance_revision_foundation"]
 
 
 def test_0006_downgrade_drops_runtime_and_outbox(full_schema):

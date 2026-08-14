@@ -86,7 +86,7 @@ def create_idempotency_middleware(session_factory=None):
                     return
                 except OperationalError as exc:
                     # Narrow fail-open: when the persistence table is absent
-                    # (e.g. the SQLite unit harness, which has no 0007
+                    # (e.g. the SQLite unit harness, which has no 0006
                     # migration), pass through so route-level idempotency and
                     # auth still apply.  Any other operational error is real.
                     if not _schema_absent(exc):
