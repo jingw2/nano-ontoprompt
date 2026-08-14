@@ -11,6 +11,7 @@ import LogicTab from './tabs/LogicTab'
 import ActionsTab from './tabs/ActionsTab'
 import AuditTab from './tabs/AuditTab'
 import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
+import OntologyPublicationPanel from './OntologyPublicationPanel'
 
 
 const GraphTab = lazy(() => import('./tabs/GraphTabV2'))
@@ -84,6 +85,10 @@ export default function OntologyDetailPage() {
         <h2 className="text-xl font-semibold">{ontology.name}</h2>
         <StatusBadge status={ontology.status} />
         <span className="text-gray-400 text-sm">{ontology.domain} · {ontology.version}</span>
+      </div>
+
+      <div className="mb-6">
+        <OntologyPublicationPanel ontologyId={id!} status={ontology.status} />
       </div>
 
       <div className="border-b mb-6">
