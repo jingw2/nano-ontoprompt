@@ -18,6 +18,7 @@ export default function LoginPage() {
     setError('')
     try {
       const res = await authApi.login(data.username, data.password)
+      useAuthStore.getState().setToken(res.access_token)
       const profile = await authApi.profile()
       setAuth(profile, res.access_token)
       navigate('/')
