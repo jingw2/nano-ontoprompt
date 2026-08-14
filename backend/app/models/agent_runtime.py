@@ -82,7 +82,7 @@ class AgentTurn(Base):
     session_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("agent_sessions.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     request_message_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("agent_messages.id", ondelete="RESTRICT"), nullable=True
     )

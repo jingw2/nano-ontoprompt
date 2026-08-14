@@ -135,7 +135,7 @@ def upgrade_runtime_foundation() -> None:
         "agent_turns",
         sa.Column("id", UUID, nullable=False),
         sa.Column("session_id", UUID, nullable=False),
-        sa.Column("status", sa.String(20), nullable=False, server_default="queued"),
+        sa.Column("status", sa.String(32), nullable=False, server_default="queued"),
         sa.Column("request_message_id", UUID, nullable=True),  # FKs added later (RESTRICT)
         sa.Column("response_message_id", UUID, nullable=True),
         sa.Column("dispatch_generation", sa.BigInteger(), nullable=False, server_default="1"),
