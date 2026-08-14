@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.audit_task import AuditTask
 from app.models.ontology import OntologyProject
 from app.schemas.audit import AuditRequest, AuditTaskOut
@@ -10,7 +10,7 @@ router = APIRouter()
 
 
 @router.post("")
-def start_audit(ontology_id: str, body: AuditRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def start_audit(ontology_id: str, body: AuditRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
         raise HTTPException(404, "Ontology not found")

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_editor
 from app.models.v2.connection import Connection
 from app.services.connection.registry import get_connector
 
@@ -52,7 +52,7 @@ class ConnectionResponse(BaseModel):
 # ── 端点 ──────────────────────────────────────────────────────
 
 @router.post("", response_model=ConnectionResponse, status_code=201)
-def create_connection(body: ConnectionCreate, db: Session = Depends(get_db)):
+def create_connection(body: ConnectionCreate, db: Session = Depends(get_db), _=Depends(require_editor)):
     """创建连接。config 加密后存储。"""
     from app.services import encryption_service
     encrypted_config = {"_encrypted": encryption_service.encrypt(json.dumps(body.config))}
@@ -110,7 +110,7 @@ def _build_db_config(raw_config: dict, db_type: str) -> dict:
 
 
 @router.post("/test-config")
-def test_connection_config(body: TestConfigBody):
+def test_connection_config(body: TestConfigBody, _=Depends(require_editor)):
     """测试连接配置（无需先创建 Connection，供 Builder 使用）"""
     try:
         cfg = body.config
@@ -125,7 +125,7 @@ def test_connection_config(body: TestConfigBody):
 
 
 @router.post("/{connection_id}/test")
-def test_connection(connection_id: str, db: Session = Depends(get_db)):
+def test_connection(connection_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """连接测试。尝试真实连接并返回结果。"""
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
@@ -155,7 +155,7 @@ def test_connection(connection_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{connection_id}", status_code=204)
-def delete_connection(connection_id: str, db: Session = Depends(get_db)):
+def delete_connection(connection_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
         raise HTTPException(status_code=404, detail="Connection not found")
@@ -164,7 +164,7 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{connection_id}/schedule")
-def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db)):
+def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """为连接设置 Cron 调度表达式"""
     from app.services.v2.scheduler.cron_service import CronService
     svc = CronService()
@@ -184,7 +184,7 @@ def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_d
 
 
 @router.post("/{connection_id}/sync")
-def trigger_sync(connection_id: str, db: Session = Depends(get_db)):
+def trigger_sync(connection_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """手动触发数据同步"""
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:

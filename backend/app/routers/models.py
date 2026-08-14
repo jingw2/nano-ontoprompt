@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.model_config import ModelConfig
 from app.models.extraction_task import ExtractionTask
 from app.models.user import User
@@ -16,7 +16,7 @@ def list_models(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return {"data": [ModelConfigOut.model_validate(c).model_dump() for c in configs]}
 
 @router.post("", status_code=201)
-def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     config = ModelConfig(
         id=str(uuid.uuid4()),
         name=body.name,
@@ -39,7 +39,7 @@ def get_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curren
     return {"data": ModelConfigOut.model_validate(c).model_dump()}
 
 @router.put("/{model_id}")
-def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
@@ -61,7 +61,7 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
     return {"data": ModelConfigOut.model_validate(c).model_dump()}
 
 @router.delete("/{model_id}", status_code=204)
-def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
@@ -72,7 +72,7 @@ def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_cur
     db.commit()
 
 @router.post("/{model_id}/test")
-def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")

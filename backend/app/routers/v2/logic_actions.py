@@ -118,7 +118,7 @@ def review_logic_rule(ontology_id: str, rule_id: str, body: LogicReviewRequest, 
 
 
 @router.post("/{ontology_id}/logic/{rule_id}/test")
-def test_logic_rule(ontology_id: str, rule_id: str, body: LogicTestRequest, db: Session = Depends(get_db)):
+def test_logic_rule(ontology_id: str, rule_id: str, body: LogicTestRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     rule = db.query(OntologyLogicRule).filter(
         OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
     ).first()
@@ -445,7 +445,7 @@ def run_action_type(
     action_id: str,
     body: ActionRunRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
 ):
     from app.models.entity import Entity
     from app.models.relation import Relation

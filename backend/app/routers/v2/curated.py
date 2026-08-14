@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
-from app.deps import get_current_user, require_admin
+from app.deps import get_current_user, require_admin, require_editor
 from app.models.v2.curated import CuratedDataset, CuratedReview
 
 logger = logging.getLogger(__name__)
@@ -216,7 +216,7 @@ class BatchEditRequest(BaseModel):
 
 
 @router.post("/{dataset_id}/reviews")
-def start_review(dataset_id: str, db: Session = Depends(get_db)):
+def start_review(dataset_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """为数据集启动审核流程"""
     from app.services.v2.curated.review_service import ReviewService
     svc = ReviewService(db)
@@ -241,7 +241,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/reviews/{review_id}/edits")
-def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_db)):
+def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     """批量提交行编辑"""
     from app.services.v2.curated.review_service import ReviewService
     svc = ReviewService(db)

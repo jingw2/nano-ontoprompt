@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_editor
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
 
@@ -37,7 +37,7 @@ class CreateMappingRequest(BaseModel):
 
 
 @router.post("/{ontology_id}/mappings/suggest")
-def suggest_mapping(ontology_id: str, body: SuggestRequest, db: Session = Depends(get_db)):
+def suggest_mapping(ontology_id: str, body: SuggestRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     from app.services.v2.mapping.auto_mapper import AutoMapper
     mapper = AutoMapper(db)
     suggestion = mapper.suggest_field_mapping(
@@ -62,7 +62,7 @@ def suggest_mapping(ontology_id: str, body: SuggestRequest, db: Session = Depend
 
 
 @router.post("/{ontology_id}/mappings")
-def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     from app.services.v2.mapping.mapping_service import MappingService
     def _write():
         svc = MappingService(db)
@@ -122,7 +122,7 @@ def list_mappings(ontology_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply")
-def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     from app.services.v2.mapping.mapping_service import MappingService
     def _write():
         svc = MappingService(db)
@@ -131,7 +131,7 @@ def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Sessi
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply-from-dataset")
-def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db)):
+def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     from app.models.v2.mapping import OntologyMapping
     from app.services.v2.mapping.mapping_service import MappingService
     from app.services.v2.dataset_service import DatasetService
@@ -158,7 +158,7 @@ def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = 
 
 
 @router.post("/{ontology_id}/mappings/build-all")
-def build_all_mappings(ontology_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def build_all_mappings(ontology_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     from app.services.v2.mapping.mapping_service import MappingService
     from app.models.v2.mapping import OntologyLinkMapping
     def _write():
@@ -187,7 +187,7 @@ class LinkMappingCreate(BaseModel):
 
 
 @router.post("/{ontology_id}/link-mappings")
-def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     from app.models.v2.mapping import OntologyLinkMapping
     from app.services.v2.dataset_service import DatasetService
 

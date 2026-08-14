@@ -1,6 +1,8 @@
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
+
+RoleName = Literal["viewer", "editor", "admin"]
 
 class UserOut(BaseModel):
     id: str
@@ -16,9 +18,9 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
-    role: str = "viewer"
+    role: RoleName = "viewer"
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    role: Optional[str] = None
+    role: Optional[RoleName] = None
     is_active: Optional[bool] = None

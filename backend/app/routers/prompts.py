@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.prompt import Prompt
 from app.models.extraction_task import ExtractionTask
 from app.models.user import User
@@ -307,7 +307,7 @@ def list_prompts(domain: Optional[str] = None, db: Session = Depends(get_db), _=
     return {"data": [PromptOut.model_validate(p).model_dump() for p in prompts]}
 
 @router.post("", status_code=201)
-def create_prompt(body: PromptCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_prompt(body: PromptCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     prompt = Prompt(id=str(uuid.uuid4()), name=body.name, domain=body.domain,
                     content=body.content, version=body.version, created_by=current_user.id)
     db.add(prompt); db.commit(); db.refresh(prompt)
@@ -326,7 +326,7 @@ def get_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(get_curr
     return {"data": PromptOut.model_validate(p).model_dump()}
 
 @router.put("/{prompt_id}")
-def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     p = db.query(Prompt).filter(Prompt.id == prompt_id).first()
     if not p:
         raise HTTPException(404, "Not found")
@@ -336,7 +336,7 @@ def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_
     return {"data": PromptOut.model_validate(p).model_dump()}
 
 @router.delete("/{prompt_id}", status_code=204)
-def delete_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     p = db.query(Prompt).filter(Prompt.id == prompt_id).first()
     if not p:
         raise HTTPException(404, "Not found")
@@ -351,7 +351,7 @@ def generate_prompt_template(
     domain: str = Query(..., description="业务域"),
     style: str = Query("ontology_extraction", description="提示词风格"),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_editor),
 ):
     """Use LLM to generate a prompt template for a given business domain"""
     from app.services.llm_service import _call_llm

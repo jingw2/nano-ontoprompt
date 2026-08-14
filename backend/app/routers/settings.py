@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.rules_config import RulesConfig
 
 router = APIRouter()
@@ -21,7 +21,7 @@ def get_rules(db: Session = Depends(get_db), _=Depends(get_current_user)):
     ]}
 
 @router.put("/rules")
-def update_rules(body: List[RuleUpdate], db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_rules(body: List[RuleUpdate], db: Session = Depends(get_db), _=Depends(require_editor)):
     for update in body:
         rule = db.query(RulesConfig).filter(RulesConfig.rule_key == update.rule_key, RulesConfig.editable == True).first()
         if rule:

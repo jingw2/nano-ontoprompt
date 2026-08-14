@@ -2,7 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.deps import get_current_user
+from app.deps import get_current_user, require_editor
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
 from app.database import SessionLocal
@@ -262,7 +262,7 @@ def top_nodes(ontology_id: str, limit: int = 10):
 
 
 @router.post("/{ontology_id}/graph/sync")
-def sync_graph(ontology_id: str, current_user: User = Depends(get_current_user)):
+def sync_graph(ontology_id: str, current_user: User = Depends(require_editor)):
     """将 SQLite 实体/关系全量同步到 Neo4j"""
     from app.database import SessionLocal
     from app.models.entity import Entity

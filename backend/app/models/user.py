@@ -22,3 +22,9 @@ class User(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    @property
+    def normalized_role(self) -> str:
+        """Closed-ceiling role value; legacy/unknown roles map to viewer."""
+        from app.services.authorization import normalize_role
+        return normalize_role(self.role)
