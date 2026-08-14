@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Plus, Search, Play, GitBranch, Database, Trash2,
-  ExternalLink, ChevronDown, ChevronUp, X, Loader2
+  Plus, Search, Play, GitBranch, Trash2,
+  ExternalLink, X, Loader2
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -31,15 +31,18 @@ export default function PipelineListPage() {
 
   const [showCreate, setShowCreate] = useState(false)
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     pipelinesApi.list({ search, domain: filterDomain, status: filterStatus })
       .then(res => setPipelines(Array.isArray(res) ? res : []))
       .catch(() => setPipelines([]))
       .finally(() => setLoading(false))
-  }
+  }, [search, filterDomain, filterStatus])
 
-  useEffect(() => { load() }, [search, filterDomain, filterStatus])
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [search, filterDomain, filterStatus, load])
 
   const handleDelete = async (pl: Pipeline) => {
     if (!window.confirm(`确认删除 Pipeline「${pl.name}」？删除后不会删除已生成的 Curated Dataset。`)) return

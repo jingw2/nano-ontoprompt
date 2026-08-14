@@ -19,7 +19,7 @@ interface Props {
   onComplete: (status: 'approved' | 'rejected') => void
 }
 
-export default function CuratedReviewView({ datasetId, reviewId, data, onComplete }: Props) {
+export default function CuratedReviewView({ reviewId, data, onComplete }: Props) {
   const [rows, setRows] = useState<Array<Record<string, string | number>>>(data.map((r, i) => ({ ...r, __idx__: i })))
   const [pendingEdits, setPendingEdits] = useState<RowEdit[]>([])
   const [saving, setSaving] = useState(false)

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
 import { CheckCircle, Loader2, Plus, Play, Database, ChevronDown, ChevronRight } from 'lucide-react'
 
@@ -23,6 +23,29 @@ interface CuratedDataset {
   quality_score: number | null
 }
 
+interface ApplyResult {
+  v1_entities_written?: number
+  nodes_created?: number
+  total_rows?: number
+}
+
+interface PreviewResponse {
+  rows?: Record<string, unknown>[]
+}
+
+interface FieldMappingSuggestion {
+  column_name: string
+  property_name: string
+  confidence?: number
+}
+
+interface MappingSuggestion {
+  entity_class: string
+  entity_class_cn?: string
+  primary_key_column?: string
+  field_mappings?: FieldMappingSuggestion[]
+}
+
 function StatusChip({ status }: { status: string }) {
   const cfg: Record<string, string> = {
     applied: 'bg-green-50 border-green-200 text-green-700',
@@ -39,7 +62,7 @@ function StatusChip({ status }: { status: string }) {
 function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; ontologyId: string; onApplied: () => void }) {
   const [expanded, setExpanded] = useState(false)
   const [applying, setApplying] = useState(false)
-  const [applyResult, setApplyResult] = useState<any>(null)
+  const [applyResult, setApplyResult] = useState<ApplyResult | null>(null)
   const [applyError, setApplyError] = useState('')
 
   const handleApply = async () => {
@@ -47,13 +70,14 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
     setApplyError('')
     setApplyResult(null)
     try {
-      const res: any = await apiClientV2.post(
+      const res = await apiClientV2.post<ApplyResult>(
         `/ontologies/${ontologyId}/mappings/${mapping.id}/apply-from-dataset`
       )
       setApplyResult(res)
       onApplied()
-    } catch (e: any) {
-      setApplyError(e?.detail || e?.message || '执行失败')
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
+      setApplyError(err?.detail || err?.message || '执行失败')
     } finally {
       setApplying(false)
     }
@@ -98,7 +122,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
         <div className="mx-4 mb-3 flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
           <CheckCircle size={13} />
           写入完成：实体 {applyResult.v1_entities_written ?? applyResult.nodes_created} 条
-          {applyResult.total_rows > 0 && `（共 ${applyResult.total_rows} 行）`}
+          {applyResult.total_rows != null && applyResult.total_rows > 0 && `（共 ${applyResult.total_rows} 行）`}
         </div>
       )}
       {applyError && (
@@ -129,13 +153,13 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
 function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: () => void }) {
   const [selectedId, setSelectedId] = useState('')
   const [suggesting, setSuggesting] = useState(false)
-  const [suggestion, setSuggestion] = useState<any>(null)
+  const [suggestion, setSuggestion] = useState<MappingSuggestion | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const { data: datasets = [], isLoading } = useQuery<CuratedDataset[]>({
     queryKey: ['curated-all'],
-    queryFn: () => apiClientV2.get('/curated') as any,
+    queryFn: () => apiClientV2.get<CuratedDataset[]>('/curated'),
   })
 
   const approvedDatasets = (datasets as CuratedDataset[]).filter(d => d.status === 'approved')
@@ -148,17 +172,18 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
     try {
       const ds = approvedDatasets.find(d => d.id === selectedId)
       // Get preview for column info
-      const preview: any = await apiClientV2.get(`/curated/${selectedId}/preview?limit=5`)
-      const columns = preview.rows?.length > 0 ? Object.keys(preview.rows[0]) : []
-      const res: any = await apiClientV2.post(`/ontologies/${ontologyId}/mappings/suggest`, {
+      const preview = await apiClientV2.get<PreviewResponse>(`/curated/${selectedId}/preview?limit=5`)
+      const columns = preview.rows != null && preview.rows.length > 0 ? Object.keys(preview.rows[0]) : []
+      const res = await apiClientV2.post<MappingSuggestion>(`/ontologies/${ontologyId}/mappings/suggest`, {
         dataset_name: ds?.name ?? '',
         columns,
         sample_rows: preview.rows?.slice(0, 3) ?? [],
         ontology_domain: '',
       })
       setSuggestion(res)
-    } catch (e: any) {
-      setError(e?.detail || e?.message || '自动建议失败')
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
+      setError(err?.detail || err?.message || '自动建议失败')
     } finally {
       setSuggesting(false)
     }
@@ -183,8 +208,9 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
         confidence: 0.9,
       })
       onDone()
-    } catch (e: any) {
-      setError(e?.detail || e?.message || '保存失败')
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
+      setError(err?.detail || err?.message || '保存失败')
     } finally {
       setSaving(false)
     }
@@ -238,7 +264,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
               </div>
               <div className="space-y-1">
                 <p className="text-xs font-medium text-gray-500">字段映射建议</p>
-                {(suggestion.field_mappings ?? []).map((fm: any) => (
+                {(suggestion.field_mappings ?? []).map(fm => (
                   <div key={fm.column_name} className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2 py-1.5">
                     <span className="font-mono text-gray-600 w-32 truncate">{fm.column_name}</span>
                     <span className="text-gray-300">→</span>
@@ -279,7 +305,7 @@ export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string 
 
   const { data: mappings = [], isLoading } = useQuery<Mapping[]>({
     queryKey: ['mappings', ontologyId],
-    queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/mappings`) as any,
+    queryFn: () => apiClientV2.get<Mapping[]>(`/ontologies/${ontologyId}/mappings`),
   })
 
   const handleApplied = () => {

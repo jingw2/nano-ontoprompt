@@ -22,7 +22,7 @@ export default function PromptListPage() {
 
   const { data: allPrompts = [], isLoading } = useQuery({
     queryKey: ['prompts'],
-    queryFn: () => promptApi.list() as any,
+    queryFn: () => promptApi.list(),
   })
 
   const deleteMut = useMutation({

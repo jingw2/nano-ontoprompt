@@ -9,28 +9,30 @@ export default function OutputInspector({
   onChange: (key: string, value: unknown) => void
   readOnly?: boolean
 }) {
-  const curatedIds = ((config as any).curated_dataset_ids as string[] | undefined) || ((config as any).curated_dataset_id ? [(config as any).curated_dataset_id] : [])
-  const [previews, setPreviews] = useState<Record<string, any[]>>({})
+  const curatedIds = ((config.curated_dataset_ids as string[] | undefined) || (config.curated_dataset_id ? [config.curated_dataset_id as string] : []))
+  const curatedKey = curatedIds.join('|')
+  const [previews, setPreviews] = useState<Record<string, unknown[]>>({})
   const [previewLoading, setPreviewLoading] = useState(false)
-  const [modalData, setModalData] = useState<{ title: string; rows: any[] } | null>(null)
+  const [modalData, setModalData] = useState<{ title: string; rows: unknown[] } | null>(null)
   const [datasetInfo, setDatasetInfo] = useState<Record<string, { name: string; rows: number; version_no: number }>>({})
 
   useEffect(() => {
-    if (curatedIds.length === 0) return
-    setPreviewLoading(true)
-    Promise.all(curatedIds.map(async id => {
-      const info: any = await apiClientV2.get(`/curated/${id}`).catch(() => null)
-      const versions: any = await apiClientV2.get(`/datasets/${id}/versions`).catch(() => null)
+    const ids = curatedKey === '' ? [] : curatedKey.split('|')
+    if (ids.length === 0) return
+    void Promise.resolve().then(() => setPreviewLoading(true))
+    Promise.all(ids.map(async id => {
+      const info = await apiClientV2.get<{ name?: string; row_count?: number }>(`/curated/${id}`).catch(() => null)
+      const versions = await apiClientV2.get<{ version_no?: number }[]>(`/datasets/${id}/versions`).catch(() => null)
       const versionNo = versions?.[0]?.version_no || 1
-      const rows: any = versions?.length
-        ? await apiClientV2.get(`/datasets/${id}/versions/${versionNo}/preview?limit=10000`).catch(() => [])
+      const rows = versions?.length
+        ? await apiClientV2.get<unknown[]>(`/datasets/${id}/versions/${versionNo}/preview?limit=10000`).catch(() => [])
         : []
       return { id, info, versionNo, rows: Array.isArray(rows) ? rows : [] }
     })).then(results => {
       setDatasetInfo(Object.fromEntries(results.map(r => [r.id, { name: r.info?.name || r.id, rows: r.info?.row_count || r.rows.length, version_no: r.versionNo }])))
       setPreviews(Object.fromEntries(results.map(r => [r.id, r.rows])))
     }).finally(() => setPreviewLoading(false))
-  }, [curatedIds.join('|')])
+  }, [curatedKey])
 
   if (!readOnly) {
     return (
@@ -74,7 +76,7 @@ export default function OutputInspector({
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-800 truncate">{info?.name || '数据集'}</p>
-              <p className="text-xs text-gray-400">{rows.length} 行 · {rows.length > 0 ? Object.keys(rows[0]).length : 0} 列 · v{info?.version_no || 1}</p>
+              <p className="text-xs text-gray-400">{rows.length} 行 · {rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>).length : 0} 列 · v{info?.version_no || 1}</p>
             </div>
           </button>
         </div>
@@ -101,7 +103,7 @@ export default function OutputInspector({
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 w-12">#</th>
-                    {modalData.rows.length > 0 && Object.keys(modalData.rows[0]).map(col => (
+                    {modalData.rows.length > 0 && Object.keys(modalData.rows[0] as Record<string, unknown>).map(col => (
                       <th key={col} className="px-4 py-2 text-left text-xs font-medium text-gray-500">{col}</th>
                     ))}
                   </tr>
@@ -110,8 +112,8 @@ export default function OutputInspector({
                   {modalData.rows.map((row, i) => (
                     <tr key={i} className="hover:bg-gray-50">
                       <td className="px-4 py-2 text-gray-400 text-xs">{i + 1}</td>
-                      {Object.keys(modalData.rows[0]).map(col => (
-                        <td key={col} className="px-4 py-2 text-xs text-gray-700 max-w-xs truncate">{String(row[col] ?? '')}</td>
+                      {Object.keys(modalData.rows[0] as Record<string, unknown>).map(col => (
+                        <td key={col} className="px-4 py-2 text-xs text-gray-700 max-w-xs truncate">{String((row as Record<string, unknown>)[col] ?? '')}</td>
                       ))}
                     </tr>
                   ))}

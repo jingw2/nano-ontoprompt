@@ -5,10 +5,11 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
 import { apiClient } from '@/api/client'
-import ConfidenceBar from '@/components/ConfidenceBar'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { Action } from '@/types/ontology'
+
+type ActionRow = Action & { action_category?: string }
 
 export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
   const { t } = useTranslation()
@@ -20,7 +21,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
 
   const { data: actions = [], isLoading } = useQuery({
     queryKey: ['actions', ontologyId],
-    queryFn: () => ontologyApi.listActions(ontologyId) as any,
+    queryFn: () => ontologyApi.listActions(ontologyId),
   })
 
   const createMut = useMutation({
@@ -70,7 +71,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
                 </tr>
               </thead>
               <tbody>
-              {(actions as any[]).map(a => {
+              {(actions as ActionRow[]).map(a => {
                 const le = (typeof a.linked_entities === 'string' ? JSON.parse(a.linked_entities || '[]') : a.linked_entities) || []
                 const category = a.action_category || a.execution_rule || 'crud'
                 const status = a.status || 'draft'

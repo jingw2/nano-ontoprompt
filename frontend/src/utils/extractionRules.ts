@@ -74,11 +74,26 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   },
 ]
 
+interface EntityLike {
+  name_cn?: string
+  properties?: Record<string, unknown>
+}
+
+interface LogicLike {
+  name_cn?: string
+  linked_entities?: string[]
+}
+
+interface ActionLike {
+  linked_logic_ids?: unknown[]
+  linked_entities?: unknown[]
+}
+
 export interface ValidationRuleDef {
   id: string
   label_cn: string
   description_cn: string
-  check_fn: (entities: any[], logic: any[], actions: any[]) => { pass: boolean; detail: string }
+  check_fn: (entities: EntityLike[], logic: LogicLike[], actions: ActionLike[]) => { pass: boolean; detail: string }
 }
 
 export const VALIDATION_RULES: ValidationRuleDef[] = [
@@ -87,9 +102,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     label_cn: '双向关联完整性',
     description_cn: '逻辑规则的 linked_entities 中引用的实体，在该实体详情页应能看到此逻辑规则',
     check_fn: (entities, logic) => {
-      const entityNames = new Set(entities.map((e: any) => e.name_cn).filter(Boolean))
+      const entityNames = new Set(entities.map(e => e.name_cn).filter(Boolean))
       const broken: string[] = []
-      logic.forEach((r: any) => {
+      logic.forEach(r => {
         (r.linked_entities ?? []).forEach((name: string) => {
           if (!entityNames.has(name)) broken.push(`「${r.name_cn}」引用了不存在的实体「${name}」`)
         })
@@ -104,7 +119,7 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     label_cn: '实体属性完整性',
     description_cn: '所有提取的实体都应包含至少一个属性（properties 字段不为空）',
     check_fn: (entities) => {
-      const empty = entities.filter((e: any) => !e.properties || Object.keys(e.properties).length === 0)
+      const empty = entities.filter(e => !e.properties || Object.keys(e.properties).length === 0)
       return empty.length === 0
         ? { pass: true, detail: `全部 ${entities.length} 个实体均有属性` }
         : { pass: false, detail: `${empty.length}/${entities.length} 个实体缺少属性` }
@@ -115,7 +130,7 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     label_cn: '逻辑规则实体关联',
     description_cn: '所有逻辑规则都应关联至少一个实体（linked_entities 不为空）',
     check_fn: (_, logic) => {
-      const empty = logic.filter((r: any) => !(r.linked_entities ?? []).length)
+      const empty = logic.filter(r => !(r.linked_entities ?? []).length)
       return empty.length === 0
         ? { pass: true, detail: `全部 ${logic.length} 条逻辑规则均有关联实体` }
         : { pass: false, detail: `${empty.length}/${logic.length} 条逻辑规则缺少关联实体` }
@@ -126,7 +141,7 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     label_cn: '动作逻辑关联',
     description_cn: '所有动作都应关联至少一条逻辑规则（linked_logic_ids 不为空）',
     check_fn: (_, __, actions) => {
-      const empty = actions.filter((a: any) => !(a.linked_logic_ids ?? []).length)
+      const empty = actions.filter(a => !(a.linked_logic_ids ?? []).length)
       return empty.length === 0
         ? { pass: true, detail: `全部 ${actions.length} 个动作均有关联逻辑规则` }
         : { pass: false, detail: `${empty.length}/${actions.length} 个动作缺少关联逻辑规则` }
@@ -137,7 +152,7 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     label_cn: '动作实体关联',
     description_cn: '所有动作都应关联至少一个实体（linked_entities 不为空）',
     check_fn: (_, __, actions) => {
-      const empty = actions.filter((a: any) => !(a.linked_entities ?? []).length)
+      const empty = actions.filter(a => !(a.linked_entities ?? []).length)
       return empty.length === 0
         ? { pass: true, detail: `全部 ${actions.length} 个动作均有关联实体` }
         : { pass: false, detail: `${empty.length}/${actions.length} 个动作缺少关联实体` }
@@ -151,7 +166,7 @@ export function loadValidationStates(): Record<string, boolean> {
   try {
     const saved = localStorage.getItem(VALIDATION_STORAGE_KEY)
     if (saved) return JSON.parse(saved)
-  } catch {}
+  } catch { /* ignore */ }
   return Object.fromEntries(VALIDATION_RULES.map(r => [r.id, true]))
 }
 
@@ -165,7 +180,7 @@ export function loadRuleStates(): Record<string, ExtractionRuleState> {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) return JSON.parse(saved)
-  } catch {}
+  } catch { /* ignore */ }
   return Object.fromEntries(
     EXTRACTION_RULES.map(r => [r.id, { enabled: r.default_enabled, value: r.default_value }])
   )

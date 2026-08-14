@@ -17,13 +17,13 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await authApi.login(data.username, data.password) as any
-      const profile = await authApi.profile() as any
+      const res = await authApi.login(data.username, data.password)
+      const profile = await authApi.profile()
       setAuth(profile, res.access_token)
       navigate('/')
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('login failed:', e)
-      setError(e?.response ? t('auth.login_error') : t('auth.network_error'))
+      setError((e as { response?: unknown })?.response ? t('auth.login_error') : t('auth.network_error'))
     } finally {
       setLoading(false)
     }

@@ -40,20 +40,60 @@ function edgeColor(type: string): string {
   return EDGE_COLORS[type] || '#9ca3af'
 }
 
+// Node/edge shapes from the graph API (cytoscape element format: { data: {...} })
+interface CyNodeData {
+  id?: string
+  label?: string
+  type?: string
+  confidence?: number
+}
+
+interface CyNodeElement {
+  data: CyNodeData
+}
+
+interface CyEdgeData {
+  id?: string
+  source: string
+  target: string
+  label?: string
+  type?: string
+  confidence?: number
+}
+
+interface CyEdgeElement {
+  data: CyEdgeData
+}
+
+interface GraphMeta {
+  entity_count?: number
+  relation_count?: number
+}
+
+interface SelectedData {
+  id: string
+  source?: string
+  target?: string
+  label?: string
+  type?: string
+  confidence?: number
+}
+
 export default function GraphTab({ ontologyId }: { ontologyId: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
-  const [selected, setSelected] = useState<any>(null)
+  const [selected, setSelected] = useState<SelectedData | null>(null)
   const [info, setInfo] = useState<string>('')
   const [layout, setLayout] = useState<'cose' | 'breadthfirst' | 'circle'>('cose')
   const [legendTypes, setLegendTypes] = useState<{ type: string; color: string }[]>([])
   const [initError, setInitError] = useState<string | null>(null)
+  const [cyReady, setCyReady] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ['graph', ontologyId],
-    queryFn: () => ontologyApi.getGraph(ontologyId) as any,
+    queryFn: () => ontologyApi.getGraph(ontologyId),
   })
 
   const deleteMut = useMutation({
@@ -62,15 +102,15 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
   })
 
   useEffect(() => {
-    setInitError(null)
+    void Promise.resolve().then(() => setInitError(null))
     if (!containerRef.current || !data) return
 
     // Sanitize: drop nodes with null/empty id or label, deduplicate by id
-    const rawNodes = (data.nodes || []) as any[]
-    const rawEdges = (data.edges || []) as any[]
+    const rawNodes = (data.nodes || []) as CyNodeElement[]
+    const rawEdges = (data.edges || []) as CyEdgeElement[]
 
     const seenNodeIds = new Set<string>()
-    const nodes = rawNodes.filter((n: any) => {
+    const nodes = rawNodes.filter((n) => {
       if (!n.data?.id || !n.data?.label) return false
       if (seenNodeIds.has(n.data.id)) return false
       seenNodeIds.add(n.data.id)
@@ -78,7 +118,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     })
 
     const seenEdgeIds = new Set<string>()
-    const edges = rawEdges.filter((e: any) => {
+    const edges = rawEdges.filter((e) => {
       if (!e.data?.id || !e.data?.source || !e.data?.target) return false
       if (e.data.source === e.data.target) return false  // skip self-loops
       if (!seenNodeIds.has(e.data.source) || !seenNodeIds.has(e.data.target)) return false
@@ -89,15 +129,15 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
 
     // Collect unique types for legend
     const typeSet = new Map<string, string>()
-    nodes.forEach((n: any) => {
+    nodes.forEach((n) => {
       const t = n.data.type || '未分类'
       if (!typeSet.has(t)) typeSet.set(t, typeColor(t))
     })
-    setLegendTypes(Array.from(typeSet.entries()).map(([type, color]) => ({ type, color })))
+    void Promise.resolve().then(() => setLegendTypes(Array.from(typeSet.entries()).map(([type, color]) => ({ type, color }))))
 
     if (cyRef.current) cyRef.current.destroy()
 
-    const layoutOptions: Record<string, any> = {
+    const layoutOptions: Record<string, unknown> = {
       cose: {
         name: 'cose',
         animate: false,
@@ -130,8 +170,8 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     }
 
     // Compute per-node size based on label length
-    const nodeElements = nodes.map((n: any) => {
-      const deg = edges.filter((e: any) =>
+    const nodeElements = nodes.map((n) => {
+      const deg = edges.filter((e) =>
         e.data.source === n.data.id || e.data.target === n.data.id
       ).length
       const labelLen = (n.data.label || '').length
@@ -153,7 +193,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
       container: containerRef.current,
       elements: [
         ...nodeElements,
-        ...edges.map((e: any) => ({
+        ...edges.map((e) => ({
           data: {
             ...e.data,
             edgeColor: edgeColor(e.data.label || e.data.type || ''),
@@ -171,10 +211,10 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
             'font-weight': 'bold',
             'text-valign': 'center',
             'text-halign': 'center',
-            'width': 'data(size)' as any,
-            'height': 'data(size)' as any,
+            'width': 'data(size)',
+            'height': 'data(size)',
             'text-wrap': 'wrap',
-            'text-max-width': 'data(textMaxWidth)' as any,
+            'text-max-width': 'data(textMaxWidth)',
             'border-width': '0px',
             'text-outline-width': '2px',
             'text-outline-color': 'data(color)',
@@ -239,7 +279,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     })
 
     // Run layout first (animate:false makes it synchronous for cose)
-    cy.layout(layoutOptions[layout]).run()
+    cy.layout(layoutOptions[layout] as cytoscape.LayoutOptions).run()
 
     // After cose layout: reposition isolated nodes into a compact grid below connected subgraph
     if (layout === 'cose') {
@@ -266,13 +306,13 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     cy.fit(undefined, 50)
 
     cy.on('tap', 'node', (e) => {
-      const d = e.target.data()
+      const d = e.target.data() as SelectedData
       setSelected(d)
       setInfo(`${d.label}（${d.type || '未分类'}）置信度 ${Math.round((d.confidence || 1) * 100)}%`)
     })
 
     cy.on('tap', 'edge', (e) => {
-      const d = e.target.data()
+      const d = e.target.data() as SelectedData
       setSelected(d)
       setInfo(`关系类型: ${d.label} — 置信度 ${Math.round((d.confidence || 1) * 100)}%`)
     })
@@ -282,13 +322,14 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     })
 
     cyRef.current = cy
+    void Promise.resolve().then(() => setCyReady(true))
     } catch (err) {
       console.error('Cytoscape init error:', err)
-      setInitError(err instanceof Error ? err.message : '图谱初始化失败，请检查数据格式')
+      void Promise.resolve().then(() => setInitError(err instanceof Error ? err.message : '图谱初始化失败，请检查数据格式'))
       return
     }
 
-    return () => { if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null } }
+    return () => { if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null }; setCyReady(false) }
   }, [data, layout])
 
   // 搜索高亮：匹配节点正常显示，其余节点半透明
@@ -329,7 +370,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     </div>
   )
 
-  const meta = data?.meta as any
+  const meta = data?.meta as GraphMeta | undefined
   const isEmpty = !data?.nodes?.length
 
   return (
@@ -371,7 +412,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
         </div>
 
         {/* Zoom controls */}
-        {cyRef.current && (
+        {cyReady && (
           <div className="flex items-center gap-1">
             <button onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.2)}
               className="p-1 rounded hover:bg-gray-100 text-gray-600"><ZoomIn size={15} /></button>

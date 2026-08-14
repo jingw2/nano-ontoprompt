@@ -1,8 +1,8 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 
 const BASE = 'http://localhost:5173'
 
-async function login(page: any) {
+async function login(page: Page) {
   await page.goto(`${BASE}/login`)
   await page.fill('input[placeholder="用户名"]', 'admin')
   await page.fill('input[placeholder="密码"]', 'admin123')
@@ -10,7 +10,7 @@ async function login(page: any) {
   await page.waitForURL(`${BASE}/overview`)
 }
 
-async function createOntology(page: any): Promise<string> {
+async function createOntology(page: Page): Promise<string> {
   await page.goto(`${BASE}/ontologies`)
   await page.click('button:has-text("创建 Ontology")')
   const name = `导出测试-${Date.now()}`

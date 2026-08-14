@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { settingsApi, usersApi, promptApi } from '@/api/ontologies'
+import type { Prompt } from '@/types/ontology'
 import { Trash2, Plus, Pencil, X, Check, Sparkles, Search, Loader2 } from 'lucide-react'
 import {
   EXTRACTION_RULES,
@@ -15,6 +16,9 @@ import {
 } from '@/utils/extractionRules'
 
 type ActiveTab = 'rules' | 'extraction_rules' | 'users' | 'prompts'
+
+type SettingsUser = { id: string; username: string; email: string; role: string; created_at: string }
+type UserUpdatePayload = { username?: string; email?: string; password?: string; role?: string }
 
 export default function SettingsPage() {
   const { t, i18n } = useTranslation()
@@ -29,7 +33,7 @@ export default function SettingsPage() {
 
   // Prompts tab state
   const [showPromptModal, setShowPromptModal] = useState(false)
-  const [editingPrompt, setEditingPrompt] = useState<any | null>(null)
+  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
   const [promptMsg, setPromptMsg] = useState('')
   const [promptName, setPromptName] = useState('')
   const [promptDomain, setPromptDomain] = useState('通用')
@@ -39,7 +43,7 @@ export default function SettingsPage() {
   const [promptSaving, setPromptSaving] = useState(false)
   const [promptSearch, setPromptSearch] = useState('')
   const [promptDomainFilter, setPromptDomainFilter] = useState('')
-  const [deletePromptTarget, setDeletePromptTarget] = useState<any | null>(null)
+  const [deletePromptTarget, setDeletePromptTarget] = useState<Prompt | null>(null)
 
   const { register: regUser, handleSubmit: handleUserSubmit, reset: resetUser } =
     useForm<{ username: string; email: string; password: string; role: string }>()
@@ -49,9 +53,9 @@ export default function SettingsPage() {
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ['settings-rules'],
     queryFn: async () => {
-      const data = await settingsApi.getRules() as any[]
+      const data = await settingsApi.getRules()
       const vals: Record<string, string> = {}
-      data.forEach((r: any) => { vals[r.rule_key] = r.rule_value })
+      data.forEach(r => { vals[r.rule_key] = r.rule_value })
       setRuleValues(vals)
       return data
     },
@@ -59,7 +63,7 @@ export default function SettingsPage() {
 
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ['users'],
-    queryFn: () => usersApi.list() as any,
+    queryFn: () => usersApi.list(),
     enabled: activeTab === 'users',
   })
 
@@ -80,18 +84,24 @@ export default function SettingsPage() {
       setUserMsg(t('settings.user_created'))
       setTimeout(() => setUserMsg(''), 3000)
     },
-    onError: (e: any) => setUserMsg(t('settings.create_failed', { error: e?.detail || '' })),
+    onError: (e: unknown) => {
+      const err = e as { detail?: unknown }
+      setUserMsg(t('settings.create_failed', { error: err?.detail || '' }))
+    },
   })
 
   const updateUserMut = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: UserUpdatePayload }) => usersApi.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
       setEditingUserId(null)
       setUserMsg(t('settings.user_updated'))
       setTimeout(() => setUserMsg(''), 3000)
     },
-    onError: (e: any) => setUserMsg(t('settings.update_failed', { error: e?.detail || '' })),
+    onError: (e: unknown) => {
+      const err = e as { detail?: unknown }
+      setUserMsg(t('settings.update_failed', { error: err?.detail || '' }))
+    },
   })
 
   const deleteUserMut = useMutation({
@@ -101,7 +111,7 @@ export default function SettingsPage() {
 
   const { data: prompts = [], isLoading: promptsLoading } = useQuery({
     queryKey: ['prompts'],
-    queryFn: () => promptApi.list() as any,
+    queryFn: () => promptApi.list(),
     enabled: activeTab === 'prompts',
   })
 
@@ -119,7 +129,7 @@ export default function SettingsPage() {
     setPromptMsg(''); setShowPromptModal(true)
   }
 
-  function openEditPrompt(p: any) {
+  function openEditPrompt(p: Prompt) {
     setEditingPrompt(p)
     setPromptName(p.name); setPromptDomain(p.domain); setPromptContent(p.content); setPromptVersion(p.version || '1.0')
     setPromptMsg(''); setShowPromptModal(true)
@@ -139,8 +149,9 @@ export default function SettingsPage() {
       setShowPromptModal(false)
       setPromptMsg(editingPrompt ? '提示词已更新' : '提示词创建成功')
       setTimeout(() => setPromptMsg(''), 3000)
-    } catch (e: any) {
-      setPromptMsg(`保存失败：${e?.detail || e?.message || ''}`)
+    } catch (e: unknown) {
+      const err = e as { detail?: unknown; message?: unknown }
+      setPromptMsg(`保存失败：${err?.detail || err?.message || ''}`)
     } finally {
       setPromptSaving(false)
     }
@@ -150,16 +161,17 @@ export default function SettingsPage() {
     if (!promptDomain) return
     setIsGenerating(true)
     try {
-      const result = await promptApi.generateTemplate(promptDomain) as any
-      setPromptContent(result.content ?? result)
-    } catch (e: any) {
-      setPromptMsg(`生成失败：${e?.detail || e?.message || ''}`)
+      const result = await promptApi.generateTemplate(promptDomain)
+      setPromptContent((result.content ?? result) as string)
+    } catch (e: unknown) {
+      const err = e as { detail?: unknown; message?: unknown }
+      setPromptMsg(`生成失败：${err?.detail || err?.message || ''}`)
     } finally {
       setIsGenerating(false)
     }
   }
 
-  function startEditUser(u: any) {
+  function startEditUser(u: SettingsUser) {
     setEditingUserId(u.id)
     resetEdit({ username: u.username, email: u.email ?? '', password: '', role: u.role })
   }
@@ -206,7 +218,7 @@ export default function SettingsPage() {
       {activeTab === 'rules' && (
         <div className="max-w-lg">
           <div className="bg-white border rounded-lg p-6 space-y-4">
-            {isLoading ? <p className="text-gray-400">{t('common.loading')}</p> : (rules as any[]).map((r: any) => (
+            {isLoading ? <p className="text-gray-400">{t('common.loading')}</p> : rules.map(r => (
               <div key={r.rule_key} className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">{r.rule_label_cn}</p>
@@ -346,14 +358,14 @@ export default function SettingsPage() {
           <div className="border rounded-xl overflow-hidden bg-white">
             {promptsLoading ? (
               <p className="text-center text-gray-400 py-8 text-sm">加载中...</p>
-            ) : (prompts as any[]).filter((p: any) => {
+            ) : prompts.filter(p => {
               const q = promptSearch.toLowerCase()
               const matchSearch = !q || p.name?.toLowerCase().includes(q) || p.id?.toLowerCase().includes(q)
               const matchDomain = !promptDomainFilter || p.domain === promptDomainFilter
               return matchSearch && matchDomain
             }).length === 0 ? (
               <p className="text-center text-gray-400 py-8 text-sm">
-                {(prompts as any[]).length === 0 ? '暂无提示词模版' : '没有匹配的模版'}
+                {prompts.length === 0 ? '暂无提示词模版' : '没有匹配的模版'}
               </p>
             ) : (
               <table className="w-full text-sm">
@@ -367,14 +379,14 @@ export default function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {(prompts as any[])
-                    .filter((p: any) => {
+                  {prompts
+                    .filter(p => {
                       const q = promptSearch.toLowerCase()
                       const matchSearch = !q || p.name?.toLowerCase().includes(q) || p.id?.toLowerCase().includes(q)
                       const matchDomain = !promptDomainFilter || p.domain === promptDomainFilter
                       return matchSearch && matchDomain
                     })
-                    .map((p: any) => (
+                    .map(p => (
                       <tr key={p.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3 font-mono text-xs text-gray-400" title={p.id}>
                           {p.id?.slice(0, 8)}
@@ -559,11 +571,11 @@ export default function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(users as any[]).map((u: any) => editingUserId === u.id ? (
+                  {users.map(u => editingUserId === u.id ? (
                     <tr key={u.id} className="border-b bg-gray-50">
                       <td colSpan={5} className="px-4 py-3">
                         <form onSubmit={handleEditSubmit(d => {
-                          const payload: any = { username: d.username, email: d.email, role: d.role }
+                          const payload: UserUpdatePayload = { username: d.username, email: d.email, role: d.role }
                           if (d.password) payload.password = d.password
                           updateUserMut.mutate({ id: u.id, data: payload })
                         })} className="grid grid-cols-4 gap-2 items-end">

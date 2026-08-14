@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ComponentType } from 'react'
+import type { TFunction } from 'i18next'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi, modelApi } from '@/api/ontologies'
@@ -21,26 +23,60 @@ const STAGE_PCT: Record<string, number> = {
 
 const auditTaskKey = (oid: string) => `ontoprompt_last_audit_${oid}`
 
-type SavedAuditTask = { task_id?: string; status?: string; [key: string]: unknown }
+type AuditFinding = {
+  severity: string
+  title: string
+  description?: string
+  category?: string
+  affected_items?: string[]
+}
 
-function loadSavedTask(oid: string): SavedAuditTask | null {
+type AuditTraceStep = {
+  step: number
+  thought?: string
+  tool_name?: string
+  tool_args?: Record<string, unknown>
+  observation?: string
+  text?: string
+  error?: string
+}
+
+type AuditStatus = {
+  task_id?: string
+  status?: string
+  progress?: { stage?: string; pct?: number }
+  error?: string | null
+  react_trace?: AuditTraceStep[]
+  findings?: AuditFinding[]
+  [key: string]: unknown
+}
+
+type SeverityStyle = {
+  border: string
+  bg: string
+  text: string
+  badge: string
+  Icon: ComponentType<{ size?: number; className?: string }>
+}
+
+function loadSavedTask(oid: string): AuditStatus | null {
   try {
     const saved = localStorage.getItem(auditTaskKey(oid))
     return saved ? JSON.parse(saved) : null
   } catch { return null }
 }
 
-function saveTask(oid: string, data: SavedAuditTask) {
-  try { localStorage.setItem(auditTaskKey(oid), JSON.stringify(data)) } catch {}
+function saveTask(oid: string, data: AuditStatus) {
+  try { localStorage.setItem(auditTaskKey(oid), JSON.stringify(data)) } catch { /* ignore */ }
 }
 
-const SEVERITY_STYLE: Record<string, { border: string; bg: string; text: string; badge: string; Icon: any }> = {
+const SEVERITY_STYLE: Record<string, SeverityStyle> = {
   critical: { border: 'border-red-200', bg: 'bg-red-50', text: 'text-red-700', badge: 'bg-red-100 text-red-700', Icon: XCircle },
   warning:  { border: 'border-amber-200', bg: 'bg-amber-50', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700', Icon: AlertTriangle },
   info:     { border: 'border-blue-200', bg: 'bg-blue-50', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-700', Icon: Info },
 }
 
-function FindingCard({ finding, t }: { finding: any; t: any }) {
+function FindingCard({ finding, t }: { finding: AuditFinding; t: TFunction }) {
   const sev = finding.severity as string
   const style = SEVERITY_STYLE[sev] ?? SEVERITY_STYLE.info
   const Icon = style.Icon
@@ -58,7 +94,7 @@ function FindingCard({ finding, t }: { finding: any; t: any }) {
           {finding.description && (
             <p className={`text-xs mt-1 ${style.text} opacity-80`}>{finding.description}</p>
           )}
-          {finding.affected_items?.length > 0 && (
+          {finding.affected_items && finding.affected_items.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
               <span className="text-xs text-gray-400 mr-1">{t('audit.affected_items')}:</span>
               {finding.affected_items.map((item: string, i: number) => (
@@ -72,8 +108,7 @@ function FindingCard({ finding, t }: { finding: any; t: any }) {
   )
 }
 
-function FindingsReport({ findings, t }: { findings: any[]; t: any }) {
-  const [traceOpen, setTraceOpen] = useState(false)
+function FindingsReport({ findings, t }: { findings: AuditFinding[]; t: TFunction }) {
   const critical = findings.filter(f => f.severity === 'critical')
   const warning  = findings.filter(f => f.severity === 'warning')
   const info     = findings.filter(f => f.severity === 'info')
@@ -115,7 +150,7 @@ function FindingsReport({ findings, t }: { findings: any[]; t: any }) {
             </button>
             {openSections[sev] && (
               <div className="p-3 space-y-2">
-                {group.map((f: any, i: number) => <FindingCard key={i} finding={f} t={t} />)}
+                {group.map((f: AuditFinding, i: number) => <FindingCard key={i} finding={f} t={t} />)}
               </div>
             )}
           </div>
@@ -128,11 +163,11 @@ function FindingsReport({ findings, t }: { findings: any[]; t: any }) {
 function TracePanel({
   trace, open, onToggle, t, thinking,
 }: {
-  trace: any[]
+  trace: AuditTraceStep[]
   open: boolean
   onToggle: () => void
-  t: any
-  thinking?: boolean
+  t: TFunction
+  thinking?: boolean | null
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -150,7 +185,7 @@ function TracePanel({
       </button>
       {open && (
         <div className="mt-3 space-y-2 font-mono text-xs text-gray-500 max-h-96 overflow-y-auto">
-          {trace.map((step: any, i: number) => (
+          {trace.map((step: AuditTraceStep, i: number) => (
             <div key={i} className="bg-gray-50 rounded p-2 border border-gray-100">
               <span className="text-gray-400">Step {step.step + 1}</span>
               {step.thought && <p className="mt-1 text-gray-600 whitespace-pre-wrap">{step.thought}</p>}
@@ -188,17 +223,20 @@ export default function AuditTab({ ontologyId }: { ontologyId: string }) {
   const [modelId, setModelId] = useState('')
   const [modelName, setModelName] = useState('')
   const [pollTimedOut, setPollTimedOut] = useState(false)
-  const [taskStatus, setTaskStatus] = useState<any>(() => loadSavedTask(ontologyId))
-  const [traceOpen, setTraceOpen] = useState(false)
+  const [taskStatus, setTaskStatus] = useState<AuditStatus | null>(() => loadSavedTask(ontologyId))
+  const [traceOpen, setTraceOpen] = useState(() => {
+    const saved = loadSavedTask(ontologyId)
+    return !!(saved?.task_id && saved.status !== 'completed' && saved.status !== 'failed')
+  })
 
-  const { data: models } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
-  const selectedModel = (models as any[] | undefined)?.find((m: any) => m.id === modelId)
+  const { data: models } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() })
+  const selectedModel = models?.find(m => m.id === modelId)
 
   const auditMut = useMutation({
     mutationFn: () => ontologyApi.startAudit(ontologyId, { model_id: modelId, model_name: modelName }),
   })
 
-  const startPoll = (taskId: string) => {
+  const startPoll = useCallback((taskId: string) => {
     pollRef.current?.()
     setPollTimedOut(false)
     let attempts = 0
@@ -209,7 +247,7 @@ export default function AuditTab({ ontologyId }: { ontologyId: string }) {
       if (cancelled) return
       if (attempts++ > 600) { setPollTimedOut(true); return }
       try {
-        const status: any = await ontologyApi.getAuditStatus(ontologyId, taskId)
+        const status = (await ontologyApi.getAuditStatus(ontologyId, taskId)) as AuditStatus
         if (cancelled) return
         const merged = { ...status, task_id: taskId }
         setTaskStatus(merged)
@@ -224,27 +262,28 @@ export default function AuditTab({ ontologyId }: { ontologyId: string }) {
       }
     }
     poll()
-  }
+  }, [ontologyId])
 
   useEffect(() => {
     const saved = loadSavedTask(ontologyId)
     if (saved?.task_id && saved.status !== 'completed' && saved.status !== 'failed') {
-      setTraceOpen(true)
-      startPoll(saved.task_id as string)
+      const t = setTimeout(() => startPoll(saved.task_id as string), 0)
+      return () => { clearTimeout(t); pollRef.current?.() }
     }
     return () => { pollRef.current?.() }
-  }, [ontologyId])
+  }, [ontologyId, startPoll])
 
   const handleAudit = async () => {
     setPollTimedOut(false)
     setTraceOpen(true)
     setTaskStatus({ status: 'running', progress: { stage: 'queued', pct: 0 }, error: null, react_trace: [] })
     try {
-      const res: any = await auditMut.mutateAsync()
+      const res = await auditMut.mutateAsync()
       saveTask(ontologyId, { status: 'running', progress: { stage: 'queued', pct: 0 }, task_id: res.task_id })
       startPoll(res.task_id)
-    } catch (e: any) {
-      setTaskStatus({ status: 'failed', progress: { stage: 'error', pct: 0 }, error: String(e?.detail || e?.message || e) })
+    } catch (e: unknown) {
+      const err = e as { detail?: unknown; message?: unknown } | null
+      setTaskStatus({ status: 'failed', progress: { stage: 'error', pct: 0 }, error: String(err?.detail || err?.message || e) })
     }
   }
 
@@ -268,7 +307,7 @@ export default function AuditTab({ ontologyId }: { ontologyId: string }) {
             <select value={modelId} onChange={e => { setModelId(e.target.value); setModelName('') }}
               className="w-full border rounded-lg px-3 py-2 text-sm">
               <option value="">— {t('audit.model_label')} —</option>
-              {(models as any[] || []).map((m: any) => (
+              {(models ?? []).map(m => (
                 <option key={m.id} value={m.id}>{m.name}（{m.provider}）</option>
               ))}
             </select>

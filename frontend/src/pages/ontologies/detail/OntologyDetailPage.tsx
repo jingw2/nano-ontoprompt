@@ -21,7 +21,7 @@ class GraphErrorBoundary extends React.Component<
   { children: React.ReactNode; fallbackLabel?: string },
   { hasError: boolean; error: string }
 > {
-  constructor(props: any) {
+  constructor(props: { children: React.ReactNode; fallbackLabel?: string }) {
     super(props)
     this.state = { hasError: false, error: '' }
   }
@@ -56,14 +56,14 @@ export default function OntologyDetailPage() {
 
   const { data: ontology, isLoading } = useQuery({
     queryKey: ['ontology', id],
-    queryFn: () => ontologyApi.get(id!) as any,
+    queryFn: () => ontologyApi.get(id!),
     enabled: !!id,
   })
 
   if (isLoading) return <div className="p-6 text-gray-400">{t('common.loading')}</div>
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
-  const isPipelineMode = (ontology as any).build_mode === 'pipeline_mapping'
+  const isPipelineMode = ontology.build_mode === 'pipeline_mapping'
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'info', label: t('ontology.tabs.info') },

@@ -39,7 +39,7 @@ export default function OverviewPage() {
   const navigate = useNavigate()
   const { data, isLoading } = useQuery<Stats>({
     queryKey: ['stats'],
-    queryFn: () => apiClient.get('/overview/stats') as any,
+    queryFn: () => apiClient.get<Stats>('/overview/stats'),
   })
 
   const cards: Array<{ key: 'ontology_count' | 'entity_count' | 'logic_count' | 'action_count'; label: string; color: string; icon: string }> = [

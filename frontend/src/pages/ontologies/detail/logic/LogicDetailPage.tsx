@@ -82,7 +82,7 @@ export default function LogicDetailPage() {
 
   const { data: rule, isLoading } = useQuery({
     queryKey: ['logic-rule', oid, lid],
-    queryFn: () => ontologyApi.listLogic(oid!).then((list: any) => {
+    queryFn: () => ontologyApi.listLogic(oid!).then((list) => {
       const found = (list as LogicRule[]).find(r => r.id === lid)
       if (!found) throw new Error('Logic rule not found')
       return found
@@ -92,13 +92,13 @@ export default function LogicDetailPage() {
 
   const { data: allActions = [] } = useQuery({
     queryKey: ['actions', oid],
-    queryFn: () => ontologyApi.listActions(oid!) as any,
+    queryFn: () => ontologyApi.listActions(oid!),
     enabled: !!oid,
   })
 
   const { data: allEntities = [] } = useQuery({
     queryKey: ['entities', oid],
-    queryFn: () => ontologyApi.listEntities(oid!) as any,
+    queryFn: () => ontologyApi.listEntities(oid!),
     enabled: !!oid,
   })
 
@@ -122,7 +122,7 @@ export default function LogicDetailPage() {
   // Patch an action's linked_logic_ids (for bidirectional action linking)
   const updateActionLinkMut = useMutation({
     mutationFn: ({ aid, linked_logic_ids }: { aid: string; linked_logic_ids: string[] }) =>
-      ontologyApi.updateAction(oid!, aid, { linked_logic_ids } as any),
+      ontologyApi.updateAction(oid!, aid, { linked_logic_ids }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['actions', oid] }),
   })
 
@@ -166,13 +166,13 @@ export default function LogicDetailPage() {
     const next = (rule.linked_entities ?? []).filter(
       n => n !== entity.name_cn && n !== entity.name_en
     )
-    updateMut.mutate({ linked_entities: next } as any)
+    updateMut.mutate({ linked_entities: next })
   }
   const addEntity = (entityId: string) => {
     const entity = (allEntities as Entity[]).find(e => e.id === entityId)
     if (!entity) return
     const next = [...(rule.linked_entities ?? []), entity.name_cn]
-    updateMut.mutate({ linked_entities: next } as any)
+    updateMut.mutate({ linked_entities: next })
   }
 
   // Action link helpers (patch action's linked_logic_ids)

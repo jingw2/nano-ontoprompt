@@ -1,9 +1,8 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 
 const BASE = 'http://localhost:5173'
-const API = 'http://localhost:8000/api/v1'
 
-async function loginAs(page: any, username = 'admin', password = 'admin123') {
+async function loginAs(page: Page, username = 'admin', password = 'admin123') {
   await page.goto(`${BASE}/login`)
   await page.fill('input[placeholder="用户名"]', username)
   await page.fill('input[placeholder="密码"]', password)

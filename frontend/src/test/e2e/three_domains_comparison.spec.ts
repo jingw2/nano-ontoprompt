@@ -43,13 +43,37 @@ async function login(page: Page): Promise<string> {
   return token
 }
 
+interface ApiResponse {
+  data?: unknown[] & {
+    id?: string
+    task_id?: string
+    status?: string
+    progress?: { pct?: number }
+    edges?: unknown[]
+  }
+  id?: string
+  task_id?: string
+  status?: string
+  stats?: {
+    curated_dataset_ids?: string[]
+    meta?: {
+      outputs?: Array<{ curated_dataset_id: string; source_file?: string }>
+    }
+  }
+  total_concepts?: number
+  total_instances?: number
+  total_relations?: number
+  total_logic?: number
+  total_actions?: number
+}
+
 async function apiCall(
   request: APIRequestContext,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
   token: string,
   data?: unknown,
-): Promise<any> {
+): Promise<ApiResponse> {
   const res = await request.fetch(`${API}${url}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -96,7 +120,7 @@ async function pollExtraction(
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 4000))
     const body = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/execute/status?task_id=${taskId}`, token)
-    const status: string = body.data?.status ?? body.status
+    const status: string = (body.data?.status ?? body.status) as string
     console.log(`    polling: status=${status} pct=${body.data?.progress?.pct ?? 0}%`)
     if (status === 'completed' || status === 'failed') return status
   }
@@ -155,7 +179,7 @@ async function runPipelineMapping(
       ],
     },
   })
-  const pipelineId: string = plBody.id ?? plBody.data?.id
+  const pipelineId: string = (plBody.id ?? plBody.data?.id) as string
   expect(pipelineId).toBeTruthy()
   console.log(`    Pipeline: ${pipelineId.slice(0, 8)}`)
 
@@ -186,7 +210,7 @@ async function runPipelineMapping(
     description: `三领域对比 — ${domain} Pipeline Mapping`,
     build_mode:  'pipeline_mapping',
   })
-  const ontologyId: string = ontoBody.data?.id ?? ontoBody.id
+  const ontologyId: string = (ontoBody.data?.id ?? ontoBody.id) as string
   expect(ontologyId).toBeTruthy()
   console.log(`    本体: ${ontologyId.slice(0, 8)}`)
 
@@ -247,7 +271,7 @@ async function runSimpleLLM(
     description: `三领域对比 — ${domain} 简易LLM`,
     build_mode:  'simple_llm',
   })
-  const ontologyId: string = ontoBody.data?.id ?? ontoBody.id
+  const ontologyId: string = (ontoBody.data?.id ?? ontoBody.id) as string
   expect(ontologyId).toBeTruthy()
   console.log(`    本体: ${ontologyId.slice(0, 8)}`)
 
@@ -285,7 +309,7 @@ async function runSimpleLLM(
     file_ids:   fileIds,
     constraints: [],
   })
-  const taskId: string = execBody.data?.task_id ?? execBody.task_id
+  const taskId: string = (execBody.data?.task_id ?? execBody.task_id) as string
   expect(taskId).toBeTruthy()
   console.log(`    提取任务: ${taskId.slice(0, 8)}, 等待完成...`)
 
@@ -364,8 +388,8 @@ test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
         const result = await runPipelineMapping(page, request, token, domain, ts, outDir)
         rows.push({ domain, path: 'Pipeline Mapping', ...result.stats, ontologyId: result.ontologyId })
         expect(result.stats.entities, '应有至少 1 个实体').toBeGreaterThan(0)
-      } catch (err: any) {
-        rows.push({ domain, path: 'Pipeline Mapping', entities: 0, edges: 0, logic: 0, actions: 0, ontologyId: '', error: err.message })
+      } catch (err: unknown) {
+        rows.push({ domain, path: 'Pipeline Mapping', entities: 0, edges: 0, logic: 0, actions: 0, ontologyId: '', error: (err as Error).message })
         await page.screenshot({ path: path.join(outDir, `${domain}_pipeline_ERROR.jpg`), type: 'jpeg', quality: 75 }).catch(() => {})
         throw err
       }
@@ -381,8 +405,8 @@ test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
         rows.push({ domain, path: '简易 LLM', ...result.stats, ontologyId: result.ontologyId })
         expect(result.finalStatus, '提取应成功').toBe('completed')
         expect(result.stats.entities, '应有至少 1 个实体').toBeGreaterThan(0)
-      } catch (err: any) {
-        rows.push({ domain, path: '简易 LLM', entities: 0, edges: 0, logic: 0, actions: 0, ontologyId: '', error: err.message })
+      } catch (err: unknown) {
+        rows.push({ domain, path: '简易 LLM', entities: 0, edges: 0, logic: 0, actions: 0, ontologyId: '', error: (err as Error).message })
         await page.screenshot({ path: path.join(outDir, `${domain}_llm_ERROR.jpg`), type: 'jpeg', quality: 75 }).catch(() => {})
         throw err
       }

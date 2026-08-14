@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, Trash2, Eye, Loader2, AlertTriangle, ExternalLink } from 'lucide-react'
+import { Plus, Trash2, Eye } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
 const AVAILABLE_OPS = [
@@ -26,16 +26,16 @@ export default function TransformInspector({ config, onChange, readOnly = false,
   const currentPath = String(config.path || 'auto')
   const steps = (config.steps || []) as Array<{ op: string; params?: Record<string, unknown> }>
   const [showCatalog, setShowCatalog] = useState(false)
-  const [previewMap, setPreviewMap] = useState<Record<number, { loading: boolean; data?: any[]; error?: string }>>({})
+  const [, setPreviewMap] = useState<Record<number, { loading: boolean; data?: unknown[]; error?: string }>>({})
   const filteredOps = useMemo(() => PATH_OPS_MAP[currentPath] || AVAILABLE_OPS, [currentPath])
 
   // Runtime stats (hooks must be at top level)
   const [runStats, setRunStats] = useState<{ rows_in: number; rows_out: number } | null>(null);
   useEffect(() => {
     if (!pipelineId || !readOnly) return;
-    apiClientV2.get('/pipelines/' + pipelineId + '/runs').then((runs: any) => {
+    apiClientV2.get<{ id: string }[]>('/pipelines/' + pipelineId + '/runs').then(runs => {
       const last = Array.isArray(runs) && runs.length > 0 ? runs[runs.length - 1] : null;
-      if (last) apiClientV2.get('/pipelines/runs/' + last.id).then((d: any) => {
+      if (last) apiClientV2.get<{ stats?: { rows_in?: number; rows_out?: number } }>('/pipelines/runs/' + last.id).then(d => {
         if (d?.stats) setRunStats({ rows_in: d.stats.rows_in || 0, rows_out: d.stats.rows_out || 0 });
       }).catch(() => {});
     }).catch(() => {});
@@ -49,7 +49,7 @@ export default function TransformInspector({ config, onChange, readOnly = false,
           <p className="text-amber-600">路径: {currentPath === 'auto' ? '自动检测' : currentPath === 'structured' ? 'Path A · 结构化' : currentPath === 'semi_structured' ? 'Path B · 半结构化' : currentPath === 'unstructured' ? 'Path C · 非结构化' : '宽表拆分'}</p>
           <p className="text-amber-600">引擎: {String(config.engine || 'pandas')}</p>
           <p className="text-amber-600">步骤: {steps.length} 个</p>
-          {steps.length > 0 && (<div className="mt-1 space-y-0.5">{steps.map((s: any, i: number) => (<p key={i} className="text-amber-500">{i + 1}. {AVAILABLE_OPS.find(o => o.op === s.op)?.label || s.op}</p>))}</div>)}
+          {steps.length > 0 && (<div className="mt-1 space-y-0.5">{steps.map((s, i: number) => (<p key={i} className="text-amber-500">{i + 1}. {AVAILABLE_OPS.find(o => o.op === s.op)?.label || s.op}</p>))}</div>)}
         </div>
         {runStats && (
           <div className="bg-white border rounded-lg p-3 text-xs">
@@ -72,9 +72,9 @@ export default function TransformInspector({ config, onChange, readOnly = false,
           <option value="pandas">pandas</option>{currentPath === 'A' && <option value="duckdb">DuckDB</option>}{(currentPath === 'C' || currentPath === 'auto') && (<><option value="llm">LLM</option><option value="vlm">VLM</option><option value="ocr">OCR</option></>)}</select></div>
       <div><div className="flex items-center justify-between mb-1"><label className="text-xs text-gray-500">处理步骤</label><button onClick={() => setShowCatalog(!showCatalog)} className="flex items-center gap-0.5 text-xs text-blue-500"><Plus size={11} />添加</button></div>
         {showCatalog && (<div className="border rounded-lg p-2 mb-2 max-h-40 overflow-y-auto space-y-0.5">{filteredOps.map(op => op.enabled ? (<button key={op.op} onClick={() => { onChange('steps', [...steps, { op: op.op, params: {} }]); setShowCatalog(false) }} className="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-50 flex items-center gap-2"><span className="text-gray-300 text-[10px]">{op.path}</span><span className="font-medium">{op.label}</span></button>) : (<div key={op.op} className="w-full text-left text-xs px-2 py-1 rounded flex items-center gap-2 opacity-50" title="即将推出"><span className="text-gray-300 text-[10px]">{op.path}</span><span className="text-gray-400">{op.label}</span><span className="ml-auto text-[9px] text-gray-400 border-dashed border rounded px-1">即将推出</span></div>))}</div>)}
-        {steps.length === 0 ? <p className="text-xs text-gray-400 italic">暂无步骤</p> : (<div className="space-y-1.5">{steps.map((step: any, i: number) => (
+        {steps.length === 0 ? <p className="text-xs text-gray-400 italic">暂无步骤</p> : (<div className="space-y-1.5">{steps.map((step, i: number) => (
           <div key={i} className="border rounded-lg p-2 text-xs space-y-1">
-            <div className="flex items-center justify-between"><span className="font-medium">{i + 1}. {AVAILABLE_OPS.find(o => o.op === step.op)?.label || step.op}</span><div className="flex gap-0.5"><button onClick={async () => { setPreviewMap(p => ({ ...p, [i]: { loading: true } })); try { const r: any = await apiClientV2.post('/pipelines/preview-step', { op: step.op, params: step.params || {}, sample_data: [{ col: 's1' }, { col: 's2' }] }); setPreviewMap(p => ({ ...p, [i]: { loading: false, data: r.preview || [], error: r.error } })) } catch { setPreviewMap(p => ({ ...p, [i]: { loading: false, error: '失败' } })) } }} className="text-gray-400 hover:text-blue-500"><Eye size={11} /></button><button onClick={() => onChange('steps', steps.filter((_: any, j: number) => j !== i))} className="text-gray-400 hover:text-red-500"><Trash2 size={11} /></button></div></div>
+            <div className="flex items-center justify-between"><span className="font-medium">{i + 1}. {AVAILABLE_OPS.find(o => o.op === step.op)?.label || step.op}</span><div className="flex gap-0.5"><button onClick={async () => { setPreviewMap(p => ({ ...p, [i]: { loading: true } })); try { const r = await apiClientV2.post<{ preview?: unknown[]; error?: string }>('/pipelines/preview-step', { op: step.op, params: step.params || {}, sample_data: [{ col: 's1' }, { col: 's2' }] }); setPreviewMap(p => ({ ...p, [i]: { loading: false, data: r.preview || [], error: r.error } })) } catch { setPreviewMap(p => ({ ...p, [i]: { loading: false, error: '失败' } })) } }} className="text-gray-400 hover:text-blue-500"><Eye size={11} /></button><button onClick={() => onChange('steps', steps.filter((_, j: number) => j !== i))} className="text-gray-400 hover:text-red-500"><Trash2 size={11} /></button></div></div>
           </div>
         ))}</div>)}
       </div>

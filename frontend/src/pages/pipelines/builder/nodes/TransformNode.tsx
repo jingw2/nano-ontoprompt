@@ -9,9 +9,9 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function TransformNode({ data, selected }: NodeProps) {
-  const label = (data as any).label || '转换器'
-  const status = (data as any).status || 'idle'
-  const steps = ((data as any).config?.steps || []) as any[]
+  const label = (data.label as string) || '转换器'
+  const status = (data.status as string) || 'idle'
+  const steps = ((data.config as { steps?: unknown[] } | undefined)?.steps || [])
 
   return (
     <div className={`px-3 py-2 rounded-xl border-2 shadow-sm bg-white text-xs min-w-[140px] relative ${

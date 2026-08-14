@@ -10,6 +10,8 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
 
+type LogicRuleRow = LogicRule & { name?: string; logic_type?: string }
+
 function parseLinkedEntities(value: unknown): string[] {
   if (Array.isArray(value)) return value
   if (typeof value === 'string') {
@@ -34,7 +36,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
 
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ['logic', ontologyId],
-    queryFn: () => ontologyApi.listLogic(ontologyId) as any,
+    queryFn: () => ontologyApi.listLogic(ontologyId),
   })
 
   const createMut = useMutation({
@@ -106,7 +108,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r: any) => {
+                {(filtered as LogicRuleRow[]).map(r => {
                   const linkedEntities = parseLinkedEntities(r.linked_entities)
                   const status = r.status || 'draft'
                   const enabled = r.enabled !== false

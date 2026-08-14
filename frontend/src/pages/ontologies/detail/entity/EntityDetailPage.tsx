@@ -94,8 +94,8 @@ export default function EntityDetailPage() {
 
   const { data: entity, isLoading } = useQuery({
     queryKey: ['entity', oid, eid],
-    queryFn: () => ontologyApi.listEntities(oid!).then((list: any) => {
-      const found = (list as Entity[]).find(e => e.id === eid)
+    queryFn: () => ontologyApi.listEntities(oid!).then(list => {
+      const found = list.find(e => e.id === eid)
       if (!found) throw new Error('Entity not found')
       return found
     }),
@@ -104,25 +104,25 @@ export default function EntityDetailPage() {
 
   const { data: graph } = useQuery({
     queryKey: ['graph', oid],
-    queryFn: () => ontologyApi.getGraph(oid!) as any,
+    queryFn: () => ontologyApi.getGraph(oid!),
     enabled: !!oid,
   })
 
   const { data: instances = [] } = useQuery({
     queryKey: ['entity-instances', oid, eid],
-    queryFn: () => ontologyApi.listEntityInstances(oid!, eid!) as any,
+    queryFn: () => ontologyApi.listEntityInstances(oid!, eid!),
     enabled: !!oid && !!eid,
   })
 
   const { data: allLogic = [] } = useQuery({
     queryKey: ['logic', oid],
-    queryFn: () => ontologyApi.listLogic(oid!) as any,
+    queryFn: () => ontologyApi.listLogic(oid!),
     enabled: !!oid,
   })
 
   const { data: allActions = [] } = useQuery({
     queryKey: ['actions', oid],
-    queryFn: () => ontologyApi.listActions(oid!) as any,
+    queryFn: () => ontologyApi.listActions(oid!),
     enabled: !!oid,
   })
 
@@ -139,14 +139,14 @@ export default function EntityDetailPage() {
   // Updating a logic rule's linked_entities (for bidirectional link management)
   const updateLogicMut = useMutation({
     mutationFn: ({ lid, linked_entities }: { lid: string; linked_entities: string[] }) =>
-      ontologyApi.updateLogic(oid!, lid, { linked_entities } as any),
+      ontologyApi.updateLogic(oid!, lid, { linked_entities }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['logic', oid] }),
   })
 
   // Updating an action's linked_entities
   const updateActionLinkMut = useMutation({
     mutationFn: ({ aid, linked_entities }: { aid: string; linked_entities: string[] }) =>
-      ontologyApi.updateAction(oid!, aid, { linked_entities } as any),
+      ontologyApi.updateAction(oid!, aid, { linked_entities }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['actions', oid] }),
   })
 
@@ -176,8 +176,8 @@ export default function EntityDetailPage() {
 
   const { labelCn, abbr } = parseEntityDisplay(entity)
 
-  const nodes: GraphNode[] = (graph as any)?.nodes ?? []
-  const edges: GraphEdge[] = (graph as any)?.edges ?? []
+  const nodes: GraphNode[] = (graph?.nodes ?? []) as GraphNode[]
+  const edges: GraphEdge[] = (graph?.edges ?? []) as GraphEdge[]
   const nodeMap: Record<string, string> = {}
   nodes.forEach(n => { nodeMap[n.data.id] = n.data.label })
   const incomingEdges = edges.filter(e => e.data.target === eid)
@@ -200,14 +200,14 @@ export default function EntityDetailPage() {
   const addProp = () => {
     if (!newKey.trim()) return
     const updated = { ...props, [newKey.trim()]: newVal.trim() }
-    updateMut.mutate({ properties: updated as any })
+    updateMut.mutate({ properties: updated })
     setNewKey(''); setNewVal('')
   }
 
   const deleteProp = (key: string) => {
     const updated = { ...props }
     delete updated[key]
-    updateMut.mutate({ properties: updated as any })
+    updateMut.mutate({ properties: updated })
   }
 
   // Logic link helpers
@@ -406,8 +406,8 @@ export default function EntityDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {instances.map((inst: any) => {
-                  const { name_cn, name_en, object_type, ...rest } = inst.row_data ?? {}
+                {instances.map(inst => {
+                  const { name_cn, ...rest }: { name_cn?: string; [key: string]: unknown } = inst.row_data ?? {}
                   return (
                     <tr key={inst.id} className="border-t align-top">
                       <td className="px-3 py-2 text-xs font-medium text-gray-700 whitespace-nowrap">

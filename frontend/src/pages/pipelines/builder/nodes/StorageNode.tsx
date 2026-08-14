@@ -9,8 +9,8 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function StorageNode({ data, selected }: NodeProps) {
-  const label = (data as any).label || '存储器'
-  const status = (data as any).status || 'idle'
+  const label = (data.label as string) || '存储器'
+  const status = (data.status as string) || 'idle'
 
   return (
     <div className={`px-3 py-2 rounded-xl border-2 shadow-sm bg-white text-xs min-w-[120px] relative ${

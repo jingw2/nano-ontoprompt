@@ -81,7 +81,7 @@ export default function ActionDetailPage() {
 
   const { data: action, isLoading } = useQuery({
     queryKey: ['action', oid, aid],
-    queryFn: () => ontologyApi.listActions(oid!).then((list: any) => {
+    queryFn: () => ontologyApi.listActions(oid!).then((list) => {
       const found = (list as Action[]).find(a => a.id === aid)
       if (!found) throw new Error('Action not found')
       return found
@@ -91,13 +91,13 @@ export default function ActionDetailPage() {
 
   const { data: allEntities = [] } = useQuery({
     queryKey: ['entities', oid],
-    queryFn: () => ontologyApi.listEntities(oid!) as any,
+    queryFn: () => ontologyApi.listEntities(oid!),
     enabled: !!oid,
   })
 
   const { data: allLogic = [] } = useQuery({
     queryKey: ['logic', oid],
-    queryFn: () => ontologyApi.listLogic(oid!) as any,
+    queryFn: () => ontologyApi.listLogic(oid!),
     enabled: !!oid,
   })
 
@@ -148,23 +148,23 @@ export default function ActionDetailPage() {
     const entity = (allEntities as Entity[]).find(e => e.id === entityId)
     if (!entity) return
     const next = (action.linked_entities ?? []).filter(n => n !== entity.name_cn && n !== entity.name_en)
-    updateMut.mutate({ linked_entities: next } as any)
+    updateMut.mutate({ linked_entities: next })
   }
   const addEntity = (entityId: string) => {
     const entity = (allEntities as Entity[]).find(e => e.id === entityId)
     if (!entity) return
     const next = [...(action.linked_entities ?? []), entity.name_cn]
-    updateMut.mutate({ linked_entities: next } as any)
+    updateMut.mutate({ linked_entities: next })
   }
 
   // Logic link helpers
   const removeLogic = (logicId: string) => {
     const next = (action.linked_logic_ids ?? []).filter(i => i !== logicId)
-    updateMut.mutate({ linked_logic_ids: next } as any)
+    updateMut.mutate({ linked_logic_ids: next })
   }
   const addLogic = (logicId: string) => {
     const next = [...(action.linked_logic_ids ?? []), logicId]
-    updateMut.mutate({ linked_logic_ids: next } as any)
+    updateMut.mutate({ linked_logic_ids: next })
   }
 
   const formatDate = (s: string) => new Date(s).toLocaleString('zh-CN')
