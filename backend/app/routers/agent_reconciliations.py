@@ -12,6 +12,7 @@ from app.deps import get_db, require_admin
 from app.models.user import User
 from app.services.runtime.reconciliation import (
     ReconciliationError,
+    get_case,
     list_cases,
     resolve_case,
 )
@@ -43,6 +44,18 @@ def reconciliation_list(db: Session = Depends(get_db),
                         status: str | None = Query(None), limit: int = Query(50, ge=1, le=100)):
     result = list_cases(db, status=status, limit=limit)
     return {"data": result}
+
+
+@router.get("/admin/agent-reconciliations/{case_id}")
+def reconciliation_detail(case_id: str, db: Session = Depends(get_db),
+                          current_user: User = Depends(require_admin)):
+    try:
+        result = get_case(db, case_id=case_id)
+    except ReconciliationError as exc:
+        if str(exc) == "CASE_NOT_FOUND":
+            raise HTTPException(404, detail="Not found")
+        raise HTTPException(409, detail=str(exc))
+    return {"data": ReconciliationCaseOut(**result).model_dump()}
 
 
 @router.post("/admin/agent-reconciliations/{case_id}/resolve")

@@ -93,3 +93,38 @@ class ToolValidationResponse(BaseModel):
     valid: bool
     blocked: List[str] = []
     capabilities: List[str] = []
+
+
+class RestoreVersionRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    change_note: Optional[str] = None
+
+
+class AgentAccessGrantOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: str
+    agent_id: str
+    user_id: str
+    capabilities: List[str] = []
+    revision: int = 1
+    status: str = "active"
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CreateAgentAccessGrantRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    user_id: str
+    capabilities: List[str]
+
+
+class ReviseAgentAccessGrantRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    base_revision: int
+    capabilities: List[str]
+
+
+class RevokeAgentAccessGrantRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    base_revision: int

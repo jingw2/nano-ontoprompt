@@ -234,3 +234,66 @@ def save_basic_version(
                     "config_hash": digest})
     db.commit()
     return {"version_id": version_id, "version_no": active["version_no"] + 1, "config_hash": digest}
+
+
+def get_version(db: Session, *, agent_id: str, version_no: int) -> dict | None:
+    """Agent-version detail (Section 12): the pinned immutable version row."""
+    row = db.execute(text(
+        "SELECT id, version_no, name, description, config_hash, "
+        "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
+        "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
+        "FROM agent_versions WHERE agent_id = :id AND version_no = :vno"
+    ), {"id": agent_id, "vno": version_no}).mappings().one_or_none()
+    return dict(row) if row else None
+
+
+def restore_version(db: Session, *, actor_id: str, agent_id: str, source_version_no: int,
+                    change_note: str | None = None) -> dict:
+    """Section 12 restore: create N+1 as a byte-identical copy of the pinned
+    version (same content, same config hash — child rows cloned) and
+    CAS-activate it in one transaction.  The pinned version stays untouched;
+    the restored version carries the fresh number max(version_no)+1."""
+    agent = db.execute(text(
+        "SELECT id, status, active_version_id FROM agents WHERE id = :id FOR UPDATE"
+    ), {"id": agent_id}).mappings().one_or_none()
+    if not agent or agent["status"] != "active":
+        raise AgentConfigError("AGENT_NOT_FOUND")
+    source = db.execute(text(
+        "SELECT id, version_no, name, description, default_model_config_version_id, "
+        "default_model_name, system_prompt, memory_settings, application_state_schema_version_id, "
+        "config_hash, prompt_generation_id FROM agent_versions "
+        "WHERE agent_id = :id AND version_no = :vno"
+    ), {"id": agent_id, "vno": source_version_no}).mappings().one_or_none()
+    if source is None:
+        raise AgentConfigError("VERSION_NOT_FOUND")
+    next_no = db.execute(text(
+        "SELECT coalesce(max(version_no), 0) + 1 FROM agent_versions WHERE agent_id = :id"
+    ), {"id": agent_id}).scalar_one()
+    version_id = _new_id()
+    db.execute(text(
+        "INSERT INTO agent_versions (id, agent_id, version_no, name, description, "
+        "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
+        "application_state_schema_version_id, config_hash, change_note, prompt_generation_id, "
+        "created_by, created_at) "
+        "VALUES (:id, :agent, :rev, :name, :desc, :mvid, :mname, :sp, CAST(:mem AS json), "
+        ":asv, :hash, :note, :pg, :actor, now())"
+    ), {"id": version_id, "agent": agent_id, "rev": next_no,
+        "name": source["name"], "desc": source["description"],
+        "mvid": source["default_model_config_version_id"],
+        "mname": source["default_model_name"], "sp": source["system_prompt"],
+        "mem": _canonical(source["memory_settings"] or {}),
+        "asv": source["application_state_schema_version_id"],
+        "hash": source["config_hash"], "note": change_note,
+        "pg": source["prompt_generation_id"], "actor": actor_id})
+    _clone_child_rows(db, source["id"], version_id)
+    result = db.execute(text(
+        "UPDATE agents SET active_version_id = :vid, updated_at = now() "
+        "WHERE id = :aid AND active_version_id = :old"
+    ), {"vid": version_id, "aid": agent_id, "old": agent["active_version_id"]})
+    if result.rowcount != 1:
+        raise AgentConfigConflict("AGENT_VERSION_CONFLICT")
+    _audit(db, actor_id=actor_id, agent_id=agent_id, operation="restore_version",
+           payload={"source_version": source_version_no, "version": next_no,
+                    "config_hash": source["config_hash"]})
+    db.commit()
+    return {"version_id": version_id, "version_no": next_no, "config_hash": source["config_hash"]}

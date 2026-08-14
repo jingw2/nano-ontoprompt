@@ -40,6 +40,18 @@ def list_cases(db: Session, *, status: str | None = None, limit: int = 50) -> di
     return {"items": [dict(r) for r in rows], "next_cursor": None, "has_more": False}
 
 
+def get_case(db: Session, *, case_id: str) -> dict:
+    """Section 12 reconciliation detail: the redacted persisted case row."""
+    row = db.execute(text(
+        "SELECT id, turn_id, execution_kind, execution_id, revision, state, "
+        "request_hash, created_at, updated_at "
+        "FROM agent_reconciliation_cases WHERE id = :id"
+    ), {"id": case_id}).mappings().one_or_none()
+    if row is None:
+        raise ReconciliationError("CASE_NOT_FOUND")
+    return dict(row)
+
+
 def resolve_case(db: Session, *, case_id: str, base_revision: int, resolution: str,
                  evidence: str | None = None, actor_id: str | None = None) -> dict:
     """CAS the open case to resolved_succeeded/resolved_failed (terminal) or

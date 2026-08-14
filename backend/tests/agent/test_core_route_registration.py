@@ -64,6 +64,13 @@ CORE_SECTION12 = {
     ("GET", "/api/v1/agents/{agent_id}"), ("DELETE", "/api/v1/agents/{agent_id}"),
     # Agent versions
     ("GET", "/api/v1/agents/{agent_id}/versions"), ("POST", "/api/v1/agents/{agent_id}/versions"),
+    ("GET", "/api/v1/agents/{agent_id}/versions/{version_no}"),
+    ("POST", "/api/v1/agents/{agent_id}/versions/{version_no}/restore"),
+    # Agent access grants
+    ("GET", "/api/v1/agents/{agent_id}/access-grants"),
+    ("POST", "/api/v1/agents/{agent_id}/access-grants"),
+    ("POST", "/api/v1/agents/{agent_id}/access-grants/{grant_id}/revisions"),
+    ("POST", "/api/v1/agents/{agent_id}/access-grants/{grant_id}/revoke"),
     # Prompt generation
     ("POST", "/api/v1/agents/{agent_id}/prompt-generations"),
     ("GET", "/api/v1/agents/{agent_id}/prompt-generations/{generation_id}"),
@@ -106,6 +113,7 @@ CORE_SECTION12 = {
     ("GET", "/api/v1/agent-turns/{turn_id}/audit"),
     # Reconciliation
     ("GET", "/api/v1/admin/agent-reconciliations"),
+    ("GET", "/api/v1/admin/agent-reconciliations/{case_id}"),
     ("POST", "/api/v1/admin/agent-reconciliations/{case_id}/resolve"),
     # Security domains
     ("GET", "/api/v1/security-domains"),

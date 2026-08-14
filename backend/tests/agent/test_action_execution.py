@@ -210,6 +210,13 @@ def test_reconciliation_api_admin_only(schema):
         with TestClient(client) as c:
             assert c.get("/api/v1/admin/agent-reconciliations", headers=admin_headers).status_code == 200
             assert c.get("/api/v1/admin/agent-reconciliations", headers=editor_headers).status_code == 403
+            # Section 12 detail route
+            r = c.get(f"/api/v1/admin/agent-reconciliations/{case_id}", headers=admin_headers)
+            assert r.status_code == 200
+            detail = r.json()["data"]
+            assert detail["id"] == case_id and detail["execution_kind"] == "model"
+            assert c.get(f"/api/v1/admin/agent-reconciliations/{case_id}", headers=editor_headers).status_code == 403
+            assert c.get("/api/v1/admin/agent-reconciliations/no-such-case", headers=admin_headers).status_code == 404
             r = c.post(f"/api/v1/admin/agent-reconciliations/{case_id}/resolve",
                        json={"base_revision": 1, "resolution": "failed"}, headers=admin_headers)
             assert r.status_code == 200

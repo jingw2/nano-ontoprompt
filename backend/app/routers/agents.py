@@ -20,15 +20,28 @@ from app.config import settings
 from app.deps import get_db, get_current_user, require_editor
 from app.models.user import User
 from app.schemas.agents import (
+    AgentAccessGrantOut,
     AgentBasicVersionRequest,
     AgentCreateRequest,
     AgentOut,
     AgentVersionOut,
+    CreateAgentAccessGrantRequest,
     PromptGenerationDecisionRequest,
     PromptGenerationOut,
     PromptGenerationRequest,
+    RestoreVersionRequest,
+    ReviseAgentAccessGrantRequest,
+    RevokeAgentAccessGrantRequest,
     ToolValidationRequest,
     ToolValidationResponse,
+)
+from app.services.agent.access_grants import (
+    AgentAccessGrantConflict,
+    AgentAccessGrantError,
+    create_agent_access_grant,
+    list_agent_access_grants,
+    revise_agent_access_grant,
+    revoke_agent_access_grant,
 )
 from app.services.agent.catalog import (
     agent_catalog_models,
@@ -39,6 +52,8 @@ from app.services.agent.configuration import (
     AgentConfigConflict,
     AgentConfigError,
     create_agent,
+    get_version,
+    restore_version,
     save_basic_version,
 )
 from app.services.agent.policy import AGENT_CAPABILITIES, ceiling_intersection
@@ -306,6 +321,96 @@ def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_us
     ), {"id": agent_id}).mappings().all()
     return {"data": {"items": [AgentVersionOut(**dict(r)).model_dump() for r in rows],
                      "next_cursor": None, "has_more": False}}
+
+
+@router.get("/{agent_id}/versions/{version_no}")
+def get_agent_version_route(agent_id: str, version_no: int, db: Session = Depends(get_db),
+                            current_user: User = Depends(get_current_user)):
+    _require_agent_grant(db, current_user.id, agent_id, "view_config")
+    row = get_version(db, agent_id=agent_id, version_no=version_no)
+    if row is None:
+        raise HTTPException(404, detail="Not found")
+    return {"data": AgentVersionOut(**row).model_dump()}
+
+
+@router.post("/{agent_id}/versions/{version_no}/restore", status_code=201)
+def restore_agent_version(agent_id: str, version_no: int, body: RestoreVersionRequest,
+                          db: Session = Depends(get_db),
+                          current_user: User = Depends(require_editor),
+                          x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        result = restore_version(
+            db, actor_id=current_user.id, agent_id=agent_id,
+            source_version_no=version_no, change_note=body.change_note,
+        )
+    except AgentConfigConflict as exc:
+        raise HTTPException(409, detail=str(exc))
+    except AgentConfigError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": result}
+
+
+@router.get("/{agent_id}/access-grants")
+def agent_access_grants_list(agent_id: str, db: Session = Depends(get_db),
+                             current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    return {"data": list_agent_access_grants(db, agent_id=agent_id)}
+
+
+@router.post("/{agent_id}/access-grants", status_code=201)
+def agent_access_grants_create(agent_id: str, body: CreateAgentAccessGrantRequest,
+                               db: Session = Depends(get_db),
+                               current_user: User = Depends(require_editor),
+                               x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        result = create_agent_access_grant(
+            db, actor_id=current_user.id, agent_id=agent_id,
+            user_id=body.user_id, capabilities=body.capabilities,
+        )
+    except AgentAccessGrantError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": AgentAccessGrantOut(**result).model_dump()}
+
+
+@router.post("/{agent_id}/access-grants/{grant_id}/revisions", status_code=201)
+def agent_access_grants_revise(agent_id: str, grant_id: str, body: ReviseAgentAccessGrantRequest,
+                               db: Session = Depends(get_db),
+                               current_user: User = Depends(require_editor),
+                               x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        result = revise_agent_access_grant(
+            db, actor_id=current_user.id, grant_id=grant_id,
+            base_revision=body.base_revision, capabilities=body.capabilities,
+        )
+    except AgentAccessGrantConflict as exc:
+        raise HTTPException(409, detail=str(exc))
+    except AgentAccessGrantError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": AgentAccessGrantOut(**result).model_dump()}
+
+
+@router.post("/{agent_id}/access-grants/{grant_id}/revoke")
+def agent_access_grants_revoke(agent_id: str, grant_id: str, body: RevokeAgentAccessGrantRequest,
+                               db: Session = Depends(get_db),
+                               current_user: User = Depends(require_editor),
+                               x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        result = revoke_agent_access_grant(
+            db, actor_id=current_user.id, grant_id=grant_id, base_revision=body.base_revision,
+        )
+    except AgentAccessGrantConflict as exc:
+        raise HTTPException(409, detail=str(exc))
+    except AgentAccessGrantError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": AgentAccessGrantOut(**result).model_dump()}
 
 
 def _sanitize_prompt_text(value: str) -> str:

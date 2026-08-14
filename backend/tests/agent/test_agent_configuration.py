@@ -199,3 +199,147 @@ def test_prompt_generation_records_and_accept(ctx):
     assert gen["status"] == "pending"
     accepted = accept_prompt_generation(session, actor_id=actor_id, agent_id=created["agent_id"], generation_id=gen["id"])
     assert accepted["status"] == "accepted"
+
+
+def test_restore_version_creates_n1_from_pinned(ctx):
+    """Section 12 restore: N+1 is a byte-identical copy of the pinned version
+    (same config hash, cloned child rows) and CAS-activates it."""
+    from app.services.agent.configuration import (
+        AgentConfigError, create_agent, get_version, restore_version, save_basic_version,
+    )
+
+    session, actor_id, model_version, app_schema = ctx
+    created = create_agent(
+        session, actor_id=actor_id, name="A", description="d1",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p1", memory_settings={}, application_state_schema_version_id=app_schema,
+    )
+    save_basic_version(
+        session, actor_id=actor_id, agent_id=created["agent_id"], base_version_no=1,
+        name="A v2", description="d2", default_model_config_version_id=model_version,
+        default_model_name="gpt-4o", system_prompt="p2", memory_settings={},
+        application_state_schema_version_id=app_schema,
+    )
+    restored = restore_version(
+        session, actor_id=actor_id, agent_id=created["agent_id"],
+        source_version_no=1, change_note="restore v1",
+    )
+    assert restored["version_no"] == 3  # N+1 after v1, v2
+    # content-identical to the pinned v1 (same config hash, same prompt)
+    assert restored["config_hash"] == created["config_hash"]
+    v1 = get_version(session, agent_id=created["agent_id"], version_no=1)
+    assert v1 is not None and v1["config_hash"] == restored["config_hash"]
+    # active pointer advanced to the restored version
+    active = session.execute(text(
+        "SELECT version_no FROM agent_versions WHERE id = (SELECT active_version_id FROM agents WHERE id=:id)"
+    ), {"id": created["agent_id"]}).scalar_one()
+    assert active == 3
+    # restoring an unknown version is rejected
+    try:
+        restore_version(session, actor_id=actor_id, agent_id=created["agent_id"], source_version_no=99)
+        raise AssertionError("expected VERSION_NOT_FOUND")
+    except AgentConfigError as exc:
+        assert str(exc) == "VERSION_NOT_FOUND"
+
+
+def test_access_grant_owner_invariant_and_no_self_escalation(ctx):
+    from app.services.agent.access_grants import (
+        AgentAccessGrantError, create_agent_access_grant, list_agent_access_grants,
+    )
+    from app.services.agent.configuration import create_agent
+
+    session, actor_id, model_version, app_schema = ctx
+    created = create_agent(
+        session, actor_id=actor_id, name="A", description="d",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p", memory_settings={}, application_state_schema_version_id=app_schema,
+    )
+    agent_id = created["agent_id"]
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-other','other','o@t.com','h','viewer',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+    # the owner already holds full authority: granting the owner is rejected
+    try:
+        create_agent_access_grant(
+            session, actor_id=actor_id, agent_id=agent_id,
+            user_id=actor_id, capabilities=["run"],
+        )
+        raise AssertionError("expected OWNER_INVARIANT")
+    except AgentAccessGrantError as exc:
+        assert str(exc) == "OWNER_INVARIANT"
+    # a non-owner actor cannot grant to themselves (no self-escalation)
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-self','self','s@t.com','h','editor',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+    try:
+        create_agent_access_grant(
+            session, actor_id="u-self", agent_id=agent_id,
+            user_id="u-self", capabilities=["view_config"],
+        )
+        raise AssertionError("expected SELF_ESCALATION")
+    except AgentAccessGrantError as exc:
+        assert str(exc) == "SELF_ESCALATION"
+    # a normal grant for another user works and lists
+    grant = create_agent_access_grant(
+        session, actor_id=actor_id, agent_id=agent_id,
+        user_id="u-other", capabilities=["run", "view_config"],
+    )
+    assert grant["revision"] == 1 and grant["status"] == "active"
+    listed = list_agent_access_grants(session, agent_id=agent_id)
+    # the owner's implicit grant row plus the new grant
+    assert "u-other" in [g["user_id"] for g in listed["items"]]
+
+
+def test_access_grant_cas_revise_and_revoke(ctx):
+    from app.services.agent.access_grants import (
+        AgentAccessGrantConflict, AgentAccessGrantError, create_agent_access_grant,
+        revise_agent_access_grant, revoke_agent_access_grant,
+    )
+    from app.services.agent.configuration import create_agent
+
+    session, actor_id, model_version, app_schema = ctx
+    created = create_agent(
+        session, actor_id=actor_id, name="A", description="d",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p", memory_settings={}, application_state_schema_version_id=app_schema,
+    )
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-other','other','o@t.com','h','viewer',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+    grant = create_agent_access_grant(
+        session, actor_id=actor_id, agent_id=created["agent_id"],
+        user_id="u-other", capabilities=["view_config"],
+    )
+    # CAS revise with the exact revision
+    revised = revise_agent_access_grant(
+        session, actor_id=actor_id, grant_id=grant["id"],
+        base_revision=1, capabilities=["view_config", "run"],
+    )
+    assert revised["revision"] == 2 and set(revised["capabilities"]) == {"view_config", "run"}
+    # stale revision conflicts
+    try:
+        revise_agent_access_grant(
+            session, actor_id=actor_id, grant_id=grant["id"],
+            base_revision=1, capabilities=["run"],
+        )
+        raise AssertionError("expected AGENT_GRANT_CONFLICT")
+    except AgentAccessGrantConflict as exc:
+        assert str(exc) == "AGENT_GRANT_CONFLICT"
+    # CAS revoke with the current revision
+    revoked = revoke_agent_access_grant(
+        session, actor_id=actor_id, grant_id=grant["id"], base_revision=2,
+    )
+    assert revoked["status"] == "revoked" and revoked["revision"] == 3
+    try:
+        revoke_agent_access_grant(
+            session, actor_id=actor_id, grant_id=grant["id"], base_revision=2,
+        )
+        raise AssertionError("expected GRANT_NOT_FOUND")
+    except AgentAccessGrantError as exc:
+        assert str(exc) == "GRANT_NOT_FOUND"

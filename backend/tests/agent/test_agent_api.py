@@ -441,3 +441,124 @@ def test_tool_validation_route(ctx):
             assert data["blocked"] == ["o-ghost"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_agent_version_detail_and_restore_routes(ctx):
+    """§12 version detail + restore (201, N+1 from the pinned version)."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    agent = _create_agent(session, editor_id, model_version, app_schema, name="Version Agent")
+    agent_id = agent["agent_id"]
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+    viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # detail: viewer without grant -> existence-hiding 404
+            assert c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=viewer_headers).status_code == 404
+            r = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers)
+            assert r.status_code == 200
+            assert r.json()["data"]["version_no"] == 1
+            assert r.json()["data"]["name"] == "Version Agent"
+            # unknown version -> 404
+            assert c.get(f"/api/v1/agents/{agent_id}/versions/99", headers=editor_headers).status_code == 404
+            # restore: missing/invalid Idempotency-Key -> 422
+            r = c.post(f"/api/v1/agents/{agent_id}/versions/1/restore",
+                       json={"change_note": "restore"}, headers=editor_headers)
+            assert r.status_code == 422
+            # restore the pinned v1 -> 201, N+1 (v2), same config hash
+            r = c.post(f"/api/v1/agents/{agent_id}/versions/1/restore",
+                       json={"change_note": "restore v1"},
+                       headers={**editor_headers, "Idempotency-Key": "ag-restore-1234567890"})
+            assert r.status_code == 201, r.text
+            data = r.json()["data"]
+            assert data["version_no"] == 2
+            assert data["config_hash"] == agent["config_hash"]
+            # unknown pinned version -> 422 VERSION_NOT_FOUND
+            r = c.post(f"/api/v1/agents/{agent_id}/versions/99/restore",
+                       json={}, headers={**editor_headers, "Idempotency-Key": "ag-restore-1234567891"})
+            assert r.status_code == 422
+            assert "VERSION_NOT_FOUND" in r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_access_grants_routes(ctx):
+    """§12 agent access grants: owner invariant, no self-escalation, CAS."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-grantee','grantee','g@t.com','h','viewer',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+    agent = _create_agent(session, editor_id, model_version, app_schema, name="Grant Agent")
+    agent_id = agent["agent_id"]
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+    viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # viewer cannot list/create (role ceiling 403)
+            assert c.get(f"/api/v1/agents/{agent_id}/access-grants", headers=viewer_headers).status_code == 403
+            # owner invariant: granting the owner is 422
+            r = c.post(f"/api/v1/agents/{agent_id}/access-grants",
+                       json={"user_id": editor_id, "capabilities": ["run"]},
+                       headers={**editor_headers, "Idempotency-Key": "ag-grant-owner-00000001"})
+            assert r.status_code == 422 and "OWNER_INVARIANT" in r.text
+            # create a grant for the grantee -> 201
+            r = c.post(f"/api/v1/agents/{agent_id}/access-grants",
+                       json={"user_id": "u-grantee", "capabilities": ["view_config"]},
+                       headers={**editor_headers, "Idempotency-Key": "ag-grant-create-0000001"})
+            assert r.status_code == 201, r.text
+            grant = r.json()["data"]
+            grant_id = grant["id"]
+            assert grant["revision"] == 1
+            # list -> 200
+            r = c.get(f"/api/v1/agents/{agent_id}/access-grants", headers=editor_headers)
+            assert r.status_code == 200
+            assert "u-grantee" in [g["user_id"] for g in r.json()["data"]["items"]]
+            # CAS revise -> 201
+            r = c.post(f"/api/v1/agents/{agent_id}/access-grants/{grant_id}/revisions",
+                       json={"base_revision": 1, "capabilities": ["view_config", "run"]},
+                       headers={**editor_headers, "Idempotency-Key": "ag-grant-revise-0000001"})
+            assert r.status_code == 201, r.text
+            assert set(r.json()["data"]["capabilities"]) == {"view_config", "run"}
+            # stale revision -> 409
+            r = c.post(f"/api/v1/agents/{agent_id}/access-grants/{grant_id}/revisions",
+                       json={"base_revision": 1, "capabilities": ["run"]},
+                       headers={**editor_headers, "Idempotency-Key": "ag-grant-revise-0000002"})
+            assert r.status_code == 409 and "AGENT_GRANT_CONFLICT" in r.text
+            # CAS revoke -> 200
+            r = c.post(f"/api/v1/agents/{agent_id}/access-grants/{grant_id}/revoke",
+                       json={"base_revision": 2},
+                       headers={**editor_headers, "Idempotency-Key": "ag-grant-revoke-0000001"})
+            assert r.status_code == 200, r.text
+            assert r.json()["data"]["status"] == "revoked"
+            # revoked grant is gone from the active list
+            r = c.get(f"/api/v1/agents/{agent_id}/access-grants", headers=editor_headers)
+            assert "u-grantee" not in [g["user_id"] for g in r.json()["data"]["items"]]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reconciliation_detail_route(ctx):
+    """§12 reconciliation detail: `GET /admin/agent-reconciliations/{id}`."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    # the ctx schema is at 0005; agent_reconciliation_cases is a 0006 table —
+    # create it via the runtime migration for this fixture's schema
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # editor (non-admin) -> 403
+            assert c.get("/api/v1/admin/agent-reconciliations/none", headers=editor_headers).status_code == 403
+    finally:
+        app.dependency_overrides.clear()
