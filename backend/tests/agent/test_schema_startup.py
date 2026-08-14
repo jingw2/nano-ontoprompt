@@ -166,6 +166,9 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "entity_property_definitions",
         "ontology_migration_findings",
         "ontology_project_access_grants",
+        "model_config_versions",
+        "model_credentials",
+        "model_migration_findings",
     } <= after
 
 

@@ -43,8 +43,13 @@ NEW_0003_TABLES = {
 }
 # Every modeled table now exists in the 0003 migrated schema: the
 # LEGACY-SCHEMA mini-packet added entity_instances and audit_tasks, so the
-# registry diff must allow no extras.
-LATER_REVISION_TABLES = set()
+# registry diff must allow no extras.  P2A-MODEL's 0004 tables are modeled and
+# therefore present in metadata but not in a 0003-migrated schema.
+LATER_REVISION_TABLES = {
+    "model_config_versions",
+    "model_credentials",
+    "model_migration_findings",
+}
 
 
 def test_p1a_integrate_red_contract():

@@ -24,6 +24,11 @@ from app.models.entity_property_definition import (
     OntologyMigrationFinding,
 )
 from app.models.ontology_access import OntologyProjectAccessGrant
+from app.models.model_version import (
+    ModelConfigVersion,
+    ModelCredential,
+    ModelMigrationFinding,
+)
 
 
 def load_all_models():
@@ -43,6 +48,11 @@ def load_all_models():
         OntologyMigrationFinding,
     )
     from app.models.ontology_access import OntologyProjectAccessGrant  # noqa: F401
+    from app.models.model_version import (  # noqa: F401
+        ModelConfigVersion,
+        ModelCredential,
+        ModelMigrationFinding,
+    )
 
     return Base.metadata
 
@@ -70,5 +80,8 @@ __all__ = [
     "EntityPropertyDefinition",
     "OntologyMigrationFinding",
     "OntologyProjectAccessGrant",
+    "ModelConfigVersion",
+    "ModelCredential",
+    "ModelMigrationFinding",
     "load_all_models",
 ]
