@@ -9,7 +9,9 @@
     "prompts": "提示词",
     "models": "模型",
     "settings": "设置",
-    "logout": "退出"
+    "logout": "退出",
+    "agents": "智能体",
+    "reconciliation": "和解操作"
   },
   "data": {
     "title": "数据管理",

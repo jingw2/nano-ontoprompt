@@ -2,7 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
-import { refreshAccessToken } from '@/api/client'
+import { refreshAccessToken, apiClient } from '@/api/client'
+import type { User } from '@/types/auth'
 import Layout from '@/components/Layout'
 import LoginPage from '@/pages/login/LoginPage'
 import RegisterPage from '@/pages/register/RegisterPage'
@@ -24,6 +25,10 @@ import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
 import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import DataManagementPage from '@/pages/data-management/DataManagementPage'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
+import AgentListPage from '@/pages/agents/list/AgentListPage'
+import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
+import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
+import AgentReconciliationPage from '@/pages/admin/AgentReconciliationPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -34,23 +39,39 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return token ? <Layout>{children}</Layout> : <Navigate to="/login" replace />
 }
 
+// I-FRONTEND: admin-only guard for operator surfaces (reconciliation).
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore(s => s.user?.role)
+  if (role !== 'admin') return <Navigate to="/agents" replace />
+  return <>{children}</>
+}
+
 // Boot-time session restore: after a reload the in-memory bearer is gone, so
 // reacquire it once through the same-origin rotating refresh cookie (F0
-// contract) before letting the route guards decide. Logout revokes that
-// cookie server-side, so a cleared session stays logged out.
+// contract) — and re-fetch the profile so role-gated navigation (admin
+// surfaces, editor create affordances) survives the reload — before letting
+// the route guards decide. Logout revokes that cookie server-side, so a
+// cleared session stays logged out.
 function SessionRestore({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
-  const [checked, setChecked] = useState(token !== null)
+  const user = useAuthStore(s => s.user)
+  const setAuth = useAuthStore(s => s.setAuth)
+  const [checked, setChecked] = useState(token !== null && user !== null)
   useEffect(() => {
     if (checked) return
     let cancelled = false
-    refreshAccessToken().finally(() => {
+    refreshAccessToken().then(newToken => {
+      if (cancelled || !newToken) return
+      return apiClient.get<User>('/auth/profile').then(profile => {
+        if (!cancelled) setAuth(profile, newToken)
+      }).catch(() => {})
+    }).finally(() => {
       if (!cancelled) setChecked(true)
     })
     return () => {
       cancelled = true
     }
-  }, [checked])
+  }, [checked, setAuth])
   if (!checked) {
     return <div className="min-h-screen flex items-center justify-center text-gray-400">…</div>
   }
@@ -92,6 +113,12 @@ export default function App() {
           <Route path="/ontologies/:id/actions/:aid" element={<ProtectedRoute><ActionDetailPage /></ProtectedRoute>} />
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+
+          {/* ── Agent workspaces (I-FRONTEND registration) ── */}
+          <Route path="/agents" element={<ProtectedRoute><AgentListPage /></ProtectedRoute>} />
+          <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
+          <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
+          <Route path="/admin/agent-reconciliations" element={<ProtectedRoute><AdminRoute><AgentReconciliationPage /></AdminRoute></ProtectedRoute>} />
         </Routes>
         </SessionRestore>
       </BrowserRouter>

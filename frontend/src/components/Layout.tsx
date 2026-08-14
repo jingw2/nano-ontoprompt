@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard, Network, Cpu, Settings, LogOut,
-  Database, ChevronLeft, ChevronRight, GitBranch, Table2,
+  Database, ChevronLeft, ChevronRight, GitBranch, Table2, Bot, ShieldCheck,
 } from 'lucide-react'
 
 interface SubItem {
@@ -28,6 +28,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const { t } = useTranslation()
   const { lang, setLang } = useUIStore()
+  const role = useAuthStore(s => s.user?.role)
   const [collapsed, setCollapsed] = useState(false)
 
   const navItems: NavItem[] = [
@@ -42,8 +43,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       ],
     },
     { to: '/ontologies', icon: Network, label: t('nav.ontologies') },
+    { to: '/agents', icon: Bot, label: t('nav.agents', '智能体') },
     { to: '/models', icon: Cpu, label: t('nav.models') },
     { to: '/settings', icon: Settings, label: t('nav.settings') },
+    ...(role === 'admin'
+      ? [{ to: '/admin/agent-reconciliations', icon: ShieldCheck, label: t('nav.reconciliation', '和解操作') }]
+      : []),
   ]
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')

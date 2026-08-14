@@ -9,7 +9,9 @@
     "prompts": "Prompts",
     "models": "Models",
     "settings": "Settings",
-    "logout": "Logout"
+    "logout": "Logout",
+    "agents": "Agent",
+    "reconciliation": "Reconciliation"
   },
   "data": {
     "title": "Data Management",
