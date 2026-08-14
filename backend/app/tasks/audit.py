@@ -12,7 +12,7 @@ def run_audit(self, task_id: str):
     from app.models.logic import LogicRule
     from app.models.action import Action
     from app.services.audit_service import run_react_audit
-    from app.services.encryption_service import decrypt
+    from app.services.model_callers.extraction import resolve_llm_caller, ModelVersionUnavailableError
 
     db = SessionLocal()
     try:
@@ -31,10 +31,20 @@ def run_audit(self, task_id: str):
             db.commit()
             return
 
+        # P2A-CALLERS: pin the immutable active version; never fall back.
+        try:
+            caller = resolve_llm_caller(db, model_cfg.id)
+        except ModelVersionUnavailableError as exc:
+            task.status = "failed"
+            task.error = str(exc)
+            db.commit()
+            return
+
         model_config = {
-            "provider": model_cfg.provider,
-            "api_key": decrypt(model_cfg.api_key_encrypted or ""),
-            "api_base": model_cfg.api_base,
+            "provider": caller["provider"],
+            "api_key": caller["api_key"],
+            "api_base": caller["api_base"],
+            "model": caller["model"],
         }
 
         # Build compact ontology snapshot (only fields needed by audit tools)

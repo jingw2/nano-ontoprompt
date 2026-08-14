@@ -51,6 +51,25 @@ class ModelContractInvalid(Exception):
     """The supplied immutable model contract is incomplete or inconsistent."""
 
 
+def versioning_schema_present(db) -> bool:
+    """True when the 0004 model-versioning columns exist.  Pre-0004 schemas
+    (older binaries, unit harnesses) fall back to the legacy tagged path.
+    Uses only probes that cannot fail structurally so the caller's transaction
+    is never aborted or rolled back."""
+    try:
+        dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+        if dialect == "sqlite":
+            columns = db.execute(text("PRAGMA table_info(model_configs)")).mappings().all()
+            return any(row["name"] == "status" for row in columns)
+        row = db.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'model_configs' AND column_name = 'status'"
+        )).scalar_one_or_none()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _new_id() -> str:
     return str(uuid.uuid4())
 
@@ -67,6 +86,11 @@ def _resolve_fernet_key() -> str:
 
 def _decrypt_credential(ciphertext: str) -> str:
     return Fernet(_resolve_fernet_key().encode()).decrypt(ciphertext.encode()).decode()
+
+
+def decrypt_credential(ciphertext: str) -> str:
+    """Public credential decryption for immutable caller resolution."""
+    return _decrypt_credential(ciphertext)
 
 
 def _encrypt_credential(plaintext: str) -> str:
@@ -591,8 +615,106 @@ def _identity_state(session: Session, model_config_id: str):
 
 
 def _check_base_revision(row, base_revision) -> None:
-    if str(row["updated_at"]) != str(base_revision):
+    if base_revision is None:
+        return
+    base_dt = base_revision
+    if isinstance(base_revision, str):
+        from datetime import datetime as _dt
+        try:
+            base_dt = _dt.fromisoformat(base_revision.replace("Z", "+00:00"))
+        except ValueError:
+            base_dt = None
+    if base_dt is None or str(row["updated_at"]) != str(base_dt):
         raise ModelRevisionConflict("MODEL_REVISION_CONFLICT stale base_revision")
+
+
+def legacy_contract_for(model_names) -> list:
+    """Legacy-style immutable contract (verified fields unverified, never
+    guessed) for freshly created/migrated LLM configs."""
+    return _legacy_model_contract(model_names)
+
+
+def create_next_version(
+    session: Session,
+    model_config_id: str,
+    *,
+    base_version: int | None,
+    provider: str | None,
+    api_base: str | None,
+    options: dict,
+    model_contract: list,
+    credential_binding: str | None,
+    changelog: str | None = None,
+) -> "ModelConfigVersion":
+    """Behavioral N+1: creates the next immutable version, binds an optional
+    new credential and advances the active pointer.  Never updates old rows.
+    `base_version` (when given) must equal the current active version number."""
+    from app.models.model_version import ModelConfigVersion
+
+    row = _identity_state(session, model_config_id)
+    if not row or row["status"] != "active":
+        raise ModelVersionUnavailable(
+            f"MODEL_VERSION_UNAVAILABLE identity {model_config_id} is not active"
+        )
+    active = select_active_version(session, model_config_id)
+    if base_version is not None and base_version != active.version_no:
+        raise ModelRevisionConflict(
+            f"MODEL_REVISION_CONFLICT base_version {base_version} != active {active.version_no}"
+        )
+    if model_contract:
+        limit = _validate_contract(model_contract)
+    else:
+        model_contract = active.model_contract
+        limit = active.conservative_input_limit
+    next_provider = provider if provider is not None else active.provider
+    digest = behavior_hash(next_provider, api_base, options, model_contract)
+    version = ModelConfigVersion(
+        model_config_id=model_config_id,
+        version_no=active.version_no + 1,
+        provider=next_provider,
+        api_base=api_base,
+        options=options,
+        behavior_hash=digest,
+        model_contract=model_contract,
+        conservative_input_limit=limit,
+    )
+    session.add(version)
+    session.flush()
+    if credential_binding is not None:
+        session.execute(text(
+            "INSERT INTO model_credentials "
+            "(id, model_config_id, secret_encrypted, status, secret_revision, created_at) "
+            "VALUES (:id, :config, :secret, 'active', 1, now())"
+        ), {"id": _new_id(), "config": model_config_id, "secret": _encrypt_credential(credential_binding)})
+    session.execute(text(
+        "UPDATE model_configs SET active_version_id = :vid, updated_at = now() WHERE id = :id"
+    ), {"vid": version.id, "id": model_config_id})
+    session.flush()
+    return version
+
+
+def rotate_credential(session: Session, model_config_id: str, credential_binding: str) -> None:
+    """Revoke the active credential and bind a new one (secret_revision + 1).
+    Audited secret rotation never changes the behavior hash."""
+    current = session.execute(text(
+        "SELECT secret_revision FROM model_credentials WHERE model_config_id = :id "
+        "AND status = 'active' ORDER BY secret_revision DESC LIMIT 1"
+    ), {"id": model_config_id}).mappings().one_or_none()
+    next_revision = (current["secret_revision"] if current else 0) + 1
+    session.execute(text(
+        "UPDATE model_credentials SET status = 'revoked', revoked_at = now() "
+        "WHERE model_config_id = :id AND status = 'active'"
+    ), {"id": model_config_id})
+    session.execute(text(
+        "INSERT INTO model_credentials "
+        "(id, model_config_id, secret_encrypted, status, secret_revision, created_at) "
+        "VALUES (:id, :config, :secret, 'active', :rev, now())"
+    ), {"id": _new_id(), "config": model_config_id,
+        "secret": _encrypt_credential(credential_binding), "rev": next_revision})
+    session.execute(text(
+        "UPDATE model_configs SET updated_at = now() WHERE id = :id"
+    ), {"id": model_config_id})
+    session.flush()
 
 
 def remediate_blocked_identity(

@@ -18,18 +18,45 @@ class ExtractionModelPort(Protocol):
 
 
 class SqlExtractionModelPort:
-    """Default port: resolves a legacy `ModelConfig` by id (redacted)."""
+    """Default port: resolves a `ModelConfig` by id (redacted).
+
+    LLM configs resolve only when they have an active immutable behavior
+    version (blocked/archived/unversioned -> None, existence-hiding).
+    OCR/`other` configs stay on the legacy tagged path unchanged.
+    """
 
     def resolve_model(self, db: Session, model_id: str) -> dict | None:
+        from sqlalchemy import text
+
         from app.models.model_config import ModelConfig
+        from app.services.model_version import versioning_schema_present
 
         row = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
         if row is None:
+            return None
+        if (row.config_type or "llm") != "llm":
+            return {
+                "id": row.id,
+                "name": row.name,
+                "config_type": row.config_type,
+            }
+        if not versioning_schema_present(db):
+            # pre-0004 schema: legacy resolution
+            return {
+                "id": row.id,
+                "name": row.name,
+                "config_type": row.config_type,
+            }
+        state = db.execute(text(
+            "SELECT status, active_version_id FROM model_configs WHERE id = :id"
+        ), {"id": row.id}).mappings().one_or_none()
+        if not state or state["status"] != "active" or not state["active_version_id"]:
             return None
         return {
             "id": row.id,
             "name": row.name,
             "config_type": row.config_type,
+            "active_version_id": state["active_version_id"],
         }
 
 

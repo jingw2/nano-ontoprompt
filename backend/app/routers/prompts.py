@@ -355,17 +355,21 @@ def generate_prompt_template(
 ):
     """Use LLM to generate a prompt template for a given business domain"""
     from app.services.llm_service import _call_llm
-    from app.services.encryption_service import decrypt
+    from app.services.model_callers.extraction import resolve_llm_caller, ModelVersionUnavailableError
 
     model_cfg = db.query(ModelConfig).first()
     if not model_cfg:
         raise HTTPException(400, "No model configured. Please add a model in the Models page first.")
 
-    provider = model_cfg.provider
-    api_key = decrypt(model_cfg.api_key_encrypted or "")
-    api_base = model_cfg.api_base
-    models_list = model_cfg.models or []
-    model_name = models_list[0] if models_list else ""
+    try:
+        kwargs = resolve_llm_caller(db, model_cfg.id)
+    except ModelVersionUnavailableError:
+        raise HTTPException(409, "MODEL_VERSION_UNAVAILABLE: configure an active immutable model version first.")
+
+    provider = kwargs["provider"]
+    api_key = kwargs["api_key"]
+    api_base = kwargs["api_base"]
+    model_name = kwargs["model"]
     if not model_name:
         raise HTTPException(400, "Model name not configured.")
 
