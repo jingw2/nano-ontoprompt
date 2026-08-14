@@ -24,7 +24,10 @@ export default function LoginPage() {
       navigate('/')
     } catch (e: unknown) {
       console.error('login failed:', e)
-      setError((e as { response?: unknown })?.response ? t('auth.login_error') : t('auth.network_error'))
+      const err = e as { isAxiosError?: boolean; response?: unknown }
+      // The interceptor rejects with the response body for HTTP errors (no
+      // `response`/`isAxiosError`); only a real transport failure keeps them.
+      setError(err?.isAxiosError || err?.response ? t('auth.network_error') : t('auth.login_error'))
     } finally {
       setLoading(false)
     }
