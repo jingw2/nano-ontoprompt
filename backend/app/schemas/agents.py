@@ -81,3 +81,15 @@ class PromptGenerationOut(BaseModel):
     requester_id: str
     requested_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
+
+
+class ToolValidationRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    ontology_ids: List[str] = []
+
+
+class ToolValidationResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    valid: bool
+    blocked: List[str] = []
+    capabilities: List[str] = []

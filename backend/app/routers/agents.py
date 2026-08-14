@@ -27,6 +27,13 @@ from app.schemas.agents import (
     PromptGenerationDecisionRequest,
     PromptGenerationOut,
     PromptGenerationRequest,
+    ToolValidationRequest,
+    ToolValidationResponse,
+)
+from app.services.agent.catalog import (
+    agent_catalog_models,
+    agent_catalog_ontologies,
+    validate_agent_tools,
 )
 from app.services.agent.configuration import (
     AgentConfigConflict,
@@ -34,7 +41,7 @@ from app.services.agent.configuration import (
     create_agent,
     save_basic_version,
 )
-from app.services.agent.catalog import agent_catalog_models, agent_catalog_ontologies
+from app.services.agent.policy import AGENT_CAPABILITIES, ceiling_intersection
 from app.services.agent.prompt_generation import (
     PromptGenerationError,
     accept_prompt_generation,
@@ -212,6 +219,38 @@ def catalog_ontologies(db: Session = Depends(get_db), current_user: User = Depen
 @router.get("/catalog/models")
 def catalog_models(db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     return {"data": {"items": agent_catalog_models(db, {"discover"}), "next_cursor": None, "has_more": False}}
+
+
+@router.post("/{agent_id}/tool-validation")
+def validate_agent_tool_bindings(
+    agent_id: str, body: ToolValidationRequest, db: Session = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    """§12 catalog/config validation: the requested ontology bindings must be
+    discoverable by the principal and their data capabilities must fit the
+    agent's capability intersection (P2B-POLICY path, fail closed)."""
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_idempotency_key(x_idempotency_key)
+    blocked: list[str] = []
+    capabilities: list[str] = []
+    for ontology_id in body.ontology_ids:
+        discoverable = db.execute(text(
+            "SELECT 1 FROM ontology_project_access_grants "
+            "WHERE ontology_id = :o AND user_id = :u AND status = 'active' "
+            "AND capabilities::text LIKE '%\"discover\"%' LIMIT 1"
+        ), {"o": ontology_id, "u": current_user.id}).scalar_one_or_none()
+        if not discoverable:
+            blocked.append(ontology_id)
+            continue
+        required = frozenset({"read_schema", "read_instances", "traverse_relations"})
+        if not validate_agent_tools(frozenset(AGENT_CAPABILITIES) | required, required):
+            blocked.append(ontology_id)
+            continue
+        capabilities.extend(sorted(required & ceiling_intersection(required, current_user.role)))
+    valid = len(blocked) == 0
+    return {"data": ToolValidationResponse(valid=valid, blocked=blocked,
+                                           capabilities=sorted(set(capabilities))).model_dump()}
 
 
 @router.delete("/{agent_id}", status_code=204)
