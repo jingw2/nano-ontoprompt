@@ -43,12 +43,12 @@ from app.models.agent_config import (
     AgentExternalToolBinding,
     AgentRetrievalSource,
 )
+from app.models.agent_index_outbox import AgentIndexOutbox
 from app.models.agent_runtime import (
     AgentSession,
     AgentTurn,
     AgentMessage,
     AgentTurnDispatchOutbox,
-    AgentIndexOutbox,
     RuntimeArtifact,
     AgentTurnCheckpoint,
     AgentTurnCheckpointWrite,
@@ -102,12 +102,12 @@ def load_all_models():
         AgentExternalToolBinding,
         AgentRetrievalSource,
     )
+    from app.models.agent_index_outbox import AgentIndexOutbox  # noqa: F401
     from app.models.agent_runtime import (  # noqa: F401
         AgentSession,
         AgentTurn,
         AgentMessage,
         AgentTurnDispatchOutbox,
-        AgentIndexOutbox,
         RuntimeArtifact,
         AgentTurnCheckpoint,
         AgentTurnCheckpointWrite,
