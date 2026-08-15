@@ -56,14 +56,16 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
     (P2B-TOOLS runtime filtering + grounded-citation surface)."""
     extra: dict[str, Any] = {}
     if ontology_bindings:
-        extra["ontology_tool_selection"] = [
-            {
+        extra["ontology_tool_selection"] = []
+        for b in ontology_bindings:
+            entry = {
                 "ontology_id": b["ontology_id"],
                 "capabilities": list(b.get("capabilities") or []),
                 "selected_tools": list(b.get("selected_tools") or []),
             }
-            for b in ontology_bindings
-        ]
+            if b.get("enabled_categories") is not None:
+                entry["enabled_categories"] = list(b["enabled_categories"])
+            extra["ontology_tool_selection"].append(entry)
     if citations:
         extra["citations"] = list(citations)
     return TurnRuntimeContext(

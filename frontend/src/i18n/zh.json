@@ -442,7 +442,17 @@
       "saving": "保存中…",
       "save": "保存",
       "load_tools": "加载工具列表",
-      "no_tools": "该本体暂无可用工具（需先发布）"
+      "no_tools": "该本体暂无可用工具（需先发布）",
+      "categories": "工具类别",
+      "category_mcp": "MCP 外部工具",
+      "category_query": "查询",
+      "category_write": "写入",
+      "category_logic": "Logic 规则",
+      "category_action": "实例 Action",
+      "category_tools_note": "勾选的类别默认全部启用；取消勾选后该类别下的工具不会在本 Turn 中执行",
+      "select_ontology": "选择要绑定的已发布本体…",
+      "picker_note": "下拉选择已发布本体（编码 + 名称），绑定后默认启用全部工具类别",
+      "unbind": "解绑"
     }
   },
   "settings": {

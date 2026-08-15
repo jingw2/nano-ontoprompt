@@ -159,6 +159,9 @@ class AgentOntologyBinding(Base):
     )
     capabilities: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     allowlists: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # tool categories enabled for this bound ontology (MCP/query/write/logic/
+    # action); NULL = legacy binding filtered by selected_tools only
+    enabled_categories: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

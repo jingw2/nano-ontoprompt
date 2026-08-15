@@ -15,6 +15,7 @@ from app.services.agent.policy import (
     DATA_CAPABILITIES,
     ceiling_intersection,
 )
+from app.services.agent.tool_categories import enrich_tool_descriptors
 
 
 class CatalogEmpty(Exception):
@@ -98,7 +99,7 @@ def ontology_tool_catalog(db: Session, ontology_id: str) -> dict:
             "ontology_id": ontology_id,
             "published": True,
             "release_id": release["release_id"],
-            "tools": list(projection.get("tool_descriptors", [])),
+            "tools": enrich_tool_descriptors(list(projection.get("tool_descriptors", []))),
         }
     return {
         "ontology_id": ontology_id,
@@ -150,7 +151,7 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
             "capability": "execute_instance_action", "timeout_ms": 30_000, "result_limit": 1,
             "descriptor_hash": hashlib.sha256(f"action:{action['id']}".encode()).hexdigest(),
         })
-    return descriptors
+    return enrich_tool_descriptors(descriptors)
 
 
 def validate_binding_tools(db: Session, ontology_id: str, selected_tools: list[str]) -> bool:

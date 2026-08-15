@@ -49,6 +49,7 @@ from app.services.agent.catalog import (
     validate_agent_tools,
     validate_binding_tools,
 )
+from app.services.agent.tool_categories import validate_categories
 from app.services.agent.configuration import (
     AgentConfigConflict,
     AgentConfigError,
@@ -152,12 +153,34 @@ def _validate_ontology_bindings(db: Session, current_user: User, bindings: list[
         requested = frozenset(binding.get("capabilities") or [])
         if not requested:
             raise HTTPException(422, detail="AGENTS_BINDING_CAPABILITIES_REQUIRED")
+        if not validate_categories(binding.get("enabled_categories")):
+            raise HTTPException(422, detail="AGENTS_BINDING_CATEGORIES_INVALID")
         effective = ceiling_intersection(
             _ontology_data_capabilities(db, current_user.id, ontology_id), current_user.role)
         if not validate_agent_tools(effective, requested):
             raise HTTPException(422, detail="AGENTS_TOOLS_VALIDATION_FAILED")
         if not validate_binding_tools(db, ontology_id, binding.get("selected_tools") or []):
             raise HTTPException(422, detail="AGENTS_TOOLS_SELECTION_INVALID")
+
+
+def _version_out(row: dict) -> dict:
+    """Wire the AgentVersion DTO: legacy bindings without explicit
+    `enabled_categories` keep the pre-category response shape (the field is
+    omitted when None so old clients and exact-shape consumers are stable)."""
+    for binding in row.get("ontology_bindings") or []:
+        if binding.get("enabled_categories") is None:
+            binding.pop("enabled_categories", None)
+    return row
+
+
+def _version_dump(row: dict) -> dict:
+    """model_dump() re-adds default-None fields, so strip them after the
+    pydantic dump for legacy bindings (wire-shape backward compatibility)."""
+    out = AgentVersionOut(**row).model_dump()
+    for binding in out.get("ontology_bindings") or []:
+        if binding.get("enabled_categories") is None:
+            binding.pop("enabled_categories", None)
+    return out
 
 
 def _agent_out(db: Session, agent_id: str, user_id: str | None = None) -> dict:
@@ -374,7 +397,7 @@ def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_us
         item["ontology_bindings"] = list(get_version(db, agent_id=agent_id,
                                                      version_no=row["version_no"])["ontology_bindings"])
         items.append(item)
-    return {"data": {"items": [AgentVersionOut(**item).model_dump() for item in items],
+    return {"data": {"items": [_version_dump(item) for item in items],
                      "next_cursor": None, "has_more": False}}
 
 
@@ -385,7 +408,7 @@ def get_agent_version_route(agent_id: str, version_no: int, db: Session = Depend
     row = get_version(db, agent_id=agent_id, version_no=version_no)
     if row is None:
         raise HTTPException(404, detail="Not found")
-    return {"data": AgentVersionOut(**row).model_dump()}
+    return {"data": _version_dump(dict(_version_out(row)))}
 
 
 @router.post("/{agent_id}/versions/{version_no}/restore", status_code=201)

@@ -1914,7 +1914,7 @@
         "type": "object"
       },
       "OntologyBindingPatch": {
-        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).",
+        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.",
         "properties": {
           "allowlists": {
             "default": {},
@@ -1928,6 +1928,20 @@
             },
             "title": "Capabilities",
             "type": "array"
+          },
+          "enabled_categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled Categories"
           },
           "ontology_id": {
             "title": "Ontology Id",

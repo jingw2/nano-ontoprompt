@@ -442,7 +442,17 @@
       "saving": "Saving…",
       "save": "Save",
       "load_tools": "Load tool list",
-      "no_tools": "No tools available for this ontology yet (publish it first)"
+      "no_tools": "No tools available for this ontology yet (publish it first)",
+      "categories": "Tool Categories",
+      "category_mcp": "MCP external tools",
+      "category_query": "Query",
+      "category_write": "Write",
+      "category_logic": "Logic rules",
+      "category_action": "Instance actions",
+      "category_tools_note": "Enabled categories default to ALL; unchecked categories' tools are not executed in a Turn",
+      "select_ontology": "Select a published ontology to bind…",
+      "picker_note": "Pick a published ontology (code + name); all tool categories default to enabled after binding",
+      "unbind": "Unbind"
     }
   },
   "settings": {

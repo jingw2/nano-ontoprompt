@@ -65,7 +65,7 @@ def ctx():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0008_agent_tool_selection").returncode == 0
+    assert _alembic(schema, "upgrade", "0009_agent_category_selection").returncode == 0
     Session = sessionmaker(bind=create_engine(_scoped_url(schema)))
     with Session() as session:
         editor_id = str(uuid.uuid4())
@@ -623,9 +623,11 @@ def test_reconciliation_detail_route(ctx):
         app.dependency_overrides.clear()
 
 
-def _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools", with_logic=True):
+def _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools", with_logic=True,
+                                  rule_id="rule-1", action_id="action-1"):
     """Published ontology with one enabled Logic rule + one enabled Action +
-    project grant + data grant (P2B-TOOLS fixture)."""
+    project grant + data grant (P2B-TOOLS fixture).  `rule_id`/`action_id`
+    allow multiple ontologies in one schema (PKs are global)."""
     session.execute(text(
         "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
         "VALUES (:o,'Tool Ontology','test','v1','created',:u,now(),now(),:d,1)"
@@ -644,11 +646,11 @@ def _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools", wit
         session.execute(text(
             "INSERT INTO v2_ontology_logic_rules (id, ontology_id, name, logic_type, description, target_entity_type, expression, severity, enabled, status, version, created_at, updated_at) "
             "VALUES (:id, :o, 'Rule: completeness', 'validation', 'd', 'Order', CAST(:expr AS json), 'warning', true, 'draft', 1, now(), now())"
-        ), {"id": "rule-1", "o": ontology_id, "expr": '{"column": "table_index"}'})
+        ), {"id": rule_id, "o": ontology_id, "expr": '{"column": "table_index"}'})
     session.execute(text(
         "INSERT INTO v2_ontology_action_types (id, ontology_id, name, description, target_entity_type, action_category, parameters, effects, enabled, status, version, created_at, updated_at) "
         "VALUES (:id, :o, 'Create Order', 'create', 'Order', 'crud', CAST(:params AS json), CAST(:effects AS json), true, 'draft', 1, now(), now())"
-    ), {"id": "action-1", "o": ontology_id,
+    ), {"id": action_id, "o": ontology_id,
         "params": '[{"name": "data", "type": "object", "required": true}]',
         "effects": '[{"action": "create_object", "entity_type": "Order"}]'})
     session.commit()
@@ -832,3 +834,97 @@ def test_runtime_context_carries_tool_selection(ctx):
     assert snap_event.payload["release_id"] == cite["release_id"]
     assert snap_event.payload["citations"][0]["type"] == "release"
     assert snap_event.payload["citations"][0]["entities"] == cite["entities"]
+
+
+def test_agent_multi_ontology_category_selection(ctx):
+    """P2B-TOOLS categories: an Agent binds MULTIPLE ontologies, each with its
+    own per-ontology `enabled_categories` (default ALL), persisted in the
+    immutable version tree and round-tripped by the version API; the exposure
+    API derives a `category` per tool descriptor."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools")
+    _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools2",
+                                  rule_id="rule-2", action_id="action-2")
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # exposure: each descriptor carries its derived category
+            r = c.get("/api/v1/ontologies/o-tools/tools", headers=editor_headers)
+            assert r.status_code == 200, r.text
+            by_id = {t["descriptor_id"]: t for t in r.json()["data"]["tools"]}
+            assert by_id["query:o-tools"]["category"] == "query"
+            assert by_id["logic:rule-1"]["category"] == "logic"
+            assert by_id["action:action-1"]["category"] == "action"
+
+            # create with TWO bindings: one category-mode, one legacy
+            r = c.post("/api/v1/agents", json={
+                "name": "Multi Ontology Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [
+                    {
+                        "ontology_id": "o-tools",
+                        "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                        "allowlists": {},
+                        "selected_tools": ["query:o-tools"],
+                        "enabled_categories": ["query", "logic"],
+                    },
+                    {
+                        "ontology_id": "o-tools2",
+                        "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                        "allowlists": {},
+                        "selected_tools": ["query:o-tools2", "logic:rule-2"],
+                    },
+                ],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-multi-cat-create-0001"})
+            assert r.status_code == 201, r.text
+            agent_id = r.json()["data"]["agent_id"]
+            v1 = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert len(v1["ontology_bindings"]) == 2
+            by_onto = {b["ontology_id"]: b for b in v1["ontology_bindings"]}
+            # category mode: enabled_categories persisted and exposed
+            assert by_onto["o-tools"]["enabled_categories"] == ["query", "logic"]
+            assert by_onto["o-tools"]["selected_tools"] == ["query:o-tools"]
+            # legacy binding: enabled_categories omitted from the wire shape
+            assert "enabled_categories" not in by_onto["o-tools2"]
+
+            # unknown categories are rejected fail closed
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 1, "name": "Multi Ontology Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                    "selected_tools": ["query:o-tools"],
+                    "enabled_categories": ["query", "nonsense"],
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-multi-cat-bad-000001"})
+            assert r.status_code == 422
+            assert "AGENTS_BINDING_CATEGORIES_INVALID" in r.text
+
+            # runtime filter: category mode uses the categories; the legacy
+            # binding keeps the selected_tools-only filter
+            from app.services.agent.tool_categories import tool_enabled
+            from app.services.agent.catalog import ontology_tool_catalog
+            desc = {d["descriptor_id"]: d for d in ontology_tool_catalog(session, "o-tools")["tools"]}
+            cat_binding = dict(by_onto["o-tools"])
+            assert tool_enabled(cat_binding, desc["query:o-tools"]) is True
+            assert tool_enabled(cat_binding, desc["logic:rule-1"]) is True
+            assert tool_enabled(cat_binding, desc["action:action-1"]) is False  # action category off
+            # an empty category list enables nothing
+            none_binding = dict(cat_binding, enabled_categories=[])
+            assert tool_enabled(none_binding, desc["query:o-tools"]) is False
+            legacy_desc = {d["descriptor_id"]: d for d in ontology_tool_catalog(session, "o-tools2")["tools"]}
+            legacy_binding = dict(by_onto["o-tools2"])
+            assert tool_enabled(legacy_binding, legacy_desc["query:o-tools2"]) is True
+            assert tool_enabled(legacy_binding, legacy_desc["logic:rule-2"]) is True  # selected
+            assert tool_enabled(legacy_binding, legacy_desc["action:action-2"]) is False  # not selected
+    finally:
+        app.dependency_overrides.clear()

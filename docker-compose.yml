@@ -21,14 +21,14 @@ services:
     env_file: .env
     depends_on: [db, redis]
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0008_agent_tool_selection && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0009_agent_category_selection && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   celery_worker:
     build: ./backend
     env_file: .env
     depends_on: [db, redis]
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0008_agent_tool_selection && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0009_agent_category_selection && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info"
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -85,7 +85,7 @@ services:
 
   celery_beat:
     build: ./backend
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0008_agent_tool_selection && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction beat --loglevel=info"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0009_agent_category_selection && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction beat --loglevel=info"
     env_file: .env
     depends_on: [db, redis]
     volumes:

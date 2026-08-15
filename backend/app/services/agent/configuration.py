@@ -37,6 +37,23 @@ def _canonical(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _normalize_binding(binding: dict) -> dict:
+    """Canonical binding shape for hashing: always includes ontology_id,
+    capabilities, allowlists and selected_tools; `enabled_categories` is
+    included only when present (None keeps the legacy selected_tools-only
+    filter).  Old-version hashes stay byte-identical and new saves are
+    deterministic regardless of client shape."""
+    normalized = {
+        "ontology_id": binding["ontology_id"],
+        "capabilities": list(binding.get("capabilities") or []),
+        "allowlists": binding.get("allowlists") or {},
+        "selected_tools": list(binding.get("selected_tools") or []),
+    }
+    if binding.get("enabled_categories") is not None:
+        normalized["enabled_categories"] = list(binding["enabled_categories"])
+    return normalized
+
+
 def _audit(db: Session, *, actor_id: str, agent_id: str, operation: str, payload: dict) -> None:
     domain = db.execute(text(
         "SELECT security_domain_id FROM users WHERE id = :id"
@@ -70,8 +87,8 @@ def _verify_model_version(db: Session, model_config_version_id: str, model_name:
 
 def _child_tree(db: Session, agent_version_id: str) -> dict:
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists, selected_tools FROM agent_ontology_bindings "
-        "WHERE agent_version_id = :id ORDER BY ontology_id"
+        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories "
+        "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": agent_version_id}).mappings().all()
     tools = db.execute(text(
         "SELECT tool_connection_version_id, alias FROM agent_external_tool_bindings "
@@ -82,7 +99,7 @@ def _child_tree(db: Session, agent_version_id: str) -> dict:
         "WHERE agent_version_id = :id ORDER BY source_id"
     ), {"id": agent_version_id}).mappings().all()
     return {
-        "ontology_bindings": [dict(b) for b in bindings],
+        "ontology_bindings": [_normalize_binding(dict(b)) for b in bindings],
         "external_tool_bindings": [dict(t) for t in tools],
         "retrieval_sources": [dict(s) for s in sources],
     }
@@ -113,7 +130,7 @@ def create_agent(
 ) -> dict:
     """One transaction: Agent + AgentVersion v1 + owner grant + audit."""
     _verify_model_version(db, default_model_config_version_id, default_model_name)
-    bindings = [dict(b) for b in (ontology_bindings or [])]
+    bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent_id = _new_id()
     version_id = _new_id()
     digest = config_hash(
@@ -159,11 +176,11 @@ def create_agent(
 
 def _clone_child_rows(db: Session, source_version_id: str, target_version_id: str) -> None:
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists, selected_tools "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories "
         "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": source_version_id}).mappings().all()
     for row in bindings:
-        _insert_binding(db, target_version_id, dict(row))
+        _insert_binding(db, target_version_id, _normalize_binding(dict(row)))
     tools = db.execute(text(
         "SELECT tool_connection_version_id, alias FROM agent_external_tool_bindings "
         "WHERE agent_version_id = :id ORDER BY alias"
@@ -191,16 +208,20 @@ def _clone_child_rows(db: Session, source_version_id: str, target_version_id: st
 def _insert_binding(db: Session, agent_version_id: str, binding: dict) -> None:
     """Insert one immutable ontology-binding child row.  JSON columns are
     passed as canonical strings with an explicit json cast (works on both
-    PostgreSQL and SQLite text() execution)."""
+    PostgreSQL and SQLite text() execution).  `enabled_categories` NULL keeps
+    the legacy selected_tools-only filter for pre-category bindings."""
     db.execute(text(
         "INSERT INTO agent_ontology_bindings "
-        "(id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, created_at) "
-        "VALUES (:id, :av, :o, CAST(:caps AS json), CAST(:al AS json), CAST(:st AS json), now())"
+        "(id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, "
+        " enabled_categories, created_at) "
+        "VALUES (:id, :av, :o, CAST(:caps AS json), CAST(:al AS json), CAST(:st AS json), "
+        " :ec, now())"
     ), {
         "id": _new_id(), "av": agent_version_id, "o": binding["ontology_id"],
         "caps": _canonical(binding.get("capabilities") or []),
         "al": _canonical(binding.get("allowlists") or {}),
         "st": _canonical(binding.get("selected_tools") or []),
+        "ec": _canonical(binding["enabled_categories"]) if binding.get("enabled_categories") is not None else None,
     })
 
 
@@ -217,9 +238,9 @@ def save_basic_version(
 
     `ontology_bindings` (when given) REPLACES the ontology-binding child rows of
     the new version with the complete requested set (each row carries the bound
-    ontology plus the enabled tool selection)."""
+    ontology plus the enabled tool selection/categories)."""
     _verify_model_version(db, default_model_config_version_id, default_model_name)
-    bindings = [dict(b) for b in (ontology_bindings or [])]
+    bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent = db.execute(text(
         "SELECT id, status, active_version_id FROM agents WHERE id = :id FOR UPDATE"
     ), {"id": agent_id}).mappings().one_or_none()

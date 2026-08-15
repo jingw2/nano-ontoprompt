@@ -6,11 +6,15 @@ from datetime import datetime
 class OntologyBindingPatch(BaseModel):
     """One immutable ontology-binding child row: the bound ontology, the data
     capabilities the Agent may use, and the exposed tool descriptors enabled
-    for it (query / Logic / Action descriptor ids)."""
+    for it (query / Logic / Action descriptor ids).  `enabled_categories`
+    (MCP/query/write/logic/action) is the category-level enablement — a
+    present value switches the runtime to category-mode filtering; None keeps
+    the legacy `selected_tools`-only filter."""
     ontology_id: str
     capabilities: List[str] = []
     allowlists: dict = {}
     selected_tools: List[str] = []
+    enabled_categories: Optional[List[str]] = None
 
 
 class AgentCreateRequest(BaseModel):

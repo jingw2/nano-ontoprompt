@@ -23,7 +23,7 @@ SCRIPTS = BACKEND_DIR / "scripts"
 COMPOSE_FILES = [REPO_ROOT / "docker-compose.yml", REPO_ROOT / "docker-compose.v2.yml",
                  REPO_ROOT / "docker-compose.agent.yml"]
 # the ops Alembic head the signed manifest must pin
-OPS_ALEMBIC_HEAD = "0008_agent_tool_selection"
+OPS_ALEMBIC_HEAD = "0009_agent_category_selection"
 
 
 def test_e0_images_red_contract():

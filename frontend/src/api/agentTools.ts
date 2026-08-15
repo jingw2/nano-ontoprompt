@@ -9,7 +9,7 @@ export interface PublishedOntology {
 export interface ToolDescriptor {
   descriptor_id: string
   version: number
-  source_kind: 'builtin' | 'logic' | 'action'
+  source_kind: 'builtin' | 'logic' | 'action' | 'mcp'
   source_id: string
   input_schema?: Record<string, unknown>
   output_schema?: Record<string, unknown>
@@ -17,7 +17,12 @@ export interface ToolDescriptor {
   timeout_ms: number
   result_limit: number
   descriptor_hash: string
+  category?: ToolCategory
 }
+
+export type ToolCategory = 'mcp' | 'query' | 'write' | 'logic' | 'action'
+
+export const TOOL_CATEGORIES: ToolCategory[] = ['mcp', 'query', 'write', 'logic', 'action']
 
 export interface OntologyTools {
   ontology_id: string
@@ -31,6 +36,10 @@ export interface OntologyBinding {
   capabilities: string[]
   allowlists: Record<string, unknown>
   selected_tools: string[]
+  /** Category-level enablement (MCP/query/write/logic/action). Absent/null
+   * keeps the legacy selected_tools-only filter; a present list (possibly
+   * empty) switches the runtime to category-mode filtering. */
+  enabled_categories?: ToolCategory[] | null
 }
 
 export interface ToolValidationRequest {
