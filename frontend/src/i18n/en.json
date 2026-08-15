@@ -391,7 +391,19 @@
       "retry": "Retry",
       "succeeded": "Confirmed result",
       "title": "Agent Reconciliation",
-      "turn": "Turn"
+      "turn": "Turn",
+      "help_cas": "Every submission runs a version CAS; if the case was concurrently modified (revision conflict) the submission fails with a notice.",
+      "help_failed": "Confirmed not-run: the external side effect did not happen (requires a provider terminal-failure reference).",
+      "help_hide": "Hide help",
+      "help_how": "Open a case to inspect its evidence and timeline → record provider evidence → choose a disposition:",
+      "help_how_title": "How to use it",
+      "help_retry": "Not accepted, retry: with conclusive non-acceptance evidence and an unchanged idempotent descriptor, the Turn is re-queued with a new dispatch generation.",
+      "help_show": "Help: what is reconciliation?",
+      "help_succeeded": "Confirmed succeeded: the external side effect did happen (requires provider execution reference/result evidence).",
+      "help_what": "When a tool/action execution has an unknown final outcome, the system never auto-replays; it opens a reconciliation case for an admin to confirm the outcome from external side-effect evidence.",
+      "help_what_title": "What is reconciliation",
+      "help_when": "A non-idempotent execution returns an unknown outcome: tool call result lost, execution fence lost, or an unknown result.",
+      "help_when_title": "When it appears"
     },
     "tools": {
       "available_later": "Available later",

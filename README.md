@@ -48,6 +48,11 @@ In nano-ontoprompt, every ontology is made of these building blocks:
 - **Tool-calling architecture** — 8 built-in inspection tools (summary, coverage, ref-check, pattern inference) that the agent can chain together
 - **Findings report** — severity-classified issues with actionable fix suggestions, persisted as audit tasks
 
+### Agent Execution (runtime)
+- **Conversational Agent application** — sessions, reliable SSE streaming with reconnect/replay, clarification, and action approval flows
+- **Ontology-grounded tool access** — released-ontology index, run/data grants, and observable lineage citations (no chain-of-thought)
+- **Reconciliation** — when a tool/action execution's outcome is unknown (lost result, lost fence, unknown result), an admin confirms the external side effect as succeeded / not-run / retry from evidence. Never auto-replays. See [Agent Reconciliation Guide](./docs/agent-reconciliation.md) for a bilingual usage walkthrough.
+
 ### Platform
 - **LLM extraction** — any OpenAI, Anthropic, or OpenAI-compatible model; defense-in-depth against fuzzy relation types
 - **LiteLLM proxy** — optional LiteLLM integration for unified API-key management and cost tracking across multiple LLM providers

@@ -82,6 +82,30 @@ describe('P5-OPSUI', () => {
     })
   })
 
+  it('shows a collapsible bilingual help block explaining reconciliation', async () => {
+    server.use(
+      http.get('*/api/v1/admin/agent-reconciliations*', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
+    render(<AgentReconciliationPage />)
+    await screen.findByTestId('reconciliation-empty')
+    // collapsed by default
+    expect(screen.queryByTestId('reconciliation-help')).toBeNull()
+    await userEvent.click(screen.getByTestId('reconciliation-help-toggle'))
+    const help = screen.getByTestId('reconciliation-help')
+    // what / when / how sections and the three dispositions are explained
+    expect(help.textContent).toContain('什么是和解')
+    expect(help.textContent).toContain('何时出现')
+    expect(help.textContent).toContain('如何使用')
+    expect(help.textContent).toContain('确认已成功')
+    expect(help.textContent).toContain('确认未执行')
+    expect(help.textContent).toContain('未执行可重试')
+    expect(help.textContent).toContain('CAS')
+    // collapses again
+    await userEvent.click(screen.getByTestId('reconciliation-help-toggle'))
+    expect(screen.queryByTestId('reconciliation-help')).toBeNull()
+  })
+
   it('denies non-operators and surfaces stale CAS conflicts', async () => {
     server.use(
       http.get('*/api/v1/admin/agent-reconciliations*', () =>

@@ -20,6 +20,7 @@ export default function AgentReconciliationPage() {
   const [evidence, setEvidence] = useState('')
   const [resolving, setResolving] = useState(false)
   const [conflict, setConflict] = useState('')
+  const [helpOpen, setHelpOpen] = useState(false)
 
   const load = useCallback((status: string) => {
     void Promise.resolve().then(() => {
@@ -86,6 +87,10 @@ export default function AgentReconciliationPage() {
     <div data-testid="agent-reconciliation-page">
       <div className="flex items-center gap-2 mb-3">
         <h2 className="text-base font-medium">{t('agent.recon.title', 'Agent 和解操作')}</h2>
+        <button type="button" onClick={() => setHelpOpen(o => !o)}
+          className="ml-2 text-xs text-gray-500 underline hover:text-gray-700" data-testid="reconciliation-help-toggle">
+          {helpOpen ? t('agent.recon.help_hide', '收起帮助') : t('agent.recon.help_show', '帮助：什么是和解？')}
+        </button>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           className="ml-auto border rounded px-2 py-1 text-sm" data-testid="reconciliation-status-filter">
           <option value="open">{t('agent.recon.open', 'open')}</option>
@@ -94,6 +99,23 @@ export default function AgentReconciliationPage() {
           <option value="resolved_retry">resolved_retry</option>
         </select>
       </div>
+
+      {helpOpen && (
+        <div className="mb-4 border rounded-lg bg-gray-50 p-3 text-xs text-gray-600 space-y-2" data-testid="reconciliation-help">
+          <p><strong>{t('agent.recon.help_what_title', '什么是和解')}</strong> —
+            {t('agent.recon.help_what', '当一次工具/动作执行的最终结果不确定时，系统不会自动重放，而是生成一条「和解」案件，由管理员根据外部副作用证据确认结果。')}</p>
+          <p><strong>{t('agent.recon.help_when_title', '何时出现')}</strong> —
+            {t('agent.recon.help_when', '非幂等执行返回未知结果时：工具调用结果丢失、执行围栏（fence）丢失、或返回未知结果。')}</p>
+          <p><strong>{t('agent.recon.help_how_title', '如何使用')}</strong> —
+            {t('agent.recon.help_how', '展开案件查看证据与时间线 → 填写提供方证据 → 选择处置方式：')}</p>
+          <ul className="list-disc pl-4 space-y-1">
+            <li>{t('agent.recon.help_succeeded', '确认已成功：外部副作用确实发生（需提供方执行引用/结果等证据）。')}</li>
+            <li>{t('agent.recon.help_failed', '确认未执行：外部副作用未发生（需提供方最终失败引用）。')}</li>
+            <li>{t('agent.recon.help_retry', '未执行可重试：有确凿的未接受证据且幂等描述符未变化时，以新的派发代号重新排队该 Turn。')}</li>
+          </ul>
+          <p className="text-gray-500">{t('agent.recon.help_cas', '每次提交都按版本 CAS 校验；若案件被并发修改（版本冲突），提交会失败并提示。')}</p>
+        </div>
+      )}
 
       {cases.length === 0 ? (
         <p className="text-sm text-gray-400" data-testid="reconciliation-empty">{t('agent.recon.empty', '暂无案件')}</p>
