@@ -44,7 +44,12 @@ def agent_catalog_models(session: Session, agent_capabilities: frozenset[str]) -
     if not ceiling_intersection(agent_capabilities, None) and "discover" not in agent_capabilities:
         return []
     rows = session.execute(text(
-        "SELECT mc.id, mc.name, mc.provider, v.version_no, v.behavior_hash, v.conservative_input_limit "
+        # `id` is the ACTIVE model_config_versions.id — the exact value the Agent
+        # configuration API pins as default_model_config_version_id.  Returning the
+        # identity (model_configs.id) here made create/save fail with
+        # MODEL_VERSION_UNAVAILABLE and would store a non-version id in the
+        # immutable version row.
+        "SELECT v.id AS id, mc.name, mc.provider, v.version_no, v.behavior_hash, v.conservative_input_limit "
         "FROM model_configs mc "
         "JOIN model_config_versions v ON v.id = mc.active_version_id "
         "WHERE mc.config_type = 'llm' AND mc.status = 'active' AND mc.active_version_id IS NOT NULL "

@@ -211,6 +211,46 @@ def test_agent_catalog_filters(ctx):
         app.dependency_overrides.clear()
 
 
+def test_agent_catalog_model_id_is_a_version_id(ctx):
+    """Regression (Issue 1): the catalog `id` must be a model_config_versions.id
+    (the active version), not the model_configs identity — create/save pin it as
+    default_model_config_version_id, which the runtime resolves by version id."""
+    from fastapi.testclient import TestClient
+    from app.services.agent.configuration import create_agent
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            items = c.get("/api/v1/agents/catalog/models", headers=editor_headers).json()["data"]["items"]
+            assert items, "catalog must expose at least one model"
+            for item in items:
+                row = session.execute(text(
+                    "SELECT v.id, v.model_config_id, mc.active_version_id "
+                    "FROM model_config_versions v JOIN model_configs mc ON mc.id = v.model_config_id "
+                    "WHERE v.id = :id"
+                ), {"id": item["id"]}).mappings().one_or_none()
+                assert row is not None, f"catalog id {item['id']} is not a model_config_versions.id"
+                assert row["active_version_id"] == item["id"], \
+                    f"catalog id {item['id']} is not the active version of its identity"
+            # a catalog id must be directly usable by the create transaction
+            catalog_id = items[0]["id"]
+            result = create_agent(
+                session, actor_id=editor_id, name="Catalog Agent", description="d",
+                default_model_config_version_id=catalog_id, default_model_name=items[0]["name"],
+                system_prompt="p", memory_settings={},
+                application_state_schema_version_id=app_schema,
+            )
+            assert result["version_no"] == 1
+            assert session.execute(text(
+                "SELECT default_model_config_version_id FROM agent_versions WHERE id = :id"
+            ), {"id": result["version_id"]}).scalar_one() == catalog_id
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_agent_list_contract_and_archive(ctx):
     """I-5: cursor pagination (limit 1-100 default 50), q/id/name/UTC date
     filters, stable created_at DESC, id DESC ordering, and DELETE archive 204."""
