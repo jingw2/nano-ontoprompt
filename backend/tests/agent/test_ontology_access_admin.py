@@ -198,6 +198,56 @@ def test_zz_backfill_assigns_creator_grants_and_recovery_findings():
         engine.dispose()
 
 
+def test_zz_backfill_creator_grants_repairs_bypassed_rows(access_db):
+    """Issue-1 repair path: ontologies written without the creator grant get one."""
+    from app.services.ontology_access import CAPABILITIES, backfill_creator_grants
+
+    Session, _ = access_db
+    admin = _insert_user(Session, "repair-admin", role="admin")
+    editor = _insert_user(Session, "repair-editor", role="editor")
+    viewer = _insert_user(Session, "repair-viewer", role="viewer")
+    inactive = _insert_user(Session, "repair-inactive", role="admin", active=False)
+    admin_onto = _insert_ontology(Session, "Repair admin ontology", admin)
+    editor_onto = _insert_ontology(Session, "Repair editor ontology", editor)
+    viewer_onto = _insert_ontology(Session, "Repair viewer ontology", viewer)
+    inactive_onto = _insert_ontology(Session, "Repair inactive ontology", inactive)
+
+    with Session() as session:
+        # no grants exist yet (direct-SQL rows bypass the creator-grant path)
+        assert session.execute(text(
+            "SELECT count(*) FROM ontology_project_access_grants"
+        )).scalar_one() == 0
+        report = backfill_creator_grants(session)
+        assert report["editor_or_admin_grants"] == 2
+        assert report["viewer_grants"] == 1
+        assert report["grant_rows_inserted"] == 3
+        # viewer and inactive creators both need owner recovery (mirrors 0003)
+        assert report["owner_recovery_findings_inserted"] == 2
+
+    with Session() as session:
+        admin_grant = _current_grant_row(Session, admin_onto, admin)
+        assert admin_grant is not None and admin_grant["status"] == "active"
+        assert set(admin_grant["capabilities"]) == set(CAPABILITIES)
+        editor_grant = _current_grant_row(Session, editor_onto, editor)
+        assert set(editor_grant["capabilities"]) == set(CAPABILITIES)
+        viewer_grant = _current_grant_row(Session, viewer_onto, viewer)
+        assert set(viewer_grant["capabilities"]) == {"discover", "read"}
+        assert _current_grant_row(Session, inactive_onto, inactive) is None
+        findings = session.execute(text(
+            "SELECT ontology_id, code, status FROM ontology_migration_findings "
+            "WHERE kind='owner'"
+        )).mappings().all()
+        assert {row["ontology_id"] for row in findings} == {viewer_onto, inactive_onto}
+        assert all(row["code"] == "ONTOLOGY_OWNER_RECOVERY_REQUIRED" for row in findings)
+        assert all(row["status"] == "open" for row in findings)
+
+    # idempotent: a second run inserts nothing
+    with Session() as session:
+        report = backfill_creator_grants(session)
+        assert report["grant_rows_inserted"] == 0
+        assert report["owner_recovery_findings_inserted"] == 0
+
+
 def test_zz_grant_cas_revision_ledger_no_self_escalation_and_revoke(access_db):
     from app.models.user import User
     from app.services.ontology_access import (

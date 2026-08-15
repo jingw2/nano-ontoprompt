@@ -37,6 +37,26 @@ describe('P1D-UI', () => {
     expect(await screen.findByText('加载中...')).toBeTruthy()
   })
 
+  it('surfaces the releases load failure with a retry instead of infinite loading', async () => {
+    let fail = true
+    server.use(
+      http.get('*/api/v1/ontologies/onto-1/releases', () => {
+        if (fail) return HttpResponse.json({ error: { code: 'ONTOLOGY_NOT_FOUND' } }, { status: 404 })
+        return emptyReleases()
+      }),
+    )
+    const { default: Panel } = await import('./OntologyPublicationPanel')
+    render(<Panel ontologyId="onto-1" status="created" />)
+    // error state (with the RELEASES_LOAD_FAILED message + retry) replaces the spinner
+    expect(await screen.findByText('发布记录加载失败')).toBeTruthy()
+    expect(screen.queryByText('加载中...')).toBeNull()
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+    // retry refetches; once releases load, the lifecycle controls render
+    fail = false
+    await userEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('button', { name: '发布' })).toBeTruthy()
+  })
+
   it('shows published + pending-changes badges from releases and dirty prop', async () => {
     server.use(
       http.get('*/api/v1/ontologies/onto-1/releases', () =>

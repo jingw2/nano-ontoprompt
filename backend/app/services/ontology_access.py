@@ -135,6 +135,83 @@ def creator_grant(db: Session, ontology_id: str, user) -> dict:
     return _row_dict(current_grant(db, ontology_id, user.id))
 
 
+def backfill_creator_grants(db: Session) -> dict:
+    """Repair path: insert missing creator grants for Ontology rows.
+
+    Idempotent bulk repair mirroring the `upgrade_access_foundation()` 0003
+    backfill for rows that predate the access foundation or were written by
+    direct-SQL flows (migration scripts / seeded test data) that bypass the
+    `create_ontology` router and therefore never received `creator_grant`.
+    Active editor/admin creators receive all four capabilities; active viewer
+    creators receive discover|read; inactive/missing creators receive an
+    `ONTOLOGY_OWNER_RECOVERY_REQUIRED` finding.  Requires a schema that
+    already has the grant table (0003+) — run migrations first.
+    """
+    try:
+        db.execute(sa.text("SELECT 1 FROM ontology_project_access_grants LIMIT 1"))
+    except sa.exc.ProgrammingError:
+        db.rollback()
+        raise RuntimeError(
+            "ontology_project_access_grants is missing — run migrations to at least "
+            "0003_publication_governance (scripts/run_migrations.py upgrade head) first"
+        ) from None
+    grants_editor = db.execute(sa.text(
+        """
+        INSERT INTO ontology_project_access_grants
+          (id, ontology_id, user_id, security_domain_id, capabilities, revision, status,
+           created_by, created_at, updated_at)
+        SELECT gen_random_uuid()::text, o.id, u.id, u.security_domain_id,
+               '["discover", "read", "edit", "publish"]'::jsonb, 1, 'active',
+               o.created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM ontology_projects o
+        JOIN users u ON u.id = o.created_by
+        WHERE u.role IN ('editor', 'admin') AND u.is_active
+        ON CONFLICT (ontology_id, user_id) DO NOTHING
+        """
+    ))
+    grants_viewer = db.execute(sa.text(
+        """
+        INSERT INTO ontology_project_access_grants
+          (id, ontology_id, user_id, security_domain_id, capabilities, revision, status,
+           created_by, created_at, updated_at)
+        SELECT gen_random_uuid()::text, o.id, u.id, u.security_domain_id,
+               '["discover", "read"]'::jsonb, 1, 'active',
+               o.created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM ontology_projects o
+        JOIN users u ON u.id = o.created_by
+        WHERE u.role = 'viewer' AND u.is_active
+        ON CONFLICT (ontology_id, user_id) DO NOTHING
+        """
+    ))
+    findings = db.execute(sa.text(
+        """
+        INSERT INTO ontology_migration_findings
+          (id, ontology_id, entity_id, kind, item_id, code, path, message, source_hash,
+           classification, status, revision)
+        SELECT gen_random_uuid()::text, o.id, NULL, 'owner', o.id,
+               'ONTOLOGY_OWNER_RECOVERY_REQUIRED',
+               'ontologies/' || o.id,
+               'The ontology creator is a viewer, inactive, or missing; an admin must assign an active editor/admin owner',
+               digest(o.id::bytea, 'sha256'), NULL, 'open', 1
+        FROM ontology_projects o
+        LEFT JOIN users u ON u.id = o.created_by
+        WHERE (u.id IS NULL OR NOT u.is_active OR u.role = 'viewer')
+          AND NOT EXISTS (
+              SELECT 1 FROM ontology_migration_findings f
+              WHERE f.ontology_id = o.id AND f.kind = 'owner'
+                AND f.code = 'ONTOLOGY_OWNER_RECOVERY_REQUIRED'
+          )
+        """
+    ))
+    db.commit()
+    return {
+        "editor_or_admin_grants": grants_editor.rowcount,
+        "viewer_grants": grants_viewer.rowcount,
+        "grant_rows_inserted": grants_editor.rowcount + grants_viewer.rowcount,
+        "owner_recovery_findings_inserted": findings.rowcount,
+    }
+
+
 def _require_actor(db: Session, actor_id: str, ontology_id: str) -> dict:
     grant = current_grant(db, ontology_id, actor_id)
     if grant is None or "edit" not in grant["capabilities"]:

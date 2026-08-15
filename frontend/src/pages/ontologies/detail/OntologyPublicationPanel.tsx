@@ -42,6 +42,7 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
   const { t } = useTranslation()
   const [releases, setReleases] = useState<OntologyReleaseSummary[] | null>(null)
   const [loadError, setLoadError] = useState('')
+  const [retryTick, setRetryTick] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [changelog, setChangelog] = useState('')
   const [busy, setBusy] = useState(false)
@@ -57,10 +58,10 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
   useEffect(() => {
     let cancelled = false
     ontologyLifecycleApi.listReleases(ontologyId)
-      .then(res => { if (!cancelled) setReleases(Array.isArray(res.items) ? res.items : []) })
+      .then(res => { if (!cancelled) { setReleases(Array.isArray(res.items) ? res.items : []); setLoadError('') } })
       .catch(() => { if (!cancelled) setLoadError('RELEASES_LOAD_FAILED') })
     return () => { cancelled = true }
-  }, [ontologyId])
+  }, [ontologyId, retryTick])
 
   const runAction = async (action: () => Promise<unknown>, okMessage: string) => {
     setBusy(true)
@@ -108,6 +109,17 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
   }, t('lifecycle.published', '发布成功'))
 
   if (releases === null) {
+    if (loadError === 'RELEASES_LOAD_FAILED') {
+      return (
+        <div className="bg-white rounded-xl border p-4 space-y-3" data-testid="ontology-publication-panel" role="alert">
+          <p className="text-xs text-red-500">{t('lifecycle.releases_load_failed', '发布记录加载失败')}</p>
+          <button type="button" onClick={() => setRetryTick(n => n + 1)}
+            className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 hover:bg-gray-50">
+            {t('common.retry', '重试')}
+          </button>
+        </div>
+      )
+    }
     return (
       <div className="bg-white rounded-xl border p-4 text-sm text-gray-400">{t('common.loading', '加载中…')}</div>
     )
