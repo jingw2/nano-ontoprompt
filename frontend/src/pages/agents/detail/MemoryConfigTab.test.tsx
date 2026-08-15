@@ -62,7 +62,7 @@ describe('P2C-MEMORY', () => {
     server.use()
     render(<MemoryConfigTab agentId="a-1" activeVersion={VERSION} canEdit={false} onSaved={vi.fn()} onDirtyChange={vi.fn()} />)
     expect(await screen.findByTestId('memory-unavailable')).toBeTruthy()
-    expect(screen.getByText(/记忆检查将在 Memory 功能激活后提供/)).toBeTruthy()
+    expect(screen.getByText(/记忆检查将在记忆功能激活后提供/)).toBeTruthy()
     // onUnhandledRequest: 'error' would fail on any /memories call
   })
 })

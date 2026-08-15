@@ -62,7 +62,7 @@ describe('P2C-TOOLS', () => {
     await waitFor(() => expect(screen.getByTestId('external-tool-cards')).toBeTruthy())
     const cards = screen.getAllByTestId('external-tool-card')
     expect(cards.length).toBeGreaterThanOrEqual(3)
-    expect(screen.getAllByText('Available later').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getAllByText('后续提供').length).toBeGreaterThanOrEqual(3)
     // onUnhandledRequest: 'error' above would fail the test on any P7 call
   })
 

@@ -46,9 +46,9 @@ describe('P2C-DETAIL system prompt tab', () => {
     await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe('Be helpful'))
     await userEvent.clear(textarea)
     await userEvent.type(textarea, 'old draft')
-    await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
+    await userEvent.click(screen.getByRole('button', { name: '生成' }))
     await screen.findByTestId('generation-provenance')
-    await userEvent.click(screen.getByRole('button', { name: 'Replace' }))
+    await userEvent.click(screen.getByRole('button', { name: '替换' }))
     expect((textarea as HTMLTextAreaElement).value).toBe('Replacement prompt')
   })
 

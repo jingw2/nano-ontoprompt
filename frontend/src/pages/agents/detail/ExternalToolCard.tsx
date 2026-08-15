@@ -12,6 +12,10 @@ const EXTERNAL_TOOLS: ExternalToolDescriptor[] = [
   { name: 'Signed Skills', availableLater: true },
 ]
 
+function toolNameKey(name: string): string {
+  return `agent.tools.name_${name.toLowerCase().replace(/\s+/g, '_')}`
+}
+
 export default function ExternalToolCard() {
   const { t } = useTranslation()
   return (
@@ -19,7 +23,7 @@ export default function ExternalToolCard() {
       {EXTERNAL_TOOLS.map(tool => (
         <div key={tool.name} className="border rounded-lg p-4 bg-gray-50 opacity-70" data-testid="external-tool-card">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">{tool.name}</p>
+            <p className="text-sm font-medium">{t(toolNameKey(tool.name), tool.name)}</p>
             <span className="px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-600">
               {t('agent.tools.available_later', 'Available later')}
             </span>
