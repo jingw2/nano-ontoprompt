@@ -1,6 +1,15 @@
 import json
 import re
+import unicodedata
 from typing import Any
+
+# graph-engineering discipline (per the extraction playbook): vague predicates
+# make a graph untraversable, so relations carrying only a vague type are
+# dropped during normalization instead of polluting the graph
+VAGUE_RELATION_TYPES = frozenset({
+    "关联", "related_to", "related", "有关系", "关联关系", "interacts_with",
+})
+
 
 def extract_ontology(text: str, prompt_content: str, model_config: dict, model_name: str, retry_count: int = 3) -> dict:
     provider = model_config.get("provider", "openai")
@@ -14,8 +23,13 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
             "要求：\n"
             "1. entities 只放概念/类型实体（如供应商分级、产品类别），不要为文中提到的具体公司名、产品名、"
             "物料名等命名实例单独建 entity——这些具体实例请放入 instances 数组\n"
-            "2. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系\n"
-            "3. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
+            "2. 只提取与文档主题直接相关的核心概念，跳过偶然提及与噪音（如口号、版权行、纯数字段落）\n"
+            "3. 每个实体必须写一句基于本文档的一句话描述（用于消歧）；同一概念出现多种写法时只保留一个规范实体，"
+            "不要为同义写法建重复实体\n"
+            "4. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系；"
+            "关系类型必须语义明确（IS-A、PART-OF、INSTANCE-OF、SUPPLIES 等），禁止使用\"关联\"这类模糊类型；"
+            "每条关系的 source/target 必须取自已提取的实体\n"
+            "5. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
             f"文档内容：\n\n{text}"
         )},
     ]
@@ -23,11 +37,105 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
     for attempt in range(retry_count):
         try:
             raw = _call_llm(provider, api_key, api_base, model_name, messages)
-            return _parse_response(raw)
+            return normalize_extracted_ontology(_parse_response(raw))
         except Exception as e:
             if attempt == retry_count - 1:
                 raise
     return {}
+
+
+def normalize_extracted_ontology(parsed: Any) -> dict:
+    """Deterministic post-extraction normalization (graph-engineering
+    discipline, bounded): drop junk entities, merge duplicate surface forms
+    into one canonical entity, drop dangling/vague relations and deduplicate
+    relation triples.  Entities gain a one-line grounded description when the
+    model omitted it."""
+    if not isinstance(parsed, dict):
+        return parsed if isinstance(parsed, dict) else {}
+
+    entities: list[dict] = []
+    seen_names: dict[str, str] = {}  # normalized name -> canonical name_cn
+    for entity in parsed.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        name = _clean_entity_name(entity.get("name_cn"))
+        if not name or _is_junk_entity_name(name):
+            continue
+        key = _normalize_name(name)
+        canonical = seen_names.get(key)
+        if canonical is not None:
+            # duplicate surface form of an existing concept -> keep the first
+            # canonical entity only (its description survives for disambiguation)
+            continue
+        seen_names[key] = name
+        entity["name_cn"] = name
+        if not entity.get("description"):
+            entity["description"] = f"文档中的概念：{name}"
+        entities.append(entity)
+
+    entity_names = set(seen_names.values())
+    relations: list[dict] = []
+    seen_relations: set[tuple] = set()
+    for relation in parsed.get("relations") or []:
+        if not isinstance(relation, dict):
+            continue
+        source = _clean_entity_name(relation.get("source"))
+        target = _clean_entity_name(relation.get("target"))
+        rel_type = str(relation.get("type") or "").strip()
+        if not source or not target or not rel_type:
+            continue
+        # dangling references (an endpoint the model never extracted) are
+        # structural noise — drop them (playbook: every relation must connect
+        # two extracted entities)
+        if source not in entity_names or target not in entity_names:
+            continue
+        if rel_type in VAGUE_RELATION_TYPES:
+            continue
+        key = (source, rel_type, target)
+        if key in seen_relations:
+            continue
+        seen_relations.add(key)
+        relation["source"] = source
+        relation["target"] = target
+        relation["type"] = rel_type
+        relations.append(relation)
+
+    result = dict(parsed)
+    result["entities"] = entities
+    result["relations"] = relations
+    return result
+
+
+def _clean_entity_name(value: Any) -> str:
+    """Trim and strip bracketed transliterations/annotations (e.g. the
+    `（Supplier）` annotation a model may append) so surface forms merge."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    text = re.sub(r"[（(].*?[)）]", "", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _normalize_name(name: str) -> str:
+    """Case/width/space-insensitive key for duplicate detection."""
+    return unicodedata.normalize("NFKC", name).strip().lower()
+
+
+def _is_junk_entity_name(name: str) -> bool:
+    """Names that are pure digits/symbols, whitespace-only, or structural
+    artifacts (file paths, repeated punctuation) add no graph value."""
+    if len(name) < 2:
+        return True
+    if name.isdigit():
+        return True
+    alnum = [ch for ch in name if ch.isalnum()]
+    if not alnum:
+        return True
+    # a name that is a file path or a bare document filename
+    if re.search(r"(?:^|/)[^/\s]+\.(?:md|docx?|csv|xlsx?|pdf|pptx?|json|txt)$", name, re.IGNORECASE):
+        return True
+    return False
 
 
 def infer_relations(entities: list, existing_relations: list, text: str,

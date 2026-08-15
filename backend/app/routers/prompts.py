@@ -20,6 +20,13 @@ BUILTIN_PROMPTS = [
 
 关系类型参考：IS-A、PART-OF、INSTANCE-OF、supply、stores、processes、关联
 
+提取纪律（务必遵守）：
+- 只提取与文档主题直接相关的核心概念，跳过偶然提及与噪音（口号、版权行、纯数字段落、文件名）
+- 每个实体必须填写一句基于本文档的 description（用于消歧）；同一概念出现多种写法（含中英文并列写法）时只保留一个规范实体，禁止为同义写法建重复实体
+- 关系类型必须语义明确（优先 IS-A、PART-OF、INSTANCE-OF、supply、stores、processes），禁止使用"关联"等模糊类型
+- 每条关系的 source/target 必须取自已提取实体的 name_cn，禁止引用未提取的实体
+- 重点识别概念间的层级关系（IS-A、PART-OF）
+
 每个实体必须填写 properties（最多3个关键属性，不得为空）。
 每条逻辑规则必须填写 linked_entities（关联实体name_cn列表，不得为空）。
 每个动作必须填写 linked_entities、linked_logic_names、以及 function_code（Python实现函数）。
