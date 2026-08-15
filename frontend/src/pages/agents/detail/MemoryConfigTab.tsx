@@ -77,16 +77,24 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
     <div className="p-6 space-y-4" data-testid="memory-config-tab">
       <h3 className="text-sm font-medium text-gray-700">{t('agent.memory.title', 'Memory 设置')}</h3>
 
-      <label className="flex items-center gap-3 text-sm">
-        <input type="checkbox" checked={shortTermEnabled} disabled={!canEdit}
-          onChange={e => setShortTermEnabled(e.target.checked)} />
-        {t('agent.memory.short_term', '短期记忆')}
-      </label>
-      <label className="flex items-center gap-3 text-sm">
-        <input type="checkbox" checked={longTermEnabled} disabled={!canEdit}
-          onChange={e => setLongTermEnabled(e.target.checked)} />
-        {t('agent.memory.long_term', '长期记忆')}
-      </label>
+      <div className="border rounded-lg p-3 space-y-1">
+        <label className="flex items-center gap-3 text-sm">
+          <input type="checkbox" checked={shortTermEnabled} disabled={!canEdit}
+            onChange={e => setShortTermEnabled(e.target.checked)} />
+          <span className="font-medium">{t('agent.memory.short_term', '短期记忆')}</span>
+        </label>
+        <p className="text-xs text-gray-500 pl-7">{t('agent.memory.short_term_desc', '保留当前会话内的上下文（最近对话轮次），用于保持对话连贯性。仅在本会话内有效。')}</p>
+      </div>
+
+      <div className="border rounded-lg p-3 space-y-1">
+        <label className="flex items-center gap-3 text-sm">
+          <input type="checkbox" checked={longTermEnabled} disabled={!canEdit}
+            onChange={e => setLongTermEnabled(e.target.checked)} />
+          <span className="font-medium">{t('agent.memory.long_term', '长期记忆')}</span>
+        </label>
+        <p className="text-xs text-gray-500 pl-7">{t('agent.memory.long_term_desc', '跨会话保留重要事实与结论，写入长期存储（向量索引），供后续会话检索复用。')}</p>
+      </div>
+
       <div>
         <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-budget">
           {t('agent.memory.budget', '记忆预算（条数）')}
@@ -94,6 +102,12 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         <input id="memory-budget" type="number" min={0} value={budget} disabled={!canEdit}
           onChange={e => setBudget(e.target.value)}
           className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+        <p className="text-xs text-gray-500 mt-1">{t('agent.memory.budget_desc', '记忆条目数量上限：超出后按重要性自动裁剪最旧的条目，控制上下文预算（token）占用。')}</p>
+      </div>
+
+      <div className="border border-gray-200 rounded-lg p-3 text-xs text-gray-500 space-y-1">
+        <p>{t('agent.memory.consent_note', '记忆写入需要 Agent 拥有写入权限；启用后模型可在推理时读取对应记忆。')}</p>
+        <p>{t('agent.memory.retention_note', '短期记忆随会话保留；长期记忆按预算与保留策略自动归档，不会无限增长。')}</p>
       </div>
 
       <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 text-sm text-amber-700" data-testid="memory-unavailable">

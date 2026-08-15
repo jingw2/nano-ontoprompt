@@ -65,4 +65,17 @@ describe('P2C-MEMORY', () => {
     expect(screen.getByText(/记忆检查将在记忆功能激活后提供/)).toBeTruthy()
     // onUnhandledRequest: 'error' would fail on any /memories call
   })
+
+  it('explains short-term, long-term and budget settings with descriptive copy', async () => {
+    server.use()
+    render(<MemoryConfigTab agentId="a-1" activeVersion={VERSION} canEdit onSaved={vi.fn()} onDirtyChange={vi.fn()} />)
+    // short-term / long-term descriptions
+    expect(screen.getByText(/保留当前会话内的上下文/)).toBeTruthy()
+    expect(screen.getByText(/跨会话保留重要事实与结论/)).toBeTruthy()
+    // budget explanation
+    expect(screen.getByText(/记忆条目数量上限/)).toBeTruthy()
+    // consent + retention notes
+    expect(screen.getByText(/记忆写入需要 Agent 拥有写入权限/)).toBeTruthy()
+    expect(screen.getByText(/短期记忆随会话保留/)).toBeTruthy()
+  })
 })
