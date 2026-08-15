@@ -54,6 +54,15 @@ function detailHandlers() {
     http.get('*/api/v1/agents/a-1', () => HttpResponse.json({ data: AGENT, message: 'ok' })),
     http.get('*/api/v1/agents/a-1/versions', () =>
       HttpResponse.json({ data: { items: [VERSION], next_cursor: null, has_more: false }, message: 'ok' })),
+    http.get('*/api/v1/agents/catalog/models', () =>
+      HttpResponse.json({
+        data: {
+          items: [
+            { id: 'm-1', name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
+            { id: 'm-2', name: 'deepseek', provider: 'compatible', version_no: 1, behavior_hash: 'i' + '0'.repeat(63) },
+          ], next_cursor: null, has_more: false,
+        }, message: 'ok',
+      })),
   )
 }
 
@@ -106,6 +115,30 @@ describe('P2C-DETAIL', () => {
       name: 'Support Agent v2',
       default_model_config_version_id: 'm-1',
       default_model_name: 'gpt-4o',
+    })
+  })
+
+  it('switches the model and saves it as version N+1 with the new model version id', async () => {
+    setRole('editor')
+    detailHandlers()
+    let savedBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions', async ({ request }) => {
+        savedBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { version_id: 'v-2', version_no: 2, config_hash: 'd' + '0'.repeat(63) }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    await renderDetail()
+    await screen.findAllByText('Support Agent')
+    const model = screen.getByLabelText('模型') as HTMLSelectElement
+    await waitFor(() => expect(model.options.length).toBeGreaterThanOrEqual(2))
+    await userEvent.selectOptions(model, 'm-2')
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(savedBody).not.toBeNull())
+    expect(savedBody).toMatchObject({
+      base_version_no: 1,
+      default_model_config_version_id: 'm-2',
+      default_model_name: 'deepseek',
     })
   })
 
