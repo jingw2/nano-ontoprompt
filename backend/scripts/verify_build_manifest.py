@@ -7,7 +7,7 @@ given) the pinned Alembic head must equal the declared core head.  Fails
 closed with stable codes; never mutates anything.
 
     python scripts/verify_build_manifest.py \
-        --manifest /tmp/agent-manifest.signed.json --expect-head 0007_widen_audit_correlation_id
+        --manifest /tmp/agent-manifest.signed.json --expect-head 0008_agent_tool_selection
 """
 from __future__ import annotations
 

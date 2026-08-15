@@ -465,6 +465,21 @@ Create/update/delete object Actions operate on instances only. Schema mutation r
 > unaffected. Plan-revision process applies; the reviewer reruns the S4
 > migration coherence check against the new head.
 
+> **Revision (ops-head migration, M-8, 2026-08-15):** the P2B-TOOLS feature
+> adds migration `0008_agent_tool_selection` (`down_revision="0007_widen_audit_correlation_id"`,
+> adds the `selected_tools` JSON column to `agent_ontology_bindings` — the
+> per-binding enabled tool descriptors). The current ops Alembic head is
+> therefore `0008_agent_tool_selection`; E0-IMAGES re-pins it: manifest
+> `alembic_head`, `test_build_manifest.py` `OPS_ALEMBIC_HEAD`, and every
+> `verify_build_manifest.py --expect-head` occurrence in `docker-compose.yml`,
+> `docker-compose.v2.yml` and `docker-compose.agent.yml`.
+> `test_compose_expect_head_pins_match_alembic_head` now asserts each compose
+> pin equals `ScriptDirectory.get_heads()` so the pin and the actual head can
+> never drift again. `0007_retention_governance` still stacks on
+> `0006_agent_runtime`; migration fixtures targeting explicit pre-0008
+> revisions are unaffected. Plan-revision process applies; the reviewer reruns
+> the S4 migration coherence check against the new head.
+
 Migration `0006_agent_runtime` has `revision="0006_agent_runtime"` and `down_revision="0005_agent_configuration"` and executes exactly:
 
 1. Create `agent_sessions` with nullable `active_turn_id` ID column but without its FK.

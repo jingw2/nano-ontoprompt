@@ -10,6 +10,7 @@ exact Alembic head (0007_widen_audit_correlation_id).
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -121,6 +122,31 @@ def test_manifest_pins_exact_alembic_head(tmp_path):
     assert data["alembic_head"] == OPS_ALEMBIC_HEAD
     for role in ("api", "dispatcher", "artifact_worker", "beat", "watchdog", "sweeper", "frontend"):
         assert role in data["images"], f"missing image role {role}"
+
+
+def test_compose_expect_head_pins_match_alembic_head():
+    """I-9: every compose `--expect-head` must equal the actual Alembic head.
+
+    The compose services verify the signed build manifest before starting and
+    fail closed with BUILD_MANIFEST_HEAD_MISMATCH when the pinned head drifts
+    from the migrations — so the pins are asserted against
+    ScriptDirectory.get_heads() (the real head), not a hand-maintained
+    constant, so they can never drift again."""
+    from alembic.script import ScriptDirectory
+
+    heads = set(ScriptDirectory(str(BACKEND_DIR / "alembic")).get_heads())
+    assert len(heads) == 1, f"expected a single Alembic head, got {sorted(heads)}"
+    actual = heads.pop()
+    for compose in COMPOSE_FILES:
+        assert compose.exists(), f"missing {compose.name}"
+        pins = re.findall(r"--expect-head\s+(\S+)", compose.read_text())
+        assert pins, f"{compose.name} has no --expect-head pins"
+        for pin in pins:
+            assert pin == actual, (
+                f"{compose.name} pins --expect-head {pin!r} but the Alembic head is "
+                f"{actual!r} — docker compose up would fail closed with "
+                "BUILD_MANIFEST_HEAD_MISMATCH"
+            )
 
 
 def test_compose_services_route_through_launcher_and_verify():
