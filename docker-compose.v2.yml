@@ -79,7 +79,7 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0006_agent_runtime && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0007_widen_audit_correlation_id && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   celery_worker:
     build: ./backend
@@ -96,7 +96,7 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0006_agent_runtime && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction worker --loglevel=info"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0007_widen_audit_correlation_id && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction worker --loglevel=info"
 
   frontend:
     build: ./frontend

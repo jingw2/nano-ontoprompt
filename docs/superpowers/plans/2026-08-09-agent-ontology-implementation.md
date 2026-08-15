@@ -450,6 +450,21 @@ Create/update/delete object Actions operate on instances only. Schema mutation r
 
 ## 6. Runtime persistence schema without FK cycles
 
+> **Revision (ops-head migration, 2026-08-15):** an additive ops migration
+> `0007_widen_audit_correlation_id` (`down_revision="0006_agent_runtime"`,
+> widens `governance_audit_logs`/`governance_audit_outbox` `correlation_id`
+> from varchar(64) to varchar(128) — the `wc:` prefix overflows 64) now sits
+> between `0006_agent_runtime` and the post-MVP `0007_retention_governance`.
+> The current ops Alembic head is therefore `0007_widen_audit_correlation_id`;
+> E0-IMAGES pins it (manifest `alembic_head`, `test_build_manifest.py`
+> `OPS_ALEMBIC_HEAD`, and the `verify_build_manifest.py --expect-head` pins in
+> every Compose service command). `0007_retention_governance` keeps its own
+> revision id and still stacks on `0006_agent_runtime`; Alembic revision ids
+> are strings, so the two `0007*` ids coexist until retention lands. Migration
+> fixtures that target the explicit `0006_agent_runtime` revision are
+> unaffected. Plan-revision process applies; the reviewer reruns the S4
+> migration coherence check against the new head.
+
 Migration `0006_agent_runtime` has `revision="0006_agent_runtime"` and `down_revision="0005_agent_configuration"` and executes exactly:
 
 1. Create `agent_sessions` with nullable `active_turn_id` ID column but without its FK.
