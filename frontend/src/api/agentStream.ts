@@ -24,6 +24,21 @@ export interface TurnStatus {
   error_code?: string | null
 }
 
+export interface TurnEventItem {
+  id: string
+  turn_id: string
+  sequence: number
+  event_type: string
+  payload: Record<string, unknown>
+}
+
+export interface TurnEventsPage {
+  items: TurnEventItem[]
+  next_cursor: number | null
+  has_more: boolean
+  terminal: boolean
+}
+
 export const agentStreamApi = {
   createTurn: (sessionId: string, userMessage: string, turnId?: string) =>
     fetch(`/api/v1/agent-sessions/${sessionId}/turns`, {
@@ -58,6 +73,17 @@ export const agentStreamApi = {
       headers: { Authorization: `Bearer ${useAuthStore.getState().token ?? ''}` },
     })
   },
+  /** Turn status for the polling fallback (the SSE channel is single-shot and
+   * may close before the worker persists events). */
+  getTurnStatus: (turnId: string) =>
+    fetch(`/api/v1/agent-turns/${turnId}`, {
+      headers: { Authorization: `Bearer ${useAuthStore.getState().token ?? ''}` },
+    }).then(r => r.json()).then(body => body.data as TurnStatus),
+  /** Persisted events after a cursor for the polling fallback. */
+  turnEvents: (turnId: string, afterSeq: number) =>
+    fetch(`/api/v1/agent-turns/${turnId}/events?after_seq=${afterSeq}`, {
+      headers: { Authorization: `Bearer ${useAuthStore.getState().token ?? ''}` },
+    }).then(r => r.json()).then(body => body.data as TurnEventsPage),
 }
 
 /** Parse one SSE chunk into typed events. Every byte boundary is handled:

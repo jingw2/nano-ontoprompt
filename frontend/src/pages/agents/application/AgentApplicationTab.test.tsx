@@ -162,4 +162,60 @@ describe('P4B-STREAMUI', () => {
     await userEvent.click(screen.getByTestId('trace-toggle'))
     await waitFor(() => expect(screen.queryByTestId('trace-panel')).toBeNull())
   })
+
+  it('refreshes the conversation via the polling fallback when the SSE stream closes empty', async () => {
+    let messagesCalls = 0
+    let statusCalls = 0
+    server.use(
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agent-sessions/s-1/messages', () => {
+        messagesCalls += 1
+        // the reload after the terminal poll returns the assistant answer
+        const items = messagesCalls >= 2
+          ? [
+              { id: 'u-1', session_id: 's-1', turn_id: 't-1', role: 'user', ordinal: 1, content: 'hello', created_at: 'x' },
+              { id: 'a-1', session_id: 's-1', turn_id: 't-1', role: 'assistant', ordinal: 2, content: '轮询得到的答案', created_at: 'x' },
+            ]
+          : []
+        return HttpResponse.json({ data: { items, next_cursor: null, has_more: false }, message: 'ok' })
+      }),
+      http.post('*/api/v1/agent-sessions/s-1/turns', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', session_id: 's-1', status: 'queued', dispatch_generation: 1, correlation_id: 'c' }, message: 'ok' }, { status: 202 })),
+      http.post('*/api/v1/agent-turns/t-1/stream-ticket', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', ticket: 'tk', expires_at: 'x', stream_ticket_url: 'u' }, message: 'ok' }, { status: 201 })),
+      // the single-shot SSE gap: the channel opens and closes EMPTY before the
+      // worker persists any event (no terminal on the wire)
+      http.get('*/api/v1/agent-turns/t-1/stream*', () =>
+        new HttpResponse(': channel closed\n\n', { headers: { 'Content-Type': 'text/event-stream' } })),
+      // polling fallback: queued on the first tick, succeeded afterwards
+      http.get('*/api/v1/agent-turns/t-1', () => {
+        statusCalls += 1
+        return HttpResponse.json({ data: { turn_id: 't-1', session_id: 's-1', status: statusCalls >= 2 ? 'succeeded' : 'queued', dispatch_generation: 1 }, message: 'ok' })
+      }),
+      http.get('*/api/v1/agent-turns/t-1/events*', () =>
+        HttpResponse.json({
+          data: {
+            items: [
+              { id: 'e1', turn_id: 't-1', sequence: 4, event_type: 'final_response', payload: { message: '轮询得到的答案' } },
+            ],
+            next_cursor: 4, has_more: false, terminal: false,
+          },
+          message: 'ok',
+        })),
+    )
+    render(<AgentApplicationTab agentId="a-1" />)
+    await screen.findByTestId('session-sidebar')
+    await userEvent.click(screen.getByText(/s-1/))
+    await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
+    await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    // the SSE delivered nothing; the polling fallback surfaces the answer
+    expect(await screen.findByText('轮询得到的答案', {}, { timeout: 5000 })).toBeTruthy()
+    // the turn reaches terminal via the poll: the composer becomes usable
+    // again without a manual reload
+    await waitFor(() => expect(screen.queryByTestId('stream-indicator')).toBeNull(), { timeout: 6000 })
+    await userEvent.type(screen.getByPlaceholderText(/输入消息/), '再问一句')
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(false)
+  })
 })

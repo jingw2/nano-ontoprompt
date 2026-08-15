@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { agentSessionsApi, type AgentMessage, type AgentSession } from '@/api/agentSessions'
 import { agentClarificationsApi } from '@/api/agentClarifications'
@@ -15,6 +15,9 @@ interface Props {
   agentId: string
 }
 
+const TURN_POLL_INTERVAL_MS = 1500
+const TURN_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
+
 export default function AgentApplicationTab({ agentId }: Props) {
   const { t } = useTranslation()
   const [sessions, setSessions] = useState<AgentSession[]>([])
@@ -26,6 +29,10 @@ export default function AgentApplicationTab({ agentId }: Props) {
   // the most recent Turn: drives the persisted-event trace / ontology-access panels
   const [lastTurnId, setLastTurnId] = useState<string | null>(null)
   const [traceOpen, setTraceOpen] = useState(false)
+  // the single-shot SSE channel has closed (possibly empty, before the worker
+  // persisted events) — the polling fallback takes over from here
+  const [sseDone, setSseDone] = useState(false)
+  const lastSeqRef = useRef(0)
 
   const loadSessions = useCallback(() => {
     agentSessionsApi.list(agentId).then(res => {
@@ -42,6 +49,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
     setClarification(null)
     setStream(initialStreamState)
     setLastTurnId(null)
+    setSseDone(false)
     agentSessionsApi.messages(sessionId).then(res => {
       setMessages(Array.isArray(res.items) ? res.items : [])
     }).catch(() => setMessages([]))
@@ -54,9 +62,50 @@ export default function AgentApplicationTab({ agentId }: Props) {
     }).catch(() => {})
   }, [agentId, selectSession])
 
+  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number) => {
+    try {
+      const response = await agentStreamApi.openTurnStream(tid, ticket, afterSeq)
+      if (!response.ok || !response.body) {
+        setStream(s => ({ ...s, phase: 'error', error: 'STREAM_OPEN_FAILED' }))
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      setStream(s => ({ ...s, phase: 'streaming' }))
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { events, rest } = parseSseChunk(buffer)
+        buffer = rest
+        for (const event of events) {
+          setStream(prev => {
+            const next = streamReducer(prev, event)
+            if (event.event === 'request_clarification') {
+              const q = event.data as { clarification_id?: string; question?: string; base_request_revision?: number }
+              setClarification({
+                id: String(q.clarification_id ?? ''),
+                question: String(q.question ?? ''),
+                baseRevision: Number(q.base_request_revision ?? 1),
+              })
+            }
+            if (event.event === 'terminal' && afterSeq !== undefined) setReconnectTick(n => n + 1)
+            return next
+          })
+        }
+      }
+    } finally {
+      // single-shot channel closed (possibly empty): the polling fallback now
+      // owns fetching the persisted status/events until the Turn is terminal
+      setSseDone(true)
+    }
+  }, [])
+
   const sendMessage = useCallback((text: string) => {
     if (!activeSessionId) return
     setStream({ ...initialStreamState, phase: 'connecting' })
+    setSseDone(false)
     agentStreamApi.createTurn(activeSessionId, text)
       .then(async accepted => {
         setLastTurnId(accepted.turn_id)
@@ -70,44 +119,58 @@ export default function AgentApplicationTab({ agentId }: Props) {
       .catch(() => setStream({ ...initialStreamState, phase: 'error', error: 'TURN_CREATE_FAILED' }))
   }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number) => {
-    const response = await agentStreamApi.openTurnStream(tid, ticket, afterSeq)
-    if (!response.ok || !response.body) {
-      setStream(s => ({ ...s, phase: 'error', error: 'STREAM_OPEN_FAILED' }))
-      return
-    }
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    setStream(s => ({ ...s, phase: 'streaming' }))
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const { events, rest } = parseSseChunk(buffer)
-      buffer = rest
-      for (const event of events) {
-        setStream(prev => {
-          const next = streamReducer(prev, event)
-          if (event.event === 'request_clarification') {
-            const q = event.data as { clarification_id?: string; question?: string; base_request_revision?: number }
-            setClarification({
-              id: String(q.clarification_id ?? ''),
-              question: String(q.question ?? ''),
-              baseRevision: Number(q.base_request_revision ?? 1),
-            })
-          }
-          if (event.event === 'terminal' && afterSeq !== undefined) setReconnectTick(n => n + 1)
-          return next
-        })
+  // keep the polling cursor in sync with the latest seen sequence
+  useEffect(() => {
+    lastSeqRef.current = stream.lastSequence
+  }, [stream.lastSequence])
+
+  // polling fallback: the single-shot SSE can close before the worker
+  // persists events, so while a Turn is in flight and the channel is closed
+  // (not terminal), poll the turn status + events until terminal, then reload
+  // messages and re-enable the composer — the answer appears without a manual
+  // reload even when the stream delivered nothing.
+  useEffect(() => {
+    if (!lastTurnId || !activeSessionId || !sseDone || stream.terminal) return
+    const timer = setInterval(async () => {
+      try {
+        const status = await agentStreamApi.getTurnStatus(lastTurnId)
+        if (TURN_TERMINAL_STATUSES.has(status.status)) {
+          setStream(prev => prev.terminal ? prev : {
+            ...prev,
+            terminal: true,
+            phase: status.status === 'failed' ? 'error' : 'terminal',
+            ...(status.status === 'failed' ? { error: status.error_code ?? 'TURN_FAILED' } : {}),
+          })
+          return
+        }
+        // not terminal yet: pull any newly persisted events for live deltas
+        const page = await agentStreamApi.turnEvents(lastTurnId, lastSeqRef.current)
+        if (page.items.length > 0 || page.terminal) {
+          setStream(prev => {
+            let next = prev
+            for (const item of page.items) {
+              if (item.sequence <= prev.lastSequence) continue
+              next = streamReducer(next, { event: item.event_type, data: item.payload, sequence: item.sequence })
+            }
+            if (page.terminal && !next.terminal) {
+              next = streamReducer(next, { event: 'terminal', data: { turn_id: lastTurnId } })
+            }
+            lastSeqRef.current = next.lastSequence
+            return next
+          })
+        }
+      } catch {
+        // transient (worker still warming up / network): keep polling
       }
-    }
-  }, [])
+    }, TURN_POLL_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [lastTurnId, activeSessionId, sseDone, stream.terminal])
 
   const answerClarification = useCallback(async (answer: string) => {
     if (!clarification) return
     const result = await agentClarificationsApi.answer(clarification.id, clarification.baseRevision, answer)
     setClarification(null)
+    setSseDone(false)
     if (result.turn_id) {
       setLastTurnId(result.turn_id)
       const ticket = await agentStreamApi.streamTicket(result.turn_id)
