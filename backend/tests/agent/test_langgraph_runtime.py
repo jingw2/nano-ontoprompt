@@ -8,13 +8,26 @@ The final answer is the model's real content — never the canned
 "Answer for ..." — and a model error terminalizes with turn_failed.
 """
 import asyncio
+import os
 import uuid
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 
 from app.runtime.langgraph_runtime import LangGraphRuntime
 from app.runtime.protocol import TurnRuntimeContext
+
+# pinned encryption key so any real-caller resolution in this module can never
+# depend on module import order (same pattern as the other agent modules)
+TEST_FERNET_KEY = Fernet.generate_key().decode()
+os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
+
+
+@pytest.fixture(autouse=True)
+def _pin_encryption_key():
+    os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
+    yield
 
 
 def _context(**overrides) -> TurnRuntimeContext:
