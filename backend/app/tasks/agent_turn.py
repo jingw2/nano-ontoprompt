@@ -1,9 +1,12 @@
-"""Read-only Agent Turn worker (P4A-WORKER).
+"""Agent Turn worker (P4A-WORKER).
 
 Claims a queued Turn with the dispatch service's single CAS, runs the fixed
-read-only graph through the LangGraph adapter, and persists runtime events.
-On ambiguity it creates a clarification interrupt (resume later).  Only the
-matching artifact worker commits; no API execution fallback and no Action
+read-only graph through the LangGraph adapter, and — inside one fenced
+transaction under the live claim — persists every runtime event
+(persisted-before-notify), records the assistant response message, CASes the
+Turn to `succeeded`, releases the session active pointer, and resolves the
+dispatch outbox.  Only the matching artifact worker commits; a stale fence
+fails closed and never finalizes.  No API execution fallback and no Action
 writes.
 """
 import asyncio
@@ -20,30 +23,63 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
     from app.database import SessionLocal
     from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter, assemble_turn_context
     from app.services.runtime.dispatch import claim_turn
+    from app.services.runtime import events as events_service
+    from app.services.runtime.finalize import (
+        finalize_turn_succeeded,
+        record_assistant_message,
+    )
 
     db = SessionLocal()
     try:
-        claim_turn(
+        claim = claim_turn(
             db, turn_id=turn_id, dispatch_generation=dispatch_generation,
             worker_artifact_id=worker_artifact_id, claim_token=claim_token,
         )
         row = db.execute(text(
             "SELECT t.session_id, s.agent_id, a.active_version_id, "
-            "v.default_model_config_version_id, v.default_model_name "
+            "v.default_model_config_version_id, v.default_model_name, "
+            "m.content AS user_message "
             "FROM agent_turns t "
             "JOIN agent_sessions s ON s.id = t.session_id "
             "JOIN agents a ON a.id = s.agent_id "
             "JOIN agent_versions v ON v.id = a.active_version_id "
+            "LEFT JOIN agent_messages m ON m.id = t.request_message_id "
             "WHERE t.id = :id"
         ), {"id": turn_id}).mappings().one()
         context = assemble_turn_context(
             turn_id=turn_id, session_id=row["session_id"], agent_id=row["agent_id"],
-            agent_version_id=row["active_version_id"], user_message="",
+            agent_version_id=row["active_version_id"],
+            user_message=row["user_message"] or "",
             model_config_version_id=row["default_model_config_version_id"],
             model_name=row["default_model_name"], runtime_artifact_id=worker_artifact_id,
         )
         adapter = LangGraphRuntimeAdapter()
-        events = asyncio.run(adapter.start(context))
-        return {"turn_id": turn_id, "events": [e.event_type for e in events]}
+        runtime_events = asyncio.run(adapter.start(context))
+
+        # one fenced transaction: persist events -> assistant message -> terminal
+        for event in runtime_events:
+            events_service.append_event(
+                db, turn_id=turn_id, event_type=event.event_type,
+                payload=dict(event.payload), commit=False,
+            )
+        final_text = next(
+            (str(e.payload.get("message", "")) for e in reversed(runtime_events)
+             if e.payload.get("message")),
+            None,
+        )
+        content = final_text or f"Turn completed with {len(runtime_events)} runtime events."
+        message_id = record_assistant_message(
+            db, session_id=row["session_id"], turn_id=turn_id, content=content)
+        finalize_turn_succeeded(
+            db, turn_id=turn_id, session_id=row["session_id"],
+            claim_generation=claim["claim_generation"], claim_token=claim_token,
+            response_message_id=message_id,
+        )
+        db.commit()
+        return {"turn_id": turn_id, "status": "succeeded",
+                "events": [e.event_type for e in runtime_events]}
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

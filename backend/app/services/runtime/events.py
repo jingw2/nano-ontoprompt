@@ -28,9 +28,12 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
-def append_event(db: Session, *, turn_id: str, event_type: str, payload: dict | None = None) -> dict:
+def append_event(db: Session, *, turn_id: str, event_type: str, payload: dict | None = None,
+                 commit: bool = True) -> dict:
     """Persist one runtime event with the next monotonic sequence for the
-    Turn; returns the stored row (persisted-before-notify)."""
+    Turn; returns the stored row (persisted-before-notify).  The worker calls
+    with `commit=False` so the whole event stream + finalization lands in one
+    fenced transaction."""
     sequence = db.execute(text(
         "SELECT coalesce(max(sequence), 0) + 1 FROM agent_runtime_events WHERE turn_id = :id"
     ), {"id": turn_id}).scalar_one()
@@ -41,7 +44,8 @@ def append_event(db: Session, *, turn_id: str, event_type: str, payload: dict | 
         "VALUES (:id, :turn, :seq, :type, CAST(:payload AS json), now())"
     ), {"id": row_id, "turn": turn_id, "seq": sequence, "type": event_type,
         "payload": _json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)})
-    db.commit()
+    if commit:
+        db.commit()
     return {"id": row_id, "turn_id": turn_id, "sequence": sequence,
             "event_type": event_type, "payload": payload or {}, "created_at": _now()}
 

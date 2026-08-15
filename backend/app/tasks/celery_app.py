@@ -40,3 +40,12 @@ load_all_models()
 # broker 不可用时快速失败 (默认会长时间重试, 导致 API 请求阻塞)
 celery_app.conf.task_publish_retry = False
 celery_app.conf.broker_connection_timeout = 3
+
+# beat: 定期把 pending 的 Agent Turn dispatch outbox 投递到 broker, 由
+# agent.turn_execute 的 claim CAS 消费 (无 broker 时行保持 pending 重试)
+celery_app.conf.beat_schedule = {
+    "agent-dispatch-publish": {
+        "task": "agent.dispatch_publish",
+        "schedule": 2.0,
+    },
+}
