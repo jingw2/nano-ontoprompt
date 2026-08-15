@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import type { OntologyBinding } from './agentTools'
 
 export interface AgentDetail {
   agent_id: string
@@ -27,6 +28,7 @@ export interface AgentVersion {
   prompt_generation_id?: string | null
   created_by?: string | null
   created_at?: string | null
+  ontology_bindings?: OntologyBinding[] | null
 }
 
 export interface CatalogModel {
@@ -83,6 +85,7 @@ export interface BasicPatch {
   application_state_schema_version_id?: string | null
   change_note?: string | null
   prompt_generation_id?: string | null
+  ontology_bindings?: OntologyBinding[] | null
 }
 
 export const agentDetailApi = {

@@ -431,6 +431,20 @@
             "title": "Name",
             "type": "string"
           },
+          "ontology_bindings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OntologyBindingPatch"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ontology Bindings"
+          },
           "system_prompt": {
             "anyOf": [
               {
@@ -492,6 +506,14 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "ontology_bindings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OntologyBindingPatch"
+            },
+            "title": "Ontology Bindings",
+            "type": "array"
           },
           "system_prompt": {
             "anyOf": [
@@ -1889,6 +1911,41 @@
           "question"
         ],
         "title": "NLQueryRequest",
+        "type": "object"
+      },
+      "OntologyBindingPatch": {
+        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).",
+        "properties": {
+          "allowlists": {
+            "default": {},
+            "title": "Allowlists",
+            "type": "object"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "ontology_id": {
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "selected_tools": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ontology_id"
+        ],
+        "title": "OntologyBindingPatch",
         "type": "object"
       },
       "OntologyCreate": {
@@ -5667,7 +5724,7 @@
     },
     "/api/v1/agents/{agent_id}/tool-validation": {
       "post": {
-        "description": "§12 catalog/config validation: the requested ontology bindings must be\ndiscoverable by the principal and their data capabilities must fit the\nagent's capability intersection (P2B-POLICY path, fail closed).",
+        "description": "§12 catalog/config validation: the requested ontology bindings must be\ndiscoverable by the principal (project grant) and the binding's data\ncapabilities must fit the principal's effective data capabilities (data\ngrants ∩ role ceiling) — P2B-POLICY path, fail closed.  Read-only POST, so\nno Idempotency-Key is required.",
         "operationId": "validate_agent_tool_bindings_api_v1_agents__agent_id__tool_validation_post",
         "parameters": [
           {
@@ -5677,22 +5734,6 @@
             "schema": {
               "title": "Agent Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
             }
           }
         ],
@@ -9362,6 +9403,52 @@
           }
         ],
         "summary": "Runtime Enable Route",
+        "tags": [
+          "ontology-lifecycle"
+        ]
+      }
+    },
+    "/api/v1/ontologies/{ontology_id}/tools": {
+      "get": {
+        "description": "P2B-TOOLS exposure: the Ontology's exposed tools (built-in query +\nexecutable Logic rules + instance Actions) with stable descriptor ids from\nthe latest published release manifest (working copy when unpublished).",
+        "operationId": "list_ontology_tools_api_v1_ontologies__ontology_id__tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ontology_id",
+            "required": true,
+            "schema": {
+              "title": "Ontology Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Ontology Tools",
         "tags": [
           "ontology-lifecycle"
         ]

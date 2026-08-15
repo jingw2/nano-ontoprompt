@@ -254,12 +254,15 @@ def create_agent_route(body: AgentCreateRequest, db: Session = Depends(get_db),
                        x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     _require_idempotency_key(x_idempotency_key)
     app_schema = body.application_state_schema_version_id or _default_application_schema(db)
+    bindings = [b.model_dump() for b in body.ontology_bindings]
+    _validate_ontology_bindings(db, current_user, bindings)
     try:
         result = create_agent(
             db, actor_id=current_user.id, name=body.name, description=body.description,
             default_model_config_version_id=body.default_model_config_version_id,
             default_model_name=body.default_model_name, system_prompt=body.system_prompt,
             memory_settings=body.memory_settings, application_state_schema_version_id=app_schema,
+            ontology_bindings=bindings,
         )
     except AgentConfigError as exc:
         raise HTTPException(422, detail=str(exc))
@@ -336,6 +339,9 @@ def create_agent_version(agent_id: str, body: AgentBasicVersionRequest, db: Sess
     _require_idempotency_key(x_idempotency_key)
     _require_agent_grant(db, current_user.id, agent_id, "edit")
     app_schema = body.application_state_schema_version_id or _default_application_schema(db)
+    bindings = [b.model_dump() for b in body.ontology_bindings] if body.ontology_bindings is not None else None
+    if bindings is not None:
+        _validate_ontology_bindings(db, current_user, bindings)
     try:
         result = save_basic_version(
             db, actor_id=current_user.id, agent_id=agent_id, base_version_no=body.base_version_no,
@@ -344,6 +350,7 @@ def create_agent_version(agent_id: str, body: AgentBasicVersionRequest, db: Sess
             default_model_name=body.default_model_name, system_prompt=body.system_prompt,
             memory_settings=body.memory_settings,
             application_state_schema_version_id=app_schema, change_note=body.change_note,
+            ontology_bindings=bindings,
         )
     except AgentConfigConflict as exc:
         raise HTTPException(409, detail=str(exc))
@@ -361,7 +368,13 @@ def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_us
         "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
         "FROM agent_versions WHERE agent_id = :id ORDER BY version_no"
     ), {"id": agent_id}).mappings().all()
-    return {"data": {"items": [AgentVersionOut(**dict(r)).model_dump() for r in rows],
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["ontology_bindings"] = list(get_version(db, agent_id=agent_id,
+                                                     version_no=row["version_no"])["ontology_bindings"])
+        items.append(item)
+    return {"data": {"items": [AgentVersionOut(**item).model_dump() for item in items],
                      "next_cursor": None, "has_more": False}}
 
 

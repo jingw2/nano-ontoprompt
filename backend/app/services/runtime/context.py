@@ -35,6 +35,7 @@ class PinnedContext:
     ontology_ids: tuple[str, ...] = ()
     retrieval_sources: tuple[dict, ...] = ()
     tool_bindings: tuple[dict, ...] = ()
+    ontology_tool_selection: tuple[dict, ...] = ()  # per-binding enabled tools
     budgets: dict[str, int] = field(default_factory=lambda: {
         "messages": DEFAULT_MESSAGE_BUDGET, "context": DEFAULT_CONTEXT_BUDGET,
     })
@@ -67,10 +68,15 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         raise ContextError("TURN_NOT_FOUND")
 
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists FROM agent_ontology_bindings "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools FROM agent_ontology_bindings "
         "WHERE agent_version_id = :vid ORDER BY ontology_id"
     ), {"vid": base["version_id"]}).mappings().all()
     ontology_ids = tuple(b["ontology_id"] for b in bindings)
+    tool_selection = tuple({
+        "ontology_id": b["ontology_id"],
+        "capabilities": list(b["capabilities"] or []),
+        "selected_tools": list(b["selected_tools"] or []),
+    } for b in bindings)
 
     release = None
     if ontology_ids:
@@ -109,6 +115,7 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         ontology_ids=ontology_ids,
         retrieval_sources=tuple(dict(r) for r in retrieval),
         tool_bindings=tuple(dict(t) for t in tools),
+        ontology_tool_selection=tool_selection,
         citations=tuple(citations),
     )
 

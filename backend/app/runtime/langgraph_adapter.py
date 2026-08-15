@@ -45,12 +45,28 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
                           release_id: str | None = None,
                           model_config_version_id: str | None = None,
                           model_name: str | None = None,
-                          runtime_artifact_id: str | None = None) -> TurnRuntimeContext:
+                          runtime_artifact_id: str | None = None,
+                          ontology_bindings: list[dict] | None = None) -> TurnRuntimeContext:
+    """Assemble the pinned Turn context.  `ontology_bindings` (when given)
+    carries the Agent's enabled tool selection per bound Ontology; it is
+    exposed on `extra["ontology_tool_selection"]` so the Tool Gateway only
+    exposes the selected tools for this Agent (P2B-TOOLS runtime filtering)."""
+    extra: dict[str, Any] = {}
+    if ontology_bindings:
+        extra["ontology_tool_selection"] = [
+            {
+                "ontology_id": b["ontology_id"],
+                "capabilities": list(b.get("capabilities") or []),
+                "selected_tools": list(b.get("selected_tools") or []),
+            }
+            for b in ontology_bindings
+        ]
     return TurnRuntimeContext(
         turn_id=turn_id, session_id=session_id, agent_id=agent_id,
         agent_version_id=agent_version_id, release_id=release_id,
         model_config_version_id=model_config_version_id, model_name=model_name,
         runtime_artifact_id=runtime_artifact_id, user_message=user_message,
+        extra=extra,
     )
 
 

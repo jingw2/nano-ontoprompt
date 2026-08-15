@@ -362,7 +362,12 @@
       "save_failed": "保存失败",
       "saving": "保存中…",
       "short_term": "短期记忆",
-      "title": "记忆设置"
+      "title": "记忆设置",
+      "short_term_desc": "保留当前会话内的上下文（最近对话轮次），用于保持对话连贯性。仅在本会话内有效，会话结束后即清除。",
+      "long_term_desc": "跨会话保留重要事实与结论，写入长期存储（向量索引），供后续会话检索复用。",
+      "budget_desc": "记忆条目数量上限：超出后按重要性自动裁剪最旧的条目，控制上下文预算（token）占用。",
+      "consent_note": "记忆写入需要 Agent 拥有写入权限；启用后模型可在推理时读取对应记忆。",
+      "retention_note": "短期记忆随会话保留；长期记忆按预算与保留策略自动归档，不会无限增长。"
     },
     "prompt": {
       "append": "追加",
@@ -426,7 +431,18 @@
       "ontology_bindings": "本体绑定",
       "published_ontology": "已发布本体",
       "valid": "绑定配置有效",
-      "view_capabilities": "查看能力交集"
+      "view_capabilities": "查看能力交集",
+      "tool_query": "查询（实例检索）",
+      "tool_logic": "Logic 规则",
+      "tool_action": "实例 Action",
+      "tool_other": "工具",
+      "change_note": "工具选择更新",
+      "conflict": "检测到新版本，请刷新后重试",
+      "save_failed": "保存失败",
+      "saving": "保存中…",
+      "save": "保存",
+      "load_tools": "加载工具列表",
+      "no_tools": "该本体暂无可用工具（需先发布）"
     }
   },
   "settings": {

@@ -9,6 +9,8 @@ transaction.  Failure changes nothing and emits stable `{code, path, message}`
 findings.
 """
 from datetime import datetime, timezone
+import hashlib
+from decimal import Decimal
 import uuid
 
 import sqlalchemy as sa
@@ -84,6 +86,87 @@ def preflight_ontology(db: Session, ontology_id: str) -> list[dict]:
     return findings
 
 
+def _tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
+    """Published executable tool descriptors for an Ontology (P2B-TOOLS):
+    one deterministic built-in query descriptor plus one descriptor per enabled
+    Logic rule and Action (executable read Logic / instance Actions).  The
+    descriptors ride the immutable release manifest so the Agent runtime and
+    the tool-exposure API read the same pinned snapshot."""
+    descriptors: list[dict] = []
+    descriptors.append({
+        "descriptor_id": f"query:{ontology_id}",
+        "version": 1,
+        "source_kind": "builtin",
+        "source_id": "query",
+        "input_schema": {"query": {"type": "string"}},
+        "output_schema": {"results": {"type": "array"}},
+        "capability": "read_instances",
+        "timeout_ms": 10_000,
+        "result_limit": 10,
+        "descriptor_hash": hashlib.sha256(f"query:{ontology_id}".encode()).hexdigest(),
+    })
+    logic = db.execute(
+        sa.text(
+            "SELECT id, name, description, target_entity_type, expression, enabled, version "
+            "FROM v2_ontology_logic_rules WHERE ontology_id = :o AND enabled = true ORDER BY id"
+        ),
+        {"o": ontology_id},
+    ).mappings().all()
+    for rule in logic:
+        rule_id = rule["id"]
+        descriptors.append({
+            "descriptor_id": f"logic:{rule_id}",
+            "version": rule["version"],
+            "source_kind": "logic",
+            "source_id": rule_id,
+            "input_schema": {
+                "entity_type": {"type": "string"},
+                "parameters": {"type": "object"},
+            },
+            "output_schema": {"result": {"type": "object"}},
+            "capability": "execute_read_logic",
+            "timeout_ms": 10_000,
+            "result_limit": 1,
+            "descriptor_hash": hashlib.sha256(f"logic:{rule_id}".encode()).hexdigest(),
+        })
+    actions = db.execute(
+        sa.text(
+            "SELECT id, name, description, target_entity_type, parameters, enabled, version "
+            "FROM v2_ontology_action_types WHERE ontology_id = :o AND enabled = true ORDER BY id"
+        ),
+        {"o": ontology_id},
+    ).mappings().all()
+    for action in actions:
+        action_id = action["id"]
+        descriptors.append({
+            "descriptor_id": f"action:{action_id}",
+            "version": action["version"],
+            "source_kind": "action",
+            "source_id": action_id,
+            "input_schema": {"parameters": {"type": "object"}},
+            "output_schema": {"result": {"type": "object"}},
+            "capability": "execute_instance_action",
+            "timeout_ms": 30_000,
+            "result_limit": 1,
+            "descriptor_hash": hashlib.sha256(f"action:{action_id}".encode()).hexdigest(),
+        })
+    return descriptors
+
+
+def _manifest_json(value):
+    """Normalize DB-decoded JSON for the closed manifest domain: JSONB numbers
+    arrive as Python floats (22.0), but the manifest domain accepts int and
+    Decimal only — integral floats collapse to int, others become Decimal
+    (exact, string-rendered)."""
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else Decimal(str(value))
+    if isinstance(value, dict):
+        return {key: _manifest_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_manifest_json(item) for item in value]
+    return value
+
+
 def _manifest_payload(db: Session, ontology_id: str, version_no: int) -> dict:
     ontology = db.execute(
         sa.text(
@@ -144,7 +227,7 @@ def _manifest_payload(db: Session, ontology_id: str, version_no: int) -> dict:
             "direction": "directed",
             "properties": [],
         })
-    return {
+    return _manifest_json({
         "manifest_version": "ontology-manifest-v1",
         "compiler_version": "ontology-compiler-v1",
         "policy_compiler_version": "restricted-policy-dsl-v1",
@@ -159,11 +242,50 @@ def _manifest_payload(db: Session, ontology_id: str, version_no: int) -> dict:
         "release": {"version_no": version_no, "version": f"v{version_no}"},
         "entities": entities,
         "relations": relations,
-        "logic_rules": [],
+        "logic_rules": [
+            {
+                "id": rule["id"],
+                "fully_qualified_label": rule["name"],
+                "version": rule["version"],
+                "input_schema": {"entity_type": {"type": "string"},
+                                 "parameters": {"type": "object"}},
+                "output_schema": {"result": {"type": "object"}},
+                "expression": rule["expression"] or {},
+                "effect_classification": rule["logic_type"] or "validation",
+                "enabled": bool(rule["enabled"]),
+            }
+            for rule in db.execute(
+                sa.text(
+                    "SELECT id, name, logic_type, expression, enabled, version "
+                    "FROM v2_ontology_logic_rules WHERE ontology_id = :o ORDER BY id"
+                ),
+                {"o": ontology_id},
+            ).mappings().all()
+        ],
         "state_machines": [],
-        "actions": [],
-        "tool_descriptors": [],
-    }
+        "actions": [
+            {
+                "id": action["id"],
+                "fully_qualified_label": action["name"],
+                "version": action["version"],
+                "parameter_schema": {"parameters": {"type": "object"}},
+                "result_schema": {"result": {"type": "object"}},
+                "declared_instance_effects": action["effects"] or [],
+                "risk": (action["side_effects"] or {}).get("risk", "low")
+                if isinstance(action["side_effects"], dict) else "low",
+                "approval_policy": action["permission_rules"] or {},
+                "enabled": bool(action["enabled"]),
+            }
+            for action in db.execute(
+                sa.text(
+                    "SELECT id, name, effects, side_effects, permission_rules, enabled, version "
+                    "FROM v2_ontology_action_types WHERE ontology_id = :o ORDER BY id"
+                ),
+                {"o": ontology_id},
+            ).mappings().all()
+        ],
+        "tool_descriptors": _tool_descriptors(db, ontology_id),
+    })
 
 
 def compile_ontology_release(db: Session, *, ontology_id: str, actor_id: str,

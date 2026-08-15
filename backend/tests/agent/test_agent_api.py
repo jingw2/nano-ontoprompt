@@ -621,3 +621,198 @@ def test_reconciliation_detail_route(ctx):
             assert c.get("/api/v1/admin/agent-reconciliations/none", headers=editor_headers).status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+def _seed_published_tool_ontology(session, editor_id, ontology_id="o-tools", with_logic=True):
+    """Published ontology with one enabled Logic rule + one enabled Action +
+    project grant + data grant (P2B-TOOLS fixture)."""
+    session.execute(text(
+        "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
+        "VALUES (:o,'Tool Ontology','test','v1','created',:u,now(),now(),:d,1)"
+    ), {"o": ontology_id, "u": editor_id, "d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO ontology_project_access_grants (id, ontology_id, user_id, security_domain_id, capabilities, status, revision, created_by, created_at, updated_at) "
+        "VALUES (:id, :o, :u, :d, CAST(:caps AS jsonb), 'active', 1, :u, now(), now())"
+    ), {"id": str(uuid.uuid4()), "o": ontology_id, "u": editor_id, "d": DEFAULT_DOMAIN,
+        "caps": '["discover", "read", "edit", "publish"]'})
+    session.execute(text(
+        "INSERT INTO ontology_data_grants (id, ontology_id, user_id, capabilities, policy_version, status, revision, created_by, created_at, updated_at) "
+        "VALUES (:id, :o, :u, CAST(:caps AS jsonb), 'restricted-policy-dsl-v1', 'active', 1, :u, now(), now())"
+    ), {"id": str(uuid.uuid4()), "o": ontology_id, "u": editor_id,
+        "caps": '["read_schema", "read_instances", "traverse_relations", "execute_read_logic", "execute_instance_action"]'})
+    if with_logic:
+        session.execute(text(
+            "INSERT INTO v2_ontology_logic_rules (id, ontology_id, name, logic_type, description, target_entity_type, expression, severity, enabled, status, version, created_at, updated_at) "
+            "VALUES (:id, :o, 'Rule: completeness', 'validation', 'd', 'Order', CAST(:expr AS json), 'warning', true, 'draft', 1, now(), now())"
+        ), {"id": "rule-1", "o": ontology_id, "expr": '{"column": "table_index"}'})
+    session.execute(text(
+        "INSERT INTO v2_ontology_action_types (id, ontology_id, name, description, target_entity_type, action_category, parameters, effects, enabled, status, version, created_at, updated_at) "
+        "VALUES (:id, :o, 'Create Order', 'create', 'Order', 'crud', CAST(:params AS json), CAST(:effects AS json), true, 'draft', 1, now(), now())"
+    ), {"id": "action-1", "o": ontology_id,
+        "params": '[{"name": "data", "type": "object", "required": true}]',
+        "effects": '[{"action": "create_object", "entity_type": "Order"}]'})
+    session.commit()
+    from app.services.publication.lifecycle import publish
+    publish(db=session, ontology_id=ontology_id, actor_id=editor_id, changelog="v1")
+
+
+def test_ontology_tools_exposure_endpoint(ctx):
+    """P2B-TOOLS exposure: `GET /api/v1/ontologies/{id}/tools` returns the
+    published tool descriptors (built-in query + Logic + Action) from the
+    latest release manifest, and `validate_binding_tools` accepts them."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id)
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+    viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # viewer without a project grant -> existence-hiding 404
+            assert c.get("/api/v1/ontologies/o-tools/tools", headers=viewer_headers).status_code == 404
+            r = c.get("/api/v1/ontologies/o-tools/tools", headers=editor_headers)
+            assert r.status_code == 200, r.text
+            data = r.json()["data"]
+            assert data["published"] is True
+            assert data["release_id"]
+            kinds = {t["source_kind"] for t in data["tools"]}
+            assert "builtin" in kinds
+            assert "logic" in kinds
+            assert "action" in kinds
+            ids = {t["descriptor_id"] for t in data["tools"]}
+            assert "query:o-tools" in ids
+            assert "logic:rule-1" in ids
+            assert "action:action-1" in ids
+            # a release manifest carries the same descriptors
+            release_id = data["release_id"]
+            rel = c.get(f"/api/v1/ontologies/o-tools/releases/{release_id}", headers=editor_headers)
+            assert rel.status_code == 200
+            projection = rel.json()["data"]["manifest_projection"]
+            assert {d["descriptor_id"] for d in projection["tool_descriptors"]} == ids
+            assert len(projection["logic_rules"]) == 1
+            assert len(projection["actions"]) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_tool_selection_persistence(ctx):
+    """P2B-TOOLS selection: createAgentVersion persists per-binding enabled
+    tools (query + Logic + Action descriptor ids) in the immutable version
+    tree; the detail DTO exposes them; a later save bumps N+1 and changes the
+    config hash while the old version stays byte-identical."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id)
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # create with bindings
+            r = c.post("/api/v1/agents", json={
+                "name": "Tool Select Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                    "allowlists": {},
+                    "selected_tools": ["query:o-tools", "logic:rule-1"],
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-tool-create-0000001"})
+            assert r.status_code == 201, r.text
+            agent_id = r.json()["data"]["agent_id"]
+            v1 = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert v1["ontology_bindings"] == [{
+                "ontology_id": "o-tools",
+                "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                "allowlists": {},
+                "selected_tools": ["query:o-tools", "logic:rule-1"],
+            }]
+            # selecting an unknown tool is rejected
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 1, "name": "Tool Select Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                    "selected_tools": ["action:does-not-exist"],
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-tool-save-00000001"})
+            assert r.status_code == 422
+            assert "AGENTS_TOOLS_SELECTION_INVALID" in r.text
+            # save v2 with the full tool set selected
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 1, "name": "Tool Select Agent v2", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations",
+                                     "execute_read_logic", "execute_instance_action"],
+                    "selected_tools": ["query:o-tools", "logic:rule-1", "action:action-1"],
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-tool-save-00000002"})
+            assert r.status_code == 201, r.text
+            v2no = r.json()["data"]["version_no"]
+            assert v2no == 2
+            v2 = c.get(f"/api/v1/agents/{agent_id}/versions/2", headers=editor_headers).json()["data"]
+            assert sorted(v2["ontology_bindings"][0]["selected_tools"]) == ["action:action-1", "logic:rule-1", "query:o-tools"]
+            # old version unchanged, hashes differ
+            v1_again = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert v1_again["ontology_bindings"][0]["selected_tools"] == ["query:o-tools", "logic:rule-1"]
+            assert v1_again["config_hash"] == v1["config_hash"]
+            assert v2["config_hash"] != v1["config_hash"]
+            # version list also exposes the active version's bindings
+            listed = c.get(f"/api/v1/agents/{agent_id}/versions", headers=editor_headers).json()["data"]["items"]
+            active = next(v for v in listed if v["version_no"] == 2)
+            assert sorted(active["ontology_bindings"][0]["selected_tools"]) == \
+                ["action:action-1", "logic:rule-1", "query:o-tools"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_runtime_context_carries_tool_selection(ctx):
+    """P2B-TOOLS runtime filtering: resolve_pinned_context + assemble_turn_context
+    expose only the selected tool descriptors for the Agent's active version."""
+    from app.runtime.langgraph_adapter import assemble_turn_context
+    from app.services.runtime.context import resolve_pinned_context
+    from app.services.runtime.turns import create_session, create_turn
+    from app.services.agent.configuration import create_agent
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id)
+    agent = create_agent(
+        session, actor_id=editor_id, name="Runtime Agent", description="d",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p", memory_settings={},
+        application_state_schema_version_id=app_schema,
+        ontology_bindings=[{
+            "ontology_id": "o-tools",
+            "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+            "allowlists": {},
+            "selected_tools": ["query:o-tools", "logic:rule-1"],
+        }],
+    )
+    session_id = create_session(session, agent_id=agent["agent_id"], actor_id=editor_id)["id"]
+    turn = create_turn(session, session_id=session_id, user_message="test", actor_id=editor_id)
+    pinned = resolve_pinned_context(session, turn_id=turn["turn_id"], session_id=session_id)
+    assert pinned.ontology_tool_selection == ({
+        "ontology_id": "o-tools",
+        "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+        "selected_tools": ["query:o-tools", "logic:rule-1"],
+    },)
+    ctx_t = assemble_turn_context(
+        turn_id=turn["turn_id"], session_id=session_id, agent_id=agent["agent_id"],
+        agent_version_id=agent["version_id"], user_message="test",
+        model_config_version_id=model_version, model_name="gpt-4o",
+        ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
+    )
+    assert ctx_t.extra["ontology_tool_selection"][0]["selected_tools"] == ["query:o-tools", "logic:rule-1"]

@@ -64,6 +64,8 @@ class FakeAgentRuntime:
             payload = {"turn_id": context.turn_id}
             if kind == "resolve_snapshot":
                 payload["release_id"] = context.release_id
+            if kind == "assemble_context":
+                payload["ontology_tool_selection"] = context.extra.get("ontology_tool_selection", [])
             if kind == "model_call":
                 payload["model_config_version_id"] = context.model_config_version_id
                 payload["model_name"] = context.model_name

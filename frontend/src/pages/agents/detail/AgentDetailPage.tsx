@@ -95,7 +95,8 @@ export default function AgentDetailPage() {
           onSaved={handleSaved} onDirtyChange={setDirty} />
       )}
       {activeTab === 'tools' && (
-        <ToolConfigTab agentId={id} canEdit={canEdit} onDirtyChange={setDirty} />
+        <ToolConfigTab agentId={id} activeVersion={activeVersion} canEdit={canEdit}
+          onSaved={handleSaved} onDirtyChange={setDirty} />
       )}
       {activeTab === 'memory' && (
         <MemoryConfigTab agentId={id} activeVersion={activeVersion} canEdit={canEdit}

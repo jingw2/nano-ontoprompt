@@ -3,6 +3,16 @@ from pydantic import BaseModel
 from datetime import datetime
 
 
+class OntologyBindingPatch(BaseModel):
+    """One immutable ontology-binding child row: the bound ontology, the data
+    capabilities the Agent may use, and the exposed tool descriptors enabled
+    for it (query / Logic / Action descriptor ids)."""
+    ontology_id: str
+    capabilities: List[str] = []
+    allowlists: dict = {}
+    selected_tools: List[str] = []
+
+
 class AgentCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
@@ -11,6 +21,7 @@ class AgentCreateRequest(BaseModel):
     system_prompt: Optional[str] = None
     memory_settings: dict = {}
     application_state_schema_version_id: Optional[str] = None  # default: built-in chat-v1
+    ontology_bindings: List[OntologyBindingPatch] = []
 
 
 class AgentBasicVersionRequest(BaseModel):
@@ -23,6 +34,7 @@ class AgentBasicVersionRequest(BaseModel):
     memory_settings: dict = {}
     application_state_schema_version_id: Optional[str] = None
     change_note: Optional[str] = None
+    ontology_bindings: Optional[List[OntologyBindingPatch]] = None  # None = keep existing
 
 
 class AgentVersionOut(BaseModel):
@@ -40,6 +52,7 @@ class AgentVersionOut(BaseModel):
     prompt_generation_id: Optional[str] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
+    ontology_bindings: Optional[List[OntologyBindingPatch]] = None
 
 
 class AgentOut(BaseModel):

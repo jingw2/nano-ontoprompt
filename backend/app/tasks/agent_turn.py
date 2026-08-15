@@ -22,6 +22,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
     import app.models  # noqa: F401 — register all tables
     from app.database import SessionLocal
     from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter, assemble_turn_context
+    from app.services.runtime.context import resolve_pinned_context
     from app.services.runtime.dispatch import claim_turn
     from app.services.runtime import events as events_service
     from app.services.runtime.finalize import (
@@ -46,12 +47,19 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             "LEFT JOIN agent_messages m ON m.id = t.request_message_id "
             "WHERE t.id = :id"
         ), {"id": turn_id}).mappings().one()
+        # P2B-TOOLS: resolve the pinned context (release citation + ontology
+        # bindings) so the Tool Gateway exposes only this Agent's selected
+        # tools and the resolve_snapshot event carries the release citation.
+        pinned = resolve_pinned_context(
+            db, turn_id=turn_id, session_id=row["session_id"])
         context = assemble_turn_context(
             turn_id=turn_id, session_id=row["session_id"], agent_id=row["agent_id"],
             agent_version_id=row["active_version_id"],
             user_message=row["user_message"] or "",
+            release_id=pinned.release_id,
             model_config_version_id=row["default_model_config_version_id"],
             model_name=row["default_model_name"], runtime_artifact_id=worker_artifact_id,
+            ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
         )
         adapter = LangGraphRuntimeAdapter()
         runtime_events = asyncio.run(adapter.start(context))

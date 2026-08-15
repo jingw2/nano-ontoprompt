@@ -362,7 +362,12 @@
       "save_failed": "Save failed",
       "saving": "Saving…",
       "short_term": "Short-term memory",
-      "title": "Memory Settings"
+      "title": "Memory Settings",
+      "short_term_desc": "Retains the current session's context (recent turns) to keep the conversation coherent. Scoped to this session and cleared when it ends.",
+      "long_term_desc": "Persists important facts and conclusions across sessions into long-term storage (vector index) for retrieval in later sessions.",
+      "budget_desc": "Maximum memory entries; older entries are pruned by importance beyond this limit to control the context (token) budget.",
+      "consent_note": "Memory writes require the Agent's write permission; when enabled the model may read the corresponding memory while reasoning.",
+      "retention_note": "Short-term memory lives for the session; long-term memory is archived automatically by budget and retention policy — it never grows unbounded."
     },
     "prompt": {
       "append": "Append",
@@ -426,7 +431,18 @@
       "ontology_bindings": "Ontology Bindings",
       "published_ontology": "Published Ontology",
       "valid": "Binding configuration is valid",
-      "view_capabilities": "View capability intersection"
+      "view_capabilities": "View capability intersection",
+      "tool_query": "Query (instance search)",
+      "tool_logic": "Logic rules",
+      "tool_action": "Instance actions",
+      "tool_other": "Tool",
+      "change_note": "Tool selection update",
+      "conflict": "A newer version was detected — refresh and retry",
+      "save_failed": "Save failed",
+      "saving": "Saving…",
+      "save": "Save",
+      "load_tools": "Load tool list",
+      "no_tools": "No tools available for this ontology yet (publish it first)"
     }
   },
   "settings": {

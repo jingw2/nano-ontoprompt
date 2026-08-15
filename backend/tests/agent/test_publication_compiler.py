@@ -204,3 +204,45 @@ def test_zz_mark_created_and_invalid_transition_fail_closed():
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         engine.dispose()
+
+
+def test_zz_compiler_manifests_real_logic_and_actions_with_float_normalization():
+    """P2B-TOOLS: the release manifest carries the ontology's executable Logic
+    rules + Actions + tool descriptors; JSONB-decoded float numbers (22.0) are
+    normalized to int so real-data ontologies publish (closed JsonValue domain
+    rejects float)."""
+    from app.services.publication.compiler import compile_ontology_release
+
+    Session, session_engine, engine, schema = _fresh_schema()
+    try:
+        actor_id, ontology_id, _ = _seed(Session)
+        with Session() as session:
+            session.execute(text(
+                "INSERT INTO v2_ontology_logic_rules (id, ontology_id, name, logic_type, description, target_entity_type, expression, severity, enabled, status, version, created_at, updated_at) "
+                "VALUES ('l-1', :o, 'Rule: completeness', 'validation', 'd', 'Order', CAST(:expr AS json), 'warning', true, 'draft', 1, now(), now())"
+            ), {"o": ontology_id, "expr": '{"column": "table_index", "missing_count": 22.0, "row_count": 30}'})
+            session.execute(text(
+                "INSERT INTO v2_ontology_action_types (id, ontology_id, name, description, target_entity_type, action_category, parameters, effects, enabled, status, version, created_at, updated_at) "
+                "VALUES ('a-1', :o, 'Create Order', 'create', 'Order', 'crud', CAST(:params AS json), CAST(:effects AS json), true, 'draft', 1, now(), now())"
+            ), {"o": ontology_id,
+                "params": '[{"name": "data", "type": "object", "required": true}]',
+                "effects": '[{"action": "create_object", "entity_type": "Order"}]'})
+            session.commit()
+            receipt = compile_ontology_release(session, ontology_id=ontology_id, actor_id=actor_id)
+            assert receipt["version_no"] == 1
+        with Session() as session:
+            projection = session.execute(text(
+                "SELECT manifest_projection FROM ontology_releases WHERE ontology_id = :o"
+            ), {"o": ontology_id}).scalar_one()
+            assert projection["logic_rules"][0]["id"] == "l-1"
+            assert projection["logic_rules"][0]["expression"]["missing_count"] == 22  # float -> int
+            assert projection["actions"][0]["id"] == "a-1"
+            kinds = {t["source_kind"] for t in projection["tool_descriptors"]}
+            assert kinds == {"builtin", "logic", "action"}
+            ids = {t["descriptor_id"] for t in projection["tool_descriptors"]}
+            assert "logic:l-1" in ids and "action:a-1" in ids
+    finally:
+        session_engine.dispose()
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        engine.dispose()

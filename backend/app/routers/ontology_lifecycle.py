@@ -20,6 +20,7 @@ from app.schemas.ontology_lifecycle import (
     PublishOntologyRequest,
     RuntimeSwitchRequest,
 )
+from app.services.agent.catalog import ontology_tool_catalog
 from app.services.ontology_access import GrantDenied, require_project_grant
 from app.services.publication.lifecycle import (
     LifecycleError,
@@ -188,3 +189,16 @@ def get_release(
         created_by=row["created_by"], created_at=row["created_at"],
         manifest_projection=row["manifest_projection"],
     ).model_dump(), "message": "ok"}
+
+
+@router.get("/{ontology_id}/tools")
+def list_ontology_tools(
+    ontology_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """P2B-TOOLS exposure: the Ontology's exposed tools (built-in query +
+    executable Logic rules + instance Actions) with stable descriptor ids from
+    the latest published release manifest (working copy when unpublished)."""
+    _grant(db, current_user, ontology_id, "read")
+    return {"data": ontology_tool_catalog(db, ontology_id), "message": "ok"}

@@ -70,7 +70,7 @@ def _verify_model_version(db: Session, model_config_version_id: str, model_name:
 
 def _child_tree(db: Session, agent_version_id: str) -> dict:
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists FROM agent_ontology_bindings "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools FROM agent_ontology_bindings "
         "WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": agent_version_id}).mappings().all()
     tools = db.execute(text(
@@ -109,9 +109,11 @@ def create_agent(
     db: Session, *, actor_id: str, name: str, description: str | None,
     default_model_config_version_id: str, default_model_name: str,
     system_prompt: str | None, memory_settings: dict, application_state_schema_version_id: str,
+    ontology_bindings: list[dict] | None = None,
 ) -> dict:
     """One transaction: Agent + AgentVersion v1 + owner grant + audit."""
     _verify_model_version(db, default_model_config_version_id, default_model_name)
+    bindings = [dict(b) for b in (ontology_bindings or [])]
     agent_id = _new_id()
     version_id = _new_id()
     digest = config_hash(
@@ -121,7 +123,8 @@ def create_agent(
         memory_settings=memory_settings,
         application_state_schema_version_id=application_state_schema_version_id,
         prompt_generation_id=None,
-        child_tree={"ontology_bindings": [], "external_tool_bindings": [], "retrieval_sources": []},
+        child_tree={"ontology_bindings": bindings,
+                    "external_tool_bindings": [], "retrieval_sources": []},
     )
     db.execute(text(
         "INSERT INTO agents (id, visibility, status, owner_id, active_version_id, created_at, updated_at) "
@@ -140,6 +143,8 @@ def create_agent(
     db.execute(text(
         "UPDATE agents SET active_version_id = :vid WHERE id = :aid"
     ), {"vid": version_id, "aid": agent_id})
+    for binding in bindings:
+        _insert_binding(db, version_id, binding)
     db.execute(text(
         "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
         "created_by, created_at, updated_at) "
@@ -153,18 +158,22 @@ def create_agent(
 
 
 def _clone_child_rows(db: Session, source_version_id: str, target_version_id: str) -> None:
-    for table, cols in (
-        ("agent_ontology_bindings", ("ontology_id", "capabilities", "allowlists")),
-        ("agent_external_tool_bindings", ("tool_connection_version_id", "alias")),
-    ):
-        rows = db.execute(text(
-            f"SELECT {', '.join(cols)} FROM {table} WHERE agent_version_id = :id"
-        ), {"id": source_version_id}).mappings().all()
-        for row in rows:
-            db.execute(text(
-                f"INSERT INTO {table} (id, agent_version_id, {', '.join(cols)}) "
-                f"VALUES (:id, :av, {', '.join(':' + c for c in cols)})"
-            ), {"id": _new_id(), "av": target_version_id, **{c: row[c] for c in cols}})
+    bindings = db.execute(text(
+        "SELECT ontology_id, capabilities, allowlists, selected_tools "
+        "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
+    ), {"id": source_version_id}).mappings().all()
+    for row in bindings:
+        _insert_binding(db, target_version_id, dict(row))
+    tools = db.execute(text(
+        "SELECT tool_connection_version_id, alias FROM agent_external_tool_bindings "
+        "WHERE agent_version_id = :id ORDER BY alias"
+    ), {"id": source_version_id}).mappings().all()
+    for row in tools:
+        db.execute(text(
+            "INSERT INTO agent_external_tool_bindings (id, agent_version_id, tool_connection_version_id, alias) "
+            "VALUES (:id, :av, :tcv, :alias)"
+        ), {"id": _new_id(), "av": target_version_id, "tcv": row["tool_connection_version_id"],
+            "alias": row["alias"]})
     sources = db.execute(text(
         "SELECT source_id, revision, kind, config, config_hash, applicability_hash "
         "FROM agent_retrieval_sources WHERE agent_version_id = :id"
@@ -179,16 +188,38 @@ def _clone_child_rows(db: Session, source_version_id: str, target_version_id: st
             "ch": row["config_hash"], "ah": row["applicability_hash"]})
 
 
+def _insert_binding(db: Session, agent_version_id: str, binding: dict) -> None:
+    """Insert one immutable ontology-binding child row.  JSON columns are
+    passed as canonical strings with an explicit json cast (works on both
+    PostgreSQL and SQLite text() execution)."""
+    db.execute(text(
+        "INSERT INTO agent_ontology_bindings "
+        "(id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, created_at) "
+        "VALUES (:id, :av, :o, CAST(:caps AS json), CAST(:al AS json), CAST(:st AS json), now())"
+    ), {
+        "id": _new_id(), "av": agent_version_id, "o": binding["ontology_id"],
+        "caps": _canonical(binding.get("capabilities") or []),
+        "al": _canonical(binding.get("allowlists") or {}),
+        "st": _canonical(binding.get("selected_tools") or []),
+    })
+
+
 def save_basic_version(
     db: Session, *, actor_id: str, agent_id: str, base_version_no: int,
     name: str, description: str | None, default_model_config_version_id: str,
     default_model_name: str, system_prompt: str | None, memory_settings: dict,
     application_state_schema_version_id: str, change_note: str | None = None,
     prompt_generation_id: str | None = None,
+    ontology_bindings: list[dict] | None = None,
 ) -> dict:
     """Lock the Agent, clone the tree, apply the complete Basic patch, hash,
-    insert N+1 and CAS-activate.  Old versions stay byte-identical."""
+    insert N+1 and CAS-activate.  Old versions stay byte-identical.
+
+    `ontology_bindings` (when given) REPLACES the ontology-binding child rows of
+    the new version with the complete requested set (each row carries the bound
+    ontology plus the enabled tool selection)."""
     _verify_model_version(db, default_model_config_version_id, default_model_name)
+    bindings = [dict(b) for b in (ontology_bindings or [])]
     agent = db.execute(text(
         "SELECT id, status, active_version_id FROM agents WHERE id = :id FOR UPDATE"
     ), {"id": agent_id}).mappings().one_or_none()
@@ -202,6 +233,8 @@ def save_basic_version(
     source_version_id = active["id"]
     version_id = _new_id()
     child_tree = _child_tree(db, source_version_id)
+    if ontology_bindings is not None:
+        child_tree["ontology_bindings"] = bindings
     digest = config_hash(
         name=name, description=description,
         default_model_config_version_id=default_model_config_version_id,
@@ -223,6 +256,13 @@ def save_basic_version(
         "asv": application_state_schema_version_id, "hash": digest, "note": change_note,
         "pg": prompt_generation_id, "actor": actor_id})
     _clone_child_rows(db, source_version_id, version_id)
+    if ontology_bindings is not None:
+        # the new version's binding rows are cloned above; replace them with the patch
+        db.execute(text(
+            "DELETE FROM agent_ontology_bindings WHERE agent_version_id = :id"
+        ), {"id": version_id})
+        for binding in bindings:
+            _insert_binding(db, version_id, binding)
     result = db.execute(text(
         "UPDATE agents SET active_version_id = :vid, updated_at = now() "
         "WHERE id = :aid AND active_version_id = :old"
@@ -237,14 +277,19 @@ def save_basic_version(
 
 
 def get_version(db: Session, *, agent_id: str, version_no: int) -> dict | None:
-    """Agent-version detail (Section 12): the pinned immutable version row."""
+    """Agent-version detail (Section 12): the pinned immutable version row plus
+    its ontology-binding child rows (with the enabled tool selection)."""
     row = db.execute(text(
         "SELECT id, version_no, name, description, config_hash, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
         "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
         "FROM agent_versions WHERE agent_id = :id AND version_no = :vno"
     ), {"id": agent_id, "vno": version_no}).mappings().one_or_none()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    result = dict(row)
+    result["ontology_bindings"] = list(_child_tree(db, result["id"])["ontology_bindings"])
+    return result
 
 
 def restore_version(db: Session, *, actor_id: str, agent_id: str, source_version_no: int,
