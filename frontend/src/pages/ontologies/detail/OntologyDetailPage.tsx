@@ -1,6 +1,6 @@
 import React, { useState, lazy, Suspense } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
 import StatusBadge from '@/components/StatusBadge'
@@ -60,9 +60,26 @@ export default function OntologyDetailPage() {
     queryFn: () => ontologyApi.get(id!),
     enabled: !!id,
   })
+  const qc = useQueryClient()
+  const [localStatus, setLocalStatus] = useState<string | null>(null)
 
   if (isLoading) return <div className="p-6 text-gray-400">{t('common.loading')}</div>
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
+
+  // lifecycle transitions update the header badge immediately and invalidate
+  // the list/overview cache so returning to the list shows the new status
+  const status = localStatus ?? ontology.status
+  const handleStatusChange = (next: string) => {
+    setLocalStatus(next)
+    qc.setQueryData(['ontology', id], (old: unknown) => {
+      if (old && typeof old === 'object') return { ...(old as Record<string, unknown>), status: next }
+      return old
+    })
+  }
+  const invalidateList = () => {
+    qc.invalidateQueries({ queryKey: ['ontologies'] })
+    qc.invalidateQueries({ queryKey: ['stats'] })
+  }
 
   const isPipelineMode = ontology.build_mode === 'pipeline_mapping'
 
@@ -83,12 +100,13 @@ export default function OntologyDetailPage() {
       <div className="flex items-center gap-4 mb-6">
         <button onClick={() => navigate('/ontologies')} className="text-gray-500 hover:text-black text-sm">{t('ontology.back')}</button>
         <h2 className="text-xl font-semibold">{ontology.name}</h2>
-        <StatusBadge status={ontology.status} />
+        <StatusBadge status={status} />
         <span className="text-gray-400 text-sm">{ontology.domain} · {ontology.version}</span>
       </div>
 
       <div className="mb-6">
-        <OntologyPublicationPanel ontologyId={id!} status={ontology.status} />
+        <OntologyPublicationPanel ontologyId={id!} status={status}
+          onStatusChange={handleStatusChange} onMutated={invalidateList} />
       </div>
 
       <div className="border-b mb-6">

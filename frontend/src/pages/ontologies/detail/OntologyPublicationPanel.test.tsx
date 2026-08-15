@@ -1,5 +1,5 @@
 import '@/i18n'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -120,6 +120,40 @@ describe('P1D-UI', () => {
     expect(await screen.findByText('发布成功')).toBeTruthy()
     expect(screen.getByTestId('receipt-version').textContent).toBe('v1')
     expect(screen.getByTestId('receipt-impact').textContent).toBe('实体 2 · 关系 1')
+  })
+
+  it('propagates the new status and invalidates list/stats cache after publish', async () => {
+    server.use(
+      http.get('*/api/v1/ontologies/onto-1/releases', emptyReleases),
+      http.post('*/api/v1/ontologies/onto-1/publish', () =>
+        HttpResponse.json({
+          data: { ontology_id: 'onto-1', status: 'published' },
+          message: 'ok',
+        })),
+    )
+    const { default: Panel } = await import('./OntologyPublicationPanel')
+    const onStatusChange = vi.fn()
+    const onMutated = vi.fn()
+    render(<Panel ontologyId="onto-1" status="created" onStatusChange={onStatusChange} onMutated={onMutated} />)
+    await userEvent.click(await screen.findByRole('button', { name: '发布' }))
+    await userEvent.click(screen.getByRole('button', { name: '确认发布' }))
+    await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith('published'))
+    expect(onMutated).toHaveBeenCalled()
+  })
+
+  it('propagates the created status and invalidates cache after mark-created', async () => {
+    server.use(
+      http.get('*/api/v1/ontologies/onto-1/releases', emptyReleases),
+      http.post('*/api/v1/ontologies/onto-1/mark-created', () =>
+        HttpResponse.json({ data: { ontology_id: 'onto-1', status: 'created' }, message: 'ok' })),
+    )
+    const { default: Panel } = await import('./OntologyPublicationPanel')
+    const onStatusChange = vi.fn()
+    const onMutated = vi.fn()
+    render(<Panel ontologyId="onto-1" status="draft" onStatusChange={onStatusChange} onMutated={onMutated} />)
+    await userEvent.click(await screen.findByRole('button', { name: '标记为已创建' }))
+    await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith('created'))
+    expect(onMutated).toHaveBeenCalled()
   })
 
   it('renders publish rejection findings from the API error detail', async () => {

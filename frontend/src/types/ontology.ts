@@ -1,4 +1,4 @@
-export type OntologyStatus = 'draft' | 'creating' | 'created' | 'archived'
+export type OntologyStatus = 'draft' | 'creating' | 'created' | 'published' | 'archived'
 
 export interface OntologyListItem {
   id: string

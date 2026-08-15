@@ -70,6 +70,7 @@ export function displayStatus(status: OntologyStatus | string | undefined): stri
     case 'draft': return '草稿'
     case 'creating': return '创建中'
     case 'created': return '已创建'
+    case 'published': return '已发布'
     case 'archived': return '已归档'
     default: return status ?? '未知'
   }

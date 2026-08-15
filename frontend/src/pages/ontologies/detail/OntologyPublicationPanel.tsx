@@ -13,6 +13,7 @@ interface Props {
   status?: OntologyStatus | string
   isDirty?: boolean
   onStatusChange?: (status: string) => void
+  onMutated?: () => void
 }
 
 interface PublishErrorFinding {
@@ -38,7 +39,7 @@ function errorMessage(err: unknown): string {
   return ''
 }
 
-export default function OntologyPublicationPanel({ ontologyId, status, isDirty = false, onStatusChange }: Props) {
+export default function OntologyPublicationPanel({ ontologyId, status, isDirty = false, onStatusChange, onMutated }: Props) {
   const { t } = useTranslation()
   const [releases, setReleases] = useState<OntologyReleaseSummary[] | null>(null)
   const [loadError, setLoadError] = useState('')
@@ -73,6 +74,8 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
       if (typeof result.runtime_disabled === 'boolean') setRuntimeDisabled(result.runtime_disabled)
       setActionError(okMessage)
       setDialogOpen(false)
+      // lifecycle transitions change status everywhere — drop stale list/overview cache
+      onMutated?.()
     } catch (err) {
       const fs = errorFindings(err)
       setFindings(fs)

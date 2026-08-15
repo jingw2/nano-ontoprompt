@@ -95,6 +95,7 @@
     "status_draft": "Draft",
     "status_creating": "Creating",
     "status_created": "Created",
+    "status_published": "Published",
     "status_archived": "Archived",
     "confirm_delete": "Confirm Delete",
     "confirm_delete_msg": "Delete ontology \"{{name}}\"? This cannot be undone.",
