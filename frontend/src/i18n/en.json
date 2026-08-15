@@ -278,7 +278,10 @@
       "send": "Send",
       "streaming": "Streaming…",
       "trace": "Execution Trace",
-      "trace_empty": "No events yet"
+      "trace_empty": "No events yet",
+      "trace_close": "Close trace",
+      "trace_open": "Execution Trace",
+      "trace_unavailable": "Execution Trace (no Turn yet)"
     },
     "create": {
       "cancel": "Cancel",

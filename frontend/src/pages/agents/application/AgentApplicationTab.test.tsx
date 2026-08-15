@@ -112,4 +112,52 @@ describe('P4B-STREAMUI', () => {
     expect(screen.getByText('SEQUENCE_GAP')).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
   })
+
+  it('toggles the execution trace and ontology access panels after a turn', async () => {
+    server.use(
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agent-sessions/s-1/messages', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.post('*/api/v1/agent-sessions/s-1/turns', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', session_id: 's-1', status: 'queued', dispatch_generation: 1, correlation_id: 'c' }, message: 'ok' }, { status: 202 })),
+      http.post('*/api/v1/agent-turns/t-1/stream-ticket', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', ticket: 'tk', expires_at: 'x', stream_ticket_url: 'u' }, message: 'ok' }, { status: 201 })),
+      http.get('*/api/v1/agent-turns/t-1/stream*', () => {
+        const body = 'event: model_call\ndata: {}\n\nevent: final_response\ndata: {"message":"done"}\n\nevent: terminal\ndata: {}\n\n'
+        return new HttpResponse(body, { headers: { 'Content-Type': 'text/event-stream' } })
+      }),
+      http.get('*/api/v1/agent-turns/t-1/events*', () =>
+        HttpResponse.json({
+          data: {
+            items: [
+              { id: 'e1', turn_id: 't-1', sequence: 1, event_type: 'turn_started', payload: {} },
+              { id: 'e2', turn_id: 't-1', sequence: 2, event_type: 'final_response', payload: { message: 'done' } },
+            ],
+            next_cursor: null, has_more: false,
+          },
+          message: 'ok',
+        })),
+    )
+    render(<AgentApplicationTab agentId="a-1" />)
+    await screen.findByTestId('session-sidebar')
+    // no turn yet — the trace toggle is disabled
+    expect(screen.getByTestId('trace-toggle')).toHaveProperty('disabled', true)
+    await userEvent.click(screen.getByText(/s-1/))
+    await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
+    await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    // turn completed → toggle enables and opens the persisted-event panels
+    await waitFor(() => expect(screen.getByTestId('trace-toggle')).toHaveProperty('disabled', false))
+    await userEvent.click(screen.getByTestId('trace-toggle'))
+    expect(await screen.findByTestId('trace-panel')).toBeTruthy()
+    expect(await screen.findByTestId('execution-trace-panel')).toBeTruthy()
+    expect(screen.getByTestId('ontology-access-panel')).toBeTruthy()
+    expect(screen.getByText('turn_started')).toBeTruthy()
+    // observable final message renders
+    expect(screen.getByText(/message=done/)).toBeTruthy()
+    // collapsing hides the panel again
+    await userEvent.click(screen.getByTestId('trace-toggle'))
+    await waitFor(() => expect(screen.queryByTestId('trace-panel')).toBeNull())
+  })
 })

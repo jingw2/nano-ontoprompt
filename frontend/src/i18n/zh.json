@@ -278,7 +278,10 @@
       "send": "发送",
       "streaming": "流式输出中…",
       "trace": "执行轨迹",
-      "trace_empty": "暂无事件"
+      "trace_empty": "暂无事件",
+      "trace_close": "关闭执行轨迹",
+      "trace_open": "执行轨迹",
+      "trace_unavailable": "执行轨迹（暂无 Turn）"
     },
     "create": {
       "cancel": "取消",
