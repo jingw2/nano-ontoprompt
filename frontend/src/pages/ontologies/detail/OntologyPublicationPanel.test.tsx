@@ -122,12 +122,20 @@ describe('P1D-UI', () => {
     expect(screen.getByTestId('receipt-impact').textContent).toBe('实体 2 · 关系 1')
   })
 
-  it('propagates the new status and invalidates list/stats cache after publish', async () => {
+  it('propagates the published status and invalidates list/stats cache after publish', async () => {
     server.use(
       http.get('*/api/v1/ontologies/onto-1/releases', emptyReleases),
+      // the real P1C publish receipt is flat and carries NO status field —
+      // the panel must still push the published transition
       http.post('*/api/v1/ontologies/onto-1/publish', () =>
         HttpResponse.json({
-          data: { ontology_id: 'onto-1', status: 'published' },
+          data: {
+            release_id: 'r-1',
+            version_no: 1,
+            version: 'v1',
+            schema_hash: 'ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd',
+            manifest_projection: {},
+          },
           message: 'ok',
         })),
     )
@@ -138,6 +146,7 @@ describe('P1D-UI', () => {
     await userEvent.click(await screen.findByRole('button', { name: '发布' }))
     await userEvent.click(screen.getByRole('button', { name: '确认发布' }))
     await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith('published'))
+    expect(onStatusChange).toHaveBeenCalledTimes(1)
     expect(onMutated).toHaveBeenCalled()
   })
 

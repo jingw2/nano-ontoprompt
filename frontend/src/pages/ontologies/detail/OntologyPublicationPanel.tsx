@@ -103,6 +103,10 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
   const publish = () => runAction(async () => {
     const result = await ontologyLifecycleApi.publish(ontologyId, { changelog: changelog || undefined })
     setReceipt(result)
+    // a 201 publish receipt implies published — the flat P1C receipt carries no
+    // `status` field, so push the transition here so the header badge updates
+    // immediately instead of waiting for a reload
+    onStatusChange?.('published')
     // refresh release list so the new version appears immediately
     try {
       const res = await ontologyLifecycleApi.listReleases(ontologyId)
