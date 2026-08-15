@@ -88,11 +88,47 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
                        user_message="库存低于安全线的订单有哪些？"):
     """Full dependency graph for the worker query: user, model identity,
     application-state schema (built-in chat-v1 from 0005), agent + active
-    version, session, queued turn with request message + outbox."""
+    version with a bound published ontology (release citation), session,
+    queued turn with request message + outbox."""
     session.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
         "VALUES (:u,'w','w@t.com','h','editor',true,:d,now(),now())"
     ), {"u": "u-1", "d": DEFAULT_DOMAIN})
+    # grounded-citation graph: a bound, published ontology whose release the
+    # turn's resolve_snapshot cites (I-10).
+    import hashlib as _hl
+    import json as _json
+    session.execute(text(
+        "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
+        "VALUES ('o-1','Supply','test','v1','published','u-1',now(),now(),:d,1)"
+    ), {"d": DEFAULT_DOMAIN})
+    manifest = _json.dumps({
+        "manifest_version": "ontology-manifest-v1",
+        "compiler_version": "ontology-compiler-v1",
+        "policy_compiler_version": "restricted-policy-dsl-v1",
+        "aggregate_tool_schema_hash": "0" * 64,
+        "ontology": {"id": "o-1", "name": "Supply", "security_domain_id": DEFAULT_DOMAIN,
+                     "description": None, "build_mode": "simple_llm"},
+        "release": {"version_no": 1, "version": "v1"},
+        "entities": [{"id": "e-1", "name": "供应商", "type": "Supplier", "description": None,
+                      "property_definitions": []}],
+        "relations": [],
+        "logic_rules": [], "state_machines": [], "actions": [],
+        "tool_descriptors": [{"descriptor_id": "query:o-1", "version": 1, "source_kind": "builtin",
+                              "source_id": "query", "input_schema": {"query": {"type": "string"}},
+                              "output_schema": {"results": {"type": "array"}},
+                              "capability": "read_instances", "timeout_ms": 10_000, "result_limit": 10,
+                              "descriptor_hash": "0" * 64}],
+    }, sort_keys=True)
+    manifest_bytes = manifest.encode()
+    session.execute(text(
+        "INSERT INTO ontology_releases (id, ontology_id, version_no, version, manifest_bytes, "
+        "manifest_projection, schema_hash, created_by) "
+        "VALUES ('11111111-1111-4111-8111-111111111111', 'o-1', 1, 'v1', :mb, CAST(:proj AS jsonb), :sh, 'u-1')"
+    ), {"mb": manifest_bytes, "proj": manifest, "sh": _hl.sha256(manifest_bytes).digest()})
+    session.execute(text(
+        "UPDATE ontology_projects SET latest_published_release_id = '11111111-1111-4111-8111-111111111111' WHERE id = 'o-1'"
+    ))
     session.execute(text(
         "INSERT INTO model_configs (id,name,config_type,api_base,api_key_encrypted,provider,models,options,created_by,created_at,updated_at) "
         "VALUES ('m-1','m','llm',NULL,'','openai','[]'::json,'{}'::json,'u-1',now(),now())"
@@ -120,6 +156,11 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
     session.execute(text(
         "UPDATE agents SET active_version_id = 'v-1' WHERE id = :agent"
     ), {"agent": agent_id})
+    session.execute(text(
+        "INSERT INTO agent_ontology_bindings (id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, created_at) "
+        "VALUES ('ab-1', 'v-1', 'o-1', CAST(:caps AS jsonb), CAST(:al AS jsonb), CAST(:st AS jsonb), now())"
+    ), {"caps": '["read_schema", "read_instances", "traverse_relations"]', "al": '{}',
+        "st": '["query:o-1"]'})
     session.execute(text(
         "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status) "
         "VALUES (:sid, :aid, 'u-1', 'active')"
@@ -206,6 +247,19 @@ def test_worker_task_persists_and_finalizes_end_to_end(schema, monkeypatch):
         "SELECT event_type FROM agent_runtime_events WHERE turn_id = 't-1' ORDER BY sequence"
     )).scalars().all()
     assert list(events) == EXPECTED_TRANSCRIPT
+
+    # grounded citations (I-10): the resolve_snapshot event carries the pinned
+    # release citation + lineage so the OntologyAccessPanel renders it
+    snap = session.execute(text(
+        "SELECT payload FROM agent_runtime_events "
+        "WHERE turn_id = 't-1' AND event_type = 'resolve_snapshot'"
+    )).scalar_one()
+    assert snap["release_id"] == "11111111-1111-4111-8111-111111111111"
+    assert snap["citations"], "resolve_snapshot must carry grounded citations"
+    cite = snap["citations"][0]
+    assert cite["type"] == "release" and cite["release_id"] == "11111111-1111-4111-8111-111111111111"
+    assert cite["version_no"] == 1
+    assert cite["entities"] == 1 and cite["relations"] == 0
 
     # assistant response message inserted with the final answer
     msg = session.execute(text(

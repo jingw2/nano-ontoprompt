@@ -60,6 +60,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             model_config_version_id=row["default_model_config_version_id"],
             model_name=row["default_model_name"], runtime_artifact_id=worker_artifact_id,
             ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
+            citations=list(pinned.citations),
         )
         adapter = LangGraphRuntimeAdapter()
         runtime_events = asyncio.run(adapter.start(context))

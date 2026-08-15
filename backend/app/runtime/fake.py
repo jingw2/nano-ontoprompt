@@ -64,6 +64,10 @@ class FakeAgentRuntime:
             payload = {"turn_id": context.turn_id}
             if kind == "resolve_snapshot":
                 payload["release_id"] = context.release_id
+                # grounded citations: the pinned release/lineage actually
+                # consulted for the Turn's context — observable only, no
+                # hidden reasoning (the OntologyAccessPanel renders these).
+                payload["citations"] = context.extra.get("citations", [])
             if kind == "assemble_context":
                 payload["ontology_tool_selection"] = context.extra.get("ontology_tool_selection", [])
             if kind == "model_call":

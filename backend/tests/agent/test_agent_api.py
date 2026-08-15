@@ -814,5 +814,21 @@ def test_runtime_context_carries_tool_selection(ctx):
         agent_version_id=agent["version_id"], user_message="test",
         model_config_version_id=model_version, model_name="gpt-4o",
         ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
+        release_id=pinned.release_id,
+        citations=list(pinned.citations),
     )
     assert ctx_t.extra["ontology_tool_selection"][0]["selected_tools"] == ["query:o-tools", "logic:rule-1"]
+    # I-10 grounded citations: the pinned release citation flows through the
+    # context into the resolve_snapshot runtime event (observable only)
+    assert pinned.citations, "a published binding must yield a grounded citation"
+    cite = pinned.citations[0]
+    assert cite["type"] == "release" and cite["release_id"]
+    assert cite["version_no"] == 1
+    assert ctx_t.extra["citations"][0]["release_id"] == cite["release_id"]
+    from app.runtime.fake import FakeAgentRuntime
+    import asyncio
+    snap_event = next(e for e in asyncio.run(FakeAgentRuntime().start_turn(ctx_t))
+                      if e.event_type == "resolve_snapshot")
+    assert snap_event.payload["release_id"] == cite["release_id"]
+    assert snap_event.payload["citations"][0]["type"] == "release"
+    assert snap_event.payload["citations"][0]["entities"] == cite["entities"]
