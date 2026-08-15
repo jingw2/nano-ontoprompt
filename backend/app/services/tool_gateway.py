@@ -23,6 +23,7 @@ TRUSTED_READ_DESCRIPTORS = {
     "ontology.read_instances": frozenset({"read_instances"}),
     "ontology.traverse_relations": frozenset({"traverse_relations"}),
     "ontology.execute_read_logic": frozenset({"execute_read_logic"}),
+    "ontology.preview_action": frozenset({"execute_instance_action"}),
 }
 
 
@@ -81,7 +82,9 @@ class ToolGateway:
                     raise ToolGatewayError("DATA_GRANT_REVOKED")
         # operation-map evidence: every descriptor maps to a policy vocabulary
         if not required <= operation_capabilities("GET", f"/api/v1/ontologies/{{ontology_id}}") \
-           and not required <= frozenset({"read_instances", "traverse_relations"}):
+           and not required <= frozenset({"read_instances", "traverse_relations"}) \
+           and not required <= operation_capabilities(
+               "POST", "/api/v2/ontologies/{ontology_id}/actions/{action_id}/run"):
             raise ToolGatewayError("OPERATION_UNMAPPED")
         trace: list[dict] = [{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
                               "grant_recheck": "passed"}]
@@ -91,6 +94,22 @@ class ToolGateway:
 
     def _dispatch(self, request: GatewayRequest, required: frozenset[str], correlation_id: str) -> GatewayResult:
         from app.services.ontology_tools import execute_ontology_read
+        from app.services.actions.preview import preview_action
+
+        if request.descriptor_id == "ontology.preview_action":
+            payload = dict(request.parameters)
+            try:
+                outcome_payload = preview_action(
+                    self._db, actor_id=request.user_id, agent_id=request.agent_id,
+                    ontology_id=payload["ontology_id"], release_id=payload["release_id"],
+                    descriptor_id=payload["descriptor_id"],
+                    parameters=payload.get("parameters", {}),
+                    target_instance_id=payload.get("target_instance_id"),
+                )
+            except Exception as exc:  # fail closed on any preview rejection
+                raise ToolGatewayError(f"PREVIEW_REJECTED:{str(exc)}") from exc
+            return GatewayResult(descriptor_id=request.descriptor_id, outcome="read",
+                                 payload=outcome_payload, correlation_id=correlation_id)
 
         outcome, payload = execute_ontology_read(
             self._db, descriptor_id=request.descriptor_id, parameters=request.parameters,

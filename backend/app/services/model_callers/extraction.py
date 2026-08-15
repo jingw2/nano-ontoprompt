@@ -60,3 +60,20 @@ def resolve_llm_caller(db: Session, model_id: str) -> dict:
         "conservative_input_limit": version.conservative_input_limit,
         "version_no": version.version_no,
     }
+
+
+def resolve_llm_caller_by_version(db: Session, version_id: str) -> dict:
+    """Resolve a pinned `model_config_versions.id` (the value Agents store as
+    `default_model_config_version_id`) to the immutable caller tuple.  The
+    version must be the identity's ACTIVE version (no stale pins)."""
+    row = db.execute(text(
+        "SELECT model_config_id FROM model_config_versions WHERE id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ModelVersionUnavailableError("MODEL_VERSION_UNAVAILABLE")
+    active = db.execute(text(
+        "SELECT 1 FROM model_configs WHERE active_version_id = :id LIMIT 1"
+    ), {"id": version_id}).scalar_one_or_none()
+    if not active:
+        raise ModelVersionUnavailableError("MODEL_VERSION_UNAVAILABLE")
+    return resolve_llm_caller(db, row["model_config_id"])

@@ -65,3 +65,29 @@ def finalize_turn_succeeded(db: Session, *, turn_id: str, session_id: str,
     ), {"tid": turn_id})
     return {"turn_id": turn_id, "status": "succeeded",
             "response_message_id": response_message_id}
+
+
+def finalize_turn_failed(db: Session, *, turn_id: str, session_id: str,
+                         claim_generation: int, claim_token: str,
+                         error_code: str) -> dict:
+    """CAS the claimed Turn to `failed` with the persisted error code under the
+    live fence.  No assistant message is recorded (fail closed, no canned
+    answer); the session pointer is released and the outbox resolved."""
+    result = db.execute(text(
+        "UPDATE agent_turns SET status = 'failed', error_code = :code, updated_at = now() "
+        "WHERE id = :id AND status = 'running' AND claim_generation = :gen "
+        "AND claim_token = :token AND lease_expires_at > now()"
+    ), {"id": turn_id, "code": error_code, "gen": claim_generation, "token": claim_token})
+    if result.rowcount != 1:
+        db.rollback()
+        raise TurnFinalizeError("TURN_FENCE_LOST")
+    db.execute(text(
+        "UPDATE agent_sessions SET active_turn_id = NULL, updated_at = now() "
+        "WHERE id = :sid AND active_turn_id = :tid"
+    ), {"sid": session_id, "tid": turn_id})
+    db.execute(text(
+        "UPDATE agent_turn_dispatch_outbox SET state = 'resolved_terminal', "
+        "resolved_at = now(), resolution = 'terminal' "
+        "WHERE turn_id = :tid AND state IN ('claimed', 'delivered', 'delivered_unclaimed')"
+    ), {"tid": turn_id})
+    return {"turn_id": turn_id, "status": "failed", "error_code": error_code}

@@ -196,5 +196,9 @@ def test_operation_map_covers_read_paths(schema):
                  "/api/v1/ontologies/{ontology_id}/graph",
                  "/api/v1/ontologies/{ontology_id}/logic"):
         mapped_all |= operation_capabilities("GET", path)
+    # the action-preview descriptor rides the instance-action vocabulary
+    # registered on the run route
+    mapped_all |= operation_capabilities(
+        "POST", "/api/v2/ontologies/{ontology_id}/actions/{action_id}/run")
     for caps in TRUSTED_READ_DESCRIPTORS.values():
         assert caps <= mapped_all

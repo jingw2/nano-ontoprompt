@@ -1,10 +1,12 @@
 """Agent Turn worker (P4A-WORKER).
 
 Claims a queued Turn with the dispatch service's single CAS, runs the fixed
-read-only graph through the LangGraph adapter, and — inside one fenced
-transaction under the live claim — persists every runtime event
-(persisted-before-notify), records the assistant response message, CASes the
-Turn to `succeeded`, releases the session active pointer, and resolves the
+read-only graph through the LangGraph adapter (the REAL runtime: model +
+governed tool calls), and — inside one fenced transaction under the live
+claim — persists every runtime event (persisted-before-notify), records the
+assistant response message on success, CASes the Turn to `succeeded` (or
+`failed` with the persisted error code when the runtime terminalizes with a
+`turn_failed` event), releases the session active pointer, and resolves the
 dispatch outbox.  Only the matching artifact worker commits; a stale fence
 fails closed and never finalizes.  No API execution fallback and no Action
 writes.
@@ -22,10 +24,12 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
     import app.models  # noqa: F401 — register all tables
     from app.database import SessionLocal
     from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter, assemble_turn_context
+    from app.runtime.langgraph_runtime import LangGraphRuntime
     from app.services.runtime.context import resolve_pinned_context
     from app.services.runtime.dispatch import claim_turn
     from app.services.runtime import events as events_service
     from app.services.runtime.finalize import (
+        finalize_turn_failed,
         finalize_turn_succeeded,
         record_assistant_message,
     )
@@ -37,7 +41,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             worker_artifact_id=worker_artifact_id, claim_token=claim_token,
         )
         row = db.execute(text(
-            "SELECT t.session_id, s.agent_id, a.active_version_id, "
+            "SELECT t.session_id, s.agent_id, s.owner_user_id, a.active_version_id, "
             "v.default_model_config_version_id, v.default_model_name, "
             "m.content AS user_message "
             "FROM agent_turns t "
@@ -62,7 +66,10 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
             citations=list(pinned.citations),
         )
-        adapter = LangGraphRuntimeAdapter()
+        # the runtime executes the model + governed tools for this user
+        context.extra["user_id"] = row["owner_user_id"]
+        runtime = LangGraphRuntime(db)
+        adapter = LangGraphRuntimeAdapter(runtime=runtime)
         runtime_events = asyncio.run(adapter.start(context))
 
         # one fenced transaction: persist events -> assistant message -> terminal
@@ -71,6 +78,18 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
                 db, turn_id=turn_id, event_type=event.event_type,
                 payload=dict(event.payload), commit=False,
             )
+        terminal = runtime_events[-1].event_type if runtime_events else "turn_failed"
+        if terminal == "turn_failed":
+            error_code = runtime_events[-1].payload.get("error_code") or "RUNTIME_EXECUTION_FAILED"
+            finalize_turn_failed(
+                db, turn_id=turn_id, session_id=row["session_id"],
+                claim_generation=claim["claim_generation"], claim_token=claim_token,
+                error_code=str(error_code),
+            )
+            db.commit()
+            return {"turn_id": turn_id, "status": "failed", "error_code": error_code,
+                    "events": [e.event_type for e in runtime_events]}
+
         final_text = next(
             (str(e.payload.get("message", "")) for e in reversed(runtime_events)
              if e.payload.get("message")),

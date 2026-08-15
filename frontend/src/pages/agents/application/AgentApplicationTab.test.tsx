@@ -147,8 +147,10 @@ describe('P4B-STREAMUI', () => {
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
-    // turn completed → toggle enables and opens the persisted-event panels
+    // turn completed → toggle enables; the reasoning/trace panel stays
+    // COLLAPSED by default until the user opens it
     await waitFor(() => expect(screen.getByTestId('trace-toggle')).toHaveProperty('disabled', false))
+    expect(screen.queryByTestId('trace-panel')).toBeNull()
     await userEvent.click(screen.getByTestId('trace-toggle'))
     expect(await screen.findByTestId('trace-panel')).toBeTruthy()
     expect(await screen.findByTestId('execution-trace-panel')).toBeTruthy()

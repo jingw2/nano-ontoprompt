@@ -25,13 +25,20 @@ export default function ConversationPanel({
     setDraft('')
   }
 
+  /** Defensive strip of the legacy canned-prefix (the real runtime never
+   * emits it; old persisted rows may still carry it). */
+  const displayContent = (content: string | null | undefined): string => {
+    const text = content ?? '…'
+    return text.startsWith('Answer for ') ? text.slice('Answer for '.length) : text
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0" data-testid="conversation-panel">
       <div className="flex-1 overflow-auto p-4 space-y-3">
         {messages.map(m => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === 'user' ? 'bg-black text-white' : 'bg-gray-100'}`}>
-              {m.content ?? '…'}
+              {displayContent(m.content)}
             </div>
           </div>
         ))}
@@ -43,7 +50,7 @@ export default function ConversationPanel({
         {stream.events.filter(e => e.event === 'message' || e.event === 'final_response').map((e, i) => (
           <div key={`evt-${i}`} className="flex justify-start">
             <div className="bg-gray-100 rounded-lg px-3 py-2 text-sm">
-              {String((e.data as { message?: string }).message ?? '')}
+              {displayContent(String((e.data as { message?: string }).message ?? ''))}
             </div>
           </div>
         ))}

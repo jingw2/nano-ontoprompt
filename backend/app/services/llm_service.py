@@ -132,6 +132,104 @@ def _call_llm(provider: str, api_key: str, api_base: str | None, model: str, mes
         return resp.choices[0].message.content or ""
 
 
+def chat_completion(
+    provider: str, api_key: str, api_base: str | None, model: str, messages: list,
+    *, tools: list | None = None, options: dict | None = None, timeout: float = 300,
+) -> dict:
+    """Conversation chat completion (Agent Turn model call).
+
+    OpenAI-compatible chat.completions for `openai`/`compatible` providers
+    (honoring the pinned version's `options` like temperature/max_tokens and
+    the optional `tools` schema for tool calling); `anthropic` maps the
+    messages/tools onto the Messages API.  Returns a normalized dict with
+    `content` (str) and `tool_calls` (list of {id, name, arguments_json}).
+    """
+    if provider == "anthropic":
+        return _anthropic_chat_completion(api_key, model, messages, tools, timeout)
+    import openai
+    kwargs: dict = {"api_key": api_key, "timeout": timeout}
+    if api_base:
+        kwargs["base_url"] = api_base
+    client = openai.OpenAI(**kwargs)
+    create_kwargs: dict = {"model": model, "messages": messages}
+    if tools:
+        create_kwargs["tools"] = tools
+    if options:
+        if options.get("temperature") is not None:
+            create_kwargs["temperature"] = float(options["temperature"])
+        if options.get("max_tokens") is not None:
+            create_kwargs["max_tokens"] = int(options["max_tokens"])
+    try:
+        resp = client.chat.completions.create(**create_kwargs)
+    except TypeError:
+        # options unsupported by this provider surface — retry without them
+        create_kwargs.pop("temperature", None)
+        create_kwargs.pop("max_tokens", None)
+        resp = client.chat.completions.create(**create_kwargs)
+    message = resp.choices[0].message
+    tool_calls = []
+    for call in message.tool_calls or []:
+        tool_calls.append({
+            "id": call.id,
+            "name": call.function.name,
+            "arguments_json": call.function.arguments or "{}",
+        })
+    return {"content": message.content or "", "tool_calls": tool_calls}
+
+
+def _anthropic_chat_completion(api_key: str, model: str, messages: list, tools: list | None,
+                               timeout: float = 300) -> dict:
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+    system = None
+    api_messages = []
+    for message in messages:
+        if message.get("role") == "system":
+            system = (system or "") + (message.get("content") or "")
+        elif message.get("role") == "tool":
+            api_messages.append({
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": message.get("tool_call_id", ""),
+                             "content": message.get("content") or ""}],
+            })
+        else:
+            content = message.get("content") or ""
+            if message.get("tool_calls"):
+                blocks = [{"type": "text", "text": content}]
+                for call in message["tool_calls"]:
+                    try:
+                        import json as _json
+                        payload = _json.loads(call.get("arguments_json") or "{}")
+                    except Exception:
+                        payload = {}
+                    blocks.append({"type": "tool_use", "id": call["id"], "name": call["name"],
+                                   "input": payload})
+                api_messages.append({"role": "user" if message["role"] == "assistant" else message["role"],
+                                     "content": blocks})
+            else:
+                api_messages.append({"role": message["role"], "content": content})
+    api_tools = None
+    if tools:
+        api_tools = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
+                      "input_schema": t["function"]["parameters"]} for t in tools]
+    kwargs: dict = {"model": model, "max_tokens": 8192, "messages": api_messages}
+    if system:
+        kwargs["system"] = system
+    if api_tools:
+        kwargs["tools"] = api_tools
+    resp = client.messages.create(**kwargs)
+    tool_calls = []
+    content_text = ""
+    for block in resp.content:
+        if getattr(block, "type", None) == "tool_use":
+            import json as _json
+            tool_calls.append({"id": block.id, "name": block.name,
+                               "arguments_json": _json.dumps(block.input, ensure_ascii=False)})
+        else:
+            content_text += getattr(block, "text", "") or ""
+    return {"content": content_text, "tool_calls": tool_calls}
+
+
 
 def _parse_response(raw: str) -> dict:
     if not raw:
