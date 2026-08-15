@@ -131,7 +131,7 @@ def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Sessi
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply-from-dataset")
-def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
+def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     from app.models.v2.mapping import OntologyMapping
     from app.services.v2.mapping.mapping_service import MappingService
     from app.services.v2.dataset_service import DatasetService

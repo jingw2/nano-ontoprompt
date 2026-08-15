@@ -57,7 +57,7 @@ class GovernanceAuditLog(Base):
     operation: Mapped[str] = mapped_column(String(100), nullable=False)
     decision: Mapped[str] = mapped_column(String(100), nullable=False)
     policy_ids: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     input_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     output_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     lineage: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -88,7 +88,7 @@ class GovernanceAuditOutbox(Base):
     security_domain_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("security_domains.id", ondelete="RESTRICT"), nullable=False
     )
-    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

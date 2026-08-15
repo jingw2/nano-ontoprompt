@@ -25,7 +25,17 @@ celery_app = Celery("ontoprompt",
                         "app.tasks.agent_index",
                         "app.tasks.agent_turn",
                         "app.tasks.agent_retention",
+                        # v2 pipeline / mapping / connection sync tasks
+                        "app.tasks.v2.pipeline_run",
+                        "app.tasks.v2.mapping_apply",
+                        "app.tasks.v2.connection_sync",
                     ])
+
+# 注册全部 ORM 模型 — worker 子进程只加载任务模块, 若 v2 Connection 等模型未
+# 导入, 持有外键的 Dataset flush 会报 NoReferencedTableError (找不到 v2_connections)。
+from app.models import load_all_models  # noqa: E402
+
+load_all_models()
 
 # broker 不可用时快速失败 (默认会长时间重试, 导致 API 请求阻塞)
 celery_app.conf.task_publish_retry = False

@@ -6,15 +6,15 @@ from app.services.v2.graph.neo4j_service import Neo4jService
 logger = logging.getLogger(__name__)
 
 # 核心索引定义
+# 通用实体节点标签为 `OntologyEntity`（见 graph.py / extraction.py 的批量写入），
+# 无标签索引 `FOR (n)` 是非法 Cypher，Neo4j 不支持，已移除。
 INDEXES = [
-    # 按 ontology_id 过滤（所有节点都有此属性）
-    "CREATE INDEX entity_ontology_id IF NOT EXISTS FOR (n:Entity) ON (n.ontology_id)",
+    # 按 ontology_id 过滤（所有实体节点都有此属性）
+    "CREATE INDEX entity_ontology_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ontology_id)",
     # 按实体 id 查找（MERGE 主键）
-    "CREATE INDEX entity_id IF NOT EXISTS FOR (n:Entity) ON (n.id)",
+    "CREATE INDEX entity_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.id)",
     # 按名称搜索（关键词查找）
-    "CREATE INDEX entity_name_cn IF NOT EXISTS FOR (n:Entity) ON (n.name_cn)",
-    # 通用节点属性索引
-    "CREATE INDEX node_ontology_id IF NOT EXISTS FOR (n) ON (n.ontology_id)",
+    "CREATE INDEX entity_name_cn IF NOT EXISTS FOR (n:OntologyEntity) ON (n.name_cn)",
 ]
 
 # 约束定义（唯一性）
