@@ -47,6 +47,7 @@ from app.services.agent.catalog import (
     agent_catalog_models,
     agent_catalog_ontologies,
     validate_agent_tools,
+    validate_binding_tools,
 )
 from app.services.agent.configuration import (
     AgentConfigConflict,
@@ -56,7 +57,7 @@ from app.services.agent.configuration import (
     restore_version,
     save_basic_version,
 )
-from app.services.agent.policy import AGENT_CAPABILITIES, ceiling_intersection
+from app.services.agent.policy import ceiling_intersection
 from app.services.agent.prompt_generation import (
     PromptGenerationError,
     accept_prompt_generation,
@@ -118,6 +119,45 @@ def _require_agent_grant(db: Session, user_id: str, agent_id: str, capability: s
     ), {"id": agent_id, "uid": user_id, "cap": f'%"{capability}"%'}).scalar_one_or_none()
     if not grant:
         raise HTTPException(404, detail="Not found")
+
+
+def _ontology_data_capabilities(db: Session, user_id: str, ontology_id: str) -> frozenset[str]:
+    """The principal's effective data capabilities for one Ontology: the union
+    of their active `ontology_data_grants` capabilities on that Ontology,
+    capped by their role ceiling (fail closed — no grant means no data
+    capability)."""
+    rows = db.execute(text(
+        "SELECT capabilities FROM ontology_data_grants "
+        "WHERE ontology_id = :o AND user_id = :u AND status = 'active'"
+    ), {"o": ontology_id, "u": user_id}).scalars().all()
+    granted = frozenset().union(*(set(r) for r in rows)) if rows else frozenset()
+    return granted
+
+
+def _validate_ontology_bindings(db: Session, current_user: User, bindings: list[dict]) -> None:
+    """§12/P2B-TOOLS config validation for a requested binding set: each bound
+    Ontology must be discoverable through the principal's project grant, the
+    binding's data capabilities must fit the principal's effective data
+    capabilities (data grants ∩ role ceiling), and every selected tool must be
+    exposed by the Ontology.  Raises 422 on the first violation."""
+    for binding in bindings:
+        ontology_id = binding["ontology_id"]
+        discoverable = db.execute(text(
+            "SELECT 1 FROM ontology_project_access_grants "
+            "WHERE ontology_id = :o AND user_id = :u AND status = 'active' "
+            "AND capabilities::text LIKE '%\"discover\"%' LIMIT 1"
+        ), {"o": ontology_id, "u": current_user.id}).scalar_one_or_none()
+        if not discoverable:
+            raise HTTPException(422, detail="AGENTS_BINDING_ONTOLOGY_UNAVAILABLE")
+        requested = frozenset(binding.get("capabilities") or [])
+        if not requested:
+            raise HTTPException(422, detail="AGENTS_BINDING_CAPABILITIES_REQUIRED")
+        effective = ceiling_intersection(
+            _ontology_data_capabilities(db, current_user.id, ontology_id), current_user.role)
+        if not validate_agent_tools(effective, requested):
+            raise HTTPException(422, detail="AGENTS_TOOLS_VALIDATION_FAILED")
+        if not validate_binding_tools(db, ontology_id, binding.get("selected_tools") or []):
+            raise HTTPException(422, detail="AGENTS_TOOLS_SELECTION_INVALID")
 
 
 def _agent_out(db: Session, agent_id: str, user_id: str | None = None) -> dict:
@@ -240,15 +280,16 @@ def catalog_models(db: Session = Depends(get_db), current_user: User = Depends(r
 def validate_agent_tool_bindings(
     agent_id: str, body: ToolValidationRequest, db: Session = Depends(get_db),
     current_user: User = Depends(require_editor),
-    x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     """§12 catalog/config validation: the requested ontology bindings must be
-    discoverable by the principal and their data capabilities must fit the
-    agent's capability intersection (P2B-POLICY path, fail closed)."""
+    discoverable by the principal (project grant) and the binding's data
+    capabilities must fit the principal's effective data capabilities (data
+    grants ∩ role ceiling) — P2B-POLICY path, fail closed.  Read-only POST, so
+    no Idempotency-Key is required."""
     _require_agent_grant(db, current_user.id, agent_id, "edit")
-    _require_idempotency_key(x_idempotency_key)
     blocked: list[str] = []
     capabilities: list[str] = []
+    required = frozenset({"read_schema", "read_instances", "traverse_relations"})
     for ontology_id in body.ontology_ids:
         discoverable = db.execute(text(
             "SELECT 1 FROM ontology_project_access_grants "
@@ -258,11 +299,12 @@ def validate_agent_tool_bindings(
         if not discoverable:
             blocked.append(ontology_id)
             continue
-        required = frozenset({"read_schema", "read_instances", "traverse_relations"})
-        if not validate_agent_tools(frozenset(AGENT_CAPABILITIES) | required, required):
+        effective = ceiling_intersection(
+            _ontology_data_capabilities(db, current_user.id, ontology_id), current_user.role)
+        if not validate_agent_tools(effective, required):
             blocked.append(ontology_id)
             continue
-        capabilities.extend(sorted(required & ceiling_intersection(required, current_user.role)))
+        capabilities.extend(sorted(required & effective))
     valid = len(blocked) == 0
     return {"data": ToolValidationResponse(valid=valid, blocked=blocked,
                                            capabilities=sorted(set(capabilities))).model_dump()}

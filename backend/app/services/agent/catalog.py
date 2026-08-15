@@ -60,13 +60,103 @@ def agent_catalog_models(session: Session, agent_capabilities: frozenset[str]) -
 
 def validate_agent_tools(capabilities: frozenset[str], operation_capabilities: frozenset[str]) -> bool:
     """Tool configuration is valid only when the requested operation's data
-    vocabulary is fully within the principal's capabilities and role ceiling."""
+    vocabulary is fully within the principal's effective capabilities (the
+    caller passes the principal's own granted capabilities, never a union of
+    unrelated vocabularies)."""
     if not operation_capabilities:
         return False
-    return operation_capabilities <= ceiling_intersection(capabilities, None) or operation_capabilities <= capabilities
+    return operation_capabilities <= frozenset(capabilities)
 
 
 def unknown_capability_fails_closed(capabilities) -> bool:
     """Any capability outside the closed vocabularies is rejected outright."""
     known = AGENT_CAPABILITIES | DATA_CAPABILITIES
     return not (set(capabilities) - known)
+
+
+def ontology_tool_catalog(db: Session, ontology_id: str) -> dict:
+    """A published Ontology's exposed tools (P2B-TOOLS exposure).
+
+    Reads the immutable latest release manifest's `tool_descriptors` when the
+    Ontology is published; otherwise derives the same descriptor set from the
+    working copy (enabled Logic rules + Actions + built-in query) so tool
+    selection works before the first publish.  Returns a flat descriptor list
+    with stable `descriptor_id` values (`query:<id>`, `logic:<id>`,
+    `action:<id>`) plus a `published` flag and `release_id` when available.
+    """
+    release = db.execute(text(
+        "SELECT r.id AS release_id, r.manifest_projection FROM ontology_projects p "
+        "JOIN ontology_releases r ON r.id = p.latest_published_release_id "
+        "WHERE p.id = :o"
+    ), {"o": ontology_id}).mappings().one_or_none()
+    if release is not None:
+        projection = release["manifest_projection"]
+        if isinstance(projection, (str, bytes, bytearray)):
+            import json
+            projection = json.loads(projection)
+        return {
+            "ontology_id": ontology_id,
+            "published": True,
+            "release_id": release["release_id"],
+            "tools": list(projection.get("tool_descriptors", [])),
+        }
+    return {
+        "ontology_id": ontology_id,
+        "published": False,
+        "release_id": None,
+        "tools": _working_copy_tool_descriptors(db, ontology_id),
+    }
+
+
+def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
+    """Mirror of the compiler's `_tool_descriptors` for unpublished Ontologies
+    (deterministic ids, same shape as the release manifest descriptors)."""
+    import hashlib
+    descriptors: list[dict] = [{
+        "descriptor_id": f"query:{ontology_id}",
+        "version": 1,
+        "source_kind": "builtin",
+        "source_id": "query",
+        "input_schema": {"query": {"type": "string"}},
+        "output_schema": {"results": {"type": "array"}},
+        "capability": "read_instances",
+        "timeout_ms": 10_000,
+        "result_limit": 10,
+        "descriptor_hash": hashlib.sha256(f"query:{ontology_id}".encode()).hexdigest(),
+    }]
+    logic = db.execute(text(
+        "SELECT id, name, version FROM v2_ontology_logic_rules "
+        "WHERE ontology_id = :o AND enabled = true ORDER BY id"
+    ), {"o": ontology_id}).mappings().all()
+    for rule in logic:
+        descriptors.append({
+            "descriptor_id": f"logic:{rule['id']}", "version": rule["version"],
+            "source_kind": "logic", "source_id": rule["id"],
+            "input_schema": {"entity_type": {"type": "string"}, "parameters": {"type": "object"}},
+            "output_schema": {"result": {"type": "object"}},
+            "capability": "execute_read_logic", "timeout_ms": 10_000, "result_limit": 1,
+            "descriptor_hash": hashlib.sha256(f"logic:{rule['id']}".encode()).hexdigest(),
+        })
+    actions = db.execute(text(
+        "SELECT id, name, version FROM v2_ontology_action_types "
+        "WHERE ontology_id = :o AND enabled = true ORDER BY id"
+    ), {"o": ontology_id}).mappings().all()
+    for action in actions:
+        descriptors.append({
+            "descriptor_id": f"action:{action['id']}", "version": action["version"],
+            "source_kind": "action", "source_id": action["id"],
+            "input_schema": {"parameters": {"type": "object"}},
+            "output_schema": {"result": {"type": "object"}},
+            "capability": "execute_instance_action", "timeout_ms": 30_000, "result_limit": 1,
+            "descriptor_hash": hashlib.sha256(f"action:{action['id']}".encode()).hexdigest(),
+        })
+    return descriptors
+
+
+def validate_binding_tools(db: Session, ontology_id: str, selected_tools: list[str]) -> bool:
+    """Every selected tool descriptor must be exposed by the Ontology (fail
+    closed on unknown ids)."""
+    if not selected_tools:
+        return True
+    available = {t["descriptor_id"] for t in ontology_tool_catalog(db, ontology_id)["tools"]}
+    return set(selected_tools) <= available

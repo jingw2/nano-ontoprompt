@@ -65,7 +65,7 @@ def ctx():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0005_agent_configuration").returncode == 0
+    assert _alembic(schema, "upgrade", "0008_agent_tool_selection").returncode == 0
     Session = sessionmaker(bind=create_engine(_scoped_url(schema)))
     with Session() as session:
         editor_id = str(uuid.uuid4())
@@ -422,14 +422,15 @@ def test_prompt_generation_routes(ctx):
 def test_tool_validation_route(ctx):
     """§12 catalog/config validation: `POST /agents/{id}/tool-validation`
     validates discoverability (OntologyProjectAccessGrant.discover) and the
-    data-capability intersection via the P2B-POLICY path; Agent edit auth with
-    existence-hiding 404 and Idempotency-Key validation."""
+    data-capability intersection via the P2B-POLICY path (the principal's own
+    ontology_data_grants ∩ role ceiling — fail closed); Agent edit auth with
+    existence-hiding 404.  Read-only POST, so no Idempotency-Key required."""
     from fastapi.testclient import TestClient
 
     session, editor_id, viewer_id, model_version, app_schema = ctx
     agent = _create_agent(session, editor_id, model_version, app_schema, name="Tool Agent")
     agent_id = agent["agent_id"]
-    # seed a published ontology + discover grant for the editor
+    # seed a published ontology + project discover grant + data grant for the editor
     session.execute(text(
         "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
         "VALUES ('o-tool','Tool Ontology','test','v1','published',:u,now(),now(),:d,1)"
@@ -438,6 +439,11 @@ def test_tool_validation_route(ctx):
         "INSERT INTO ontology_project_access_grants (id, ontology_id, user_id, security_domain_id, capabilities, status, revision, created_by, created_at, updated_at) "
         "VALUES (:id, 'o-tool', :u, :d, CAST(:caps AS jsonb), 'active', 1, :u, now(), now())"
     ), {"id": str(uuid.uuid4()), "u": editor_id, "d": DEFAULT_DOMAIN, "caps": '["discover", "read", "edit", "publish"]'})
+    session.execute(text(
+        "INSERT INTO ontology_data_grants (id, ontology_id, user_id, capabilities, policy_version, status, revision, created_by, created_at, updated_at) "
+        "VALUES (:id, 'o-tool', :u, CAST(:caps AS jsonb), 'restricted-policy-dsl-v1', 'active', 1, :u, now(), now())"
+    ), {"id": str(uuid.uuid4()), "u": editor_id,
+        "caps": '["read_schema", "read_instances", "traverse_relations", "execute_read_logic"]'})
     session.commit()
     editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
     viewer_headers = {"Authorization": f"Bearer {create_access_token({'sub': viewer_id, 'role': 'viewer'})}"}
@@ -451,17 +457,11 @@ def test_tool_validation_route(ctx):
                 json={"ontology_ids": ["o-tool"]},
                 headers=viewer_headers,
             ).status_code == 403
-            # invalid idempotency key -> 422
-            assert c.post(
-                f"/api/v1/agents/{agent_id}/tool-validation",
-                json={"ontology_ids": ["o-tool"]},
-                headers={**editor_headers, "Idempotency-Key": "short"},
-            ).status_code == 422
-            # valid binding -> 200 valid with capability intersection
+            # valid binding -> 200 valid with capability intersection (no Idempotency-Key)
             r = c.post(
                 f"/api/v1/agents/{agent_id}/tool-validation",
                 json={"ontology_ids": ["o-tool"]},
-                headers={**editor_headers, "Idempotency-Key": "ag-tool-val-1234567890"},
+                headers=editor_headers,
             )
             assert r.status_code == 200
             data = r.json()["data"]
@@ -473,12 +473,31 @@ def test_tool_validation_route(ctx):
             r = c.post(
                 f"/api/v1/agents/{agent_id}/tool-validation",
                 json={"ontology_ids": ["o-ghost"]},
-                headers={**editor_headers, "Idempotency-Key": "ag-tool-val-1234567891"},
+                headers=editor_headers,
             )
             assert r.status_code == 200
             data = r.json()["data"]
             assert data["valid"] is False
             assert data["blocked"] == ["o-ghost"]
+            # discoverable but no data grant -> blocked (fail closed)
+            session.execute(text(
+                "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
+                "VALUES ('o-nodata','No Data Ontology','test','v1','published',:u,now(),now(),:d,1)"
+            ), {"u": editor_id, "d": DEFAULT_DOMAIN})
+            session.execute(text(
+                "INSERT INTO ontology_project_access_grants (id, ontology_id, user_id, security_domain_id, capabilities, status, revision, created_by, created_at, updated_at) "
+                "VALUES (:id, 'o-nodata', :u, :d, CAST(:caps AS jsonb), 'active', 1, :u, now(), now())"
+            ), {"id": str(uuid.uuid4()), "u": editor_id, "d": DEFAULT_DOMAIN, "caps": '["discover", "read"]'})
+            session.commit()
+            r = c.post(
+                f"/api/v1/agents/{agent_id}/tool-validation",
+                json={"ontology_ids": ["o-nodata"]},
+                headers=editor_headers,
+            )
+            assert r.status_code == 200
+            data = r.json()["data"]
+            assert data["valid"] is False
+            assert data["blocked"] == ["o-nodata"]
     finally:
         app.dependency_overrides.clear()
 
