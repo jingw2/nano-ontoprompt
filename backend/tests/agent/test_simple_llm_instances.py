@@ -1,0 +1,194 @@
+"""Issue 6: simple-LLM extraction materializes EntityInstance rows.
+
+A simple-LLM ontology over a tabular (CSV) test_data file must end up with
+instance data attached to its concept entities (row_identity + row_data),
+consistent with Pipeline/Mapping output — not just Entity/Relation rows.
+"""
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
+
+
+def _scoped_url(schema: str) -> str:
+    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
+
+
+def _alembic(schema: str, *args, check=True):
+    return subprocess.run(
+        [sys.executable, "scripts/run_migrations.py", *args],
+        cwd=BACKEND_DIR,
+        env=dict(os.environ, DATABASE_URL=_scoped_url(schema)),
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+@pytest.fixture
+def schema():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "simple_llm_inst_" + uuid.uuid4().hex
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    assert _alembic(schema, "upgrade", "0008_agent_tool_selection").returncode == 0
+    yield schema
+    with engine.begin() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    engine.dispose()
+
+
+# a tabular 信贷 CSV rendered to markdown (exactly what convert_document does)
+TABULAR_MD = (
+    "# 贷款申请记录\n\n"
+    "| 客户名称 | 贷款金额 | 状态 |\n"
+    "|---|---|---|\n"
+    "| 上海华瑞银行 | 500000 | 审批中 |\n"
+    "| 南京银行 | 1200000 | 已放款 |\n"
+    "| 众邦银行 | 300000 | 已结清 |\n"
+)
+
+
+def _seed(session, *, ontology_id="o-llm", editor_id="u-1"):
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES (:u,'llm','l@t.com','h','editor',true,:d,now(),now())"
+    ), {"u": editor_id, "d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
+        "VALUES (:o,'信贷-LLM提取','credit','v1','created',:u,now(),now(),:d,1)"
+    ), {"o": ontology_id, "u": editor_id, "d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO model_configs (id,name,config_type,api_base,api_key_encrypted,provider,models,options,created_by,created_at,updated_at) "
+        "VALUES ('m-1','m','llm',NULL,'','openai','[]'::json,'{}'::json,:u,now(),now())"
+    ), {"u": editor_id})
+    session.execute(text(
+        "INSERT INTO model_config_versions (id, model_config_id, version_no, provider, options, behavior_hash, model_contract, created_at) "
+        "VALUES ('mv-1', 'm-1', 1, 'openai', '{}'::json, :hash, '[]'::json, now())"
+    ), {"hash": "0" * 64})
+    session.execute(text(
+        "UPDATE model_configs SET active_version_id = 'mv-1', status = 'active' WHERE id = 'm-1'"
+    ))
+    session.execute(text(
+        "INSERT INTO prompts (id, name, domain, content, version, created_by, created_at, updated_at) "
+        "VALUES ('p-1', 'extract', 'credit', :content, 'v1', :u, now(), now())"
+    ), {"content": "从文档提取本体 JSON", "u": editor_id})
+    session.execute(text(
+        "INSERT INTO uploaded_files (id, ontology_id, filename, file_path, file_size, mime_type, converted_md, created_at) "
+        "VALUES ('f-1', :o, '贷款申请记录.csv', '/tmp/loan.csv', 100, 'text/csv', :md, now())"
+    ), {"o": ontology_id, "md": TABULAR_MD})
+    task_id = str(uuid.uuid4())
+    session.execute(text(
+        "INSERT INTO extraction_tasks (id, ontology_id, prompt_id, model_id, status, parameters, progress, error, created_at, updated_at) "
+        "VALUES (:id, :o, 'p-1', 'm-1', 'queued', :params, '{}'::json, NULL, now(), now())"
+    ), {"id": task_id, "o": ontology_id, "params": '{"model_name": "mock-extractor", "constraints": []}'})
+    session.commit()
+    return task_id
+
+
+def _worker(schema):
+    """Session factory patched in for app.database.SessionLocal (worker-loop
+    pattern) plus one open session for seeding/asserting."""
+    factory = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    return factory, factory()
+
+
+def test_simple_llm_tabular_extraction_materializes_instances(schema, monkeypatch):
+    """The simple-LLM extraction task, over a tabular test_data file, must
+    create EntityInstance rows (row_identity) attached to the concept entities
+    — consistent with Pipeline/Mapping output."""
+    factory, session = _worker(schema)
+    task_id = _seed(session)
+    monkeypatch.setattr("app.database.SessionLocal", factory)
+
+    # deterministic LLM output: concepts + named instances from the table
+    fake_result = {
+        "entities": [
+            {"name_cn": "客户", "type": "客户", "description": "贷款客户", "properties": {}},
+            {"name_cn": "贷款申请", "type": "贷款申请", "description": "贷款申请记录", "properties": {}},
+        ],
+        "relations": [
+            {"source": "客户", "target": "贷款申请", "type": "APPLIES_FOR", "confidence": 0.9},
+        ],
+        "logic_rules": [],
+        "actions": [],
+        "instances": [
+            {"entity_type": "客户", "name_cn": "上海华瑞银行", "properties": {"region": "上海"}},
+            {"entity_type": "客户", "name_cn": "南京银行", "properties": {"region": "江苏"}},
+            {"entity_type": "客户", "name_cn": "众邦银行", "properties": {"region": "湖北"}},
+            {"entity_type": "贷款申请", "name_cn": "贷款申请-500000", "properties": {"amount": 500000, "status": "审批中"}},
+        ],
+    }
+    import app.tasks.extraction as extraction_task
+    monkeypatch.setattr(
+        "app.services.llm_service.extract_ontology",
+        lambda *a, **k: fake_result,
+    )
+
+    extraction_task.run_extraction(task_id)
+
+    try:
+        status = session.execute(text(
+            "SELECT status, error FROM extraction_tasks WHERE id = :id"
+        ), {"id": task_id}).mappings().one()
+        assert status["status"] == "completed", status["error"]
+        instances = session.execute(text(
+            "SELECT ei.row_identity, ei.row_data, e.name_cn AS entity_name "
+            "FROM entity_instances ei JOIN entities e ON e.id = ei.entity_id "
+            "WHERE ei.ontology_id = 'o-llm' ORDER BY ei.row_identity"
+        )).mappings().all()
+        # the four named instances from the tabular data are materialized
+        assert {i["row_identity"] for i in instances} == {
+            "上海华瑞银行", "南京银行", "众邦银行", "贷款申请-500000",
+        }
+        assert all(i["entity_name"] in ("客户", "贷款申请") for i in instances)
+        row_data = {i["row_identity"]: i["row_data"] for i in instances}
+        assert row_data["上海华瑞银行"]["name_cn"] == "上海华瑞银行"
+        assert row_data["贷款申请-500000"]["amount"] == 500000
+        assert row_data["贷款申请-500000"]["object_type"] == "贷款申请"
+    finally:
+        session.close()
+
+
+def test_simple_llm_without_instances_still_succeeds(schema, monkeypatch):
+    """An LLM result without an instances array must not break extraction —
+    entities/relations still land, the task completes."""
+    factory, session = _worker(schema)
+    task_id = _seed(session)
+    monkeypatch.setattr("app.database.SessionLocal", factory)
+    import app.tasks.extraction as extraction_task
+    monkeypatch.setattr(
+        "app.services.llm_service.extract_ontology",
+        lambda *a, **k: {
+            "entities": [{"name_cn": "客户", "type": "客户", "description": "贷款客户", "properties": {}}],
+            "relations": [],
+            "logic_rules": [],
+            "actions": [],
+        },
+    )
+    extraction_task.run_extraction(task_id)
+    try:
+        status = session.execute(text(
+            "SELECT status, error FROM extraction_tasks WHERE id = :id"
+        ), {"id": task_id}).mappings().one()
+        assert status["status"] == "completed", status["error"]
+        assert session.execute(text(
+            "SELECT count(*) FROM entities WHERE ontology_id = 'o-llm'"
+        )).scalar_one() == 1
+        assert session.execute(text(
+            "SELECT count(*) FROM entity_instances WHERE ontology_id = 'o-llm'"
+        )).scalar_one() == 0
+    finally:
+        session.close()
