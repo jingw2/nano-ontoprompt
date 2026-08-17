@@ -1,7 +1,6 @@
 """Retention governance admin API (P6A). Admin-only (see Global Constraints
 on why this plan uses require_admin rather than a new granular capability)."""
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, require_admin
@@ -12,12 +11,13 @@ from app.schemas.retention import (
     CreateRetentionPolicyRequest,
     ReleaseRetentionHoldRequest,
 )
-from app.services.retention.holds import RetentionHoldError, create_hold, release_hold
+from app.services.retention.holds import RetentionHoldError, create_hold, list_holds as _list_holds, release_hold
 from app.services.retention.policy import (
     RetentionPolicyConflict,
     RetentionPolicyError,
     activate_policy_version,
     create_policy_version,
+    list_policy_versions,
 )
 
 router = APIRouter()
@@ -40,11 +40,8 @@ def _hold_error(exc: Exception) -> HTTPException:
 
 @router.get("/retention-policies")
 def list_policies(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    rows = db.execute(text(
-        "SELECT v.id, v.policy_id, v.version_no, v.status, v.rules "
-        "FROM retention_policy_versions v ORDER BY v.created_at DESC LIMIT 100"
-    )).mappings().all()
-    return {"data": {"items": [dict(r) for r in rows], "next_cursor": None, "has_more": False}}
+    items = list_policy_versions(db)
+    return {"data": {"items": items, "next_cursor": None, "has_more": False}}
 
 
 @router.post("/retention-policies", status_code=201)
@@ -72,11 +69,8 @@ def activate_policy(version_id: str, body: ActivateRetentionPolicyRequest, db: S
 
 @router.get("/retention-holds")
 def list_holds(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    rows = db.execute(text(
-        "SELECT id, scope_type, scope_id, reason, released_at IS NOT NULL AS released "
-        "FROM retention_holds ORDER BY issued_at DESC LIMIT 100"
-    )).mappings().all()
-    return {"data": {"items": [dict(r) for r in rows], "next_cursor": None, "has_more": False}}
+    items = _list_holds(db)
+    return {"data": {"items": items, "next_cursor": None, "has_more": False}}
 
 
 @router.post("/retention-holds", status_code=201)

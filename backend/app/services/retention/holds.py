@@ -60,3 +60,11 @@ def is_held(db: Session, security_domain_id: str, scope_type: str, scope_id: str
         "SELECT EXISTS(SELECT 1 FROM retention_holds WHERE security_domain_id = :domain "
         "AND scope_type = :stype AND scope_id = :sid AND released_at IS NULL)"
     ), {"domain": security_domain_id, "stype": scope_type, "sid": scope_id}).scalar_one())
+
+
+def list_holds(db: Session, limit: int = 100) -> list[dict]:
+    rows = db.execute(text(
+        "SELECT id, scope_type, scope_id, reason, released_at IS NOT NULL AS released "
+        "FROM retention_holds ORDER BY issued_at DESC LIMIT :lim"
+    ), {"lim": limit}).mappings().all()
+    return [dict(r) for r in rows]

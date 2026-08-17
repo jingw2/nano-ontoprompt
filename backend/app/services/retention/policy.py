@@ -154,3 +154,11 @@ def activate_policy_version(db: Session, *, actor_id: str, security_domain_id: s
     new_epoch = bump_epoch(db, security_domain_id)
     db.commit()
     return {"policy_id": policy_id, "active_version_id": version_id, "epoch": new_epoch}
+
+
+def list_policy_versions(db: Session, limit: int = 100) -> list[dict]:
+    rows = db.execute(text(
+        "SELECT v.id, v.policy_id, v.version_no, v.status, v.rules "
+        "FROM retention_policy_versions v ORDER BY v.created_at DESC LIMIT :lim"
+    ), {"lim": limit}).mappings().all()
+    return [dict(r) for r in rows]
