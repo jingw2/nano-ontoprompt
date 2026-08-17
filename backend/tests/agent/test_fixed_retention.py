@@ -249,3 +249,88 @@ def test_purge_skips_held_turn(schema):
     )).scalar_one()
     assert still_there == 1  # held — not purged despite being past the 7-day turn.delete minimum
     session.close()
+
+
+def test_purge_release_then_purge_removes_previously_held_turn(schema):
+    from app.services.retention.holds import create_hold, release_hold
+    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge
+
+    session = _session(schema)
+    _seed_turn(session, turn_id="t-1", age_days=30)  # well past the 7-day turn.delete minimum
+
+    hold = create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                       scope_type="turn", scope_id="t-1", reason="litigation")
+
+    session.execute(text(
+        "INSERT INTO agent_purge_jobs (id, security_domain_id, purge_class, cursor_time, batch_size, generation) "
+        "VALUES ('j-1', :dom, 'turn', now(), 500, 0)"
+    ), {"dom": DEFAULT_DOMAIN})
+    session.commit()
+
+    claim = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
+    run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN, job_id=claim["id"], claim_token=claim["claim_token"])
+    still_there = session.execute(text("SELECT count(*) FROM agent_turns WHERE id = 't-1'")).scalar_one()
+    assert still_there == 1  # held — first purge skips it
+
+    release_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN, hold_id=hold["id"])
+
+    # the first claim's 30s lease is still live at this point in the test;
+    # simulate it having expired so the second claim isn't refused by lease
+    # fencing (already covered by test_claim_purge_job_single_worker) —
+    # this test is about hold release unblocking purge, not lease exclusivity
+    session.execute(text("UPDATE agent_purge_jobs SET lease_expires_at = NULL WHERE id = 'j-1'"))
+    claim2 = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
+    run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN, job_id=claim2["id"], claim_token=claim2["claim_token"])
+    gone = session.execute(text("SELECT count(*) FROM agent_turns WHERE id = 't-1'")).scalar_one()
+    assert gone == 0  # released — second purge removes it
+    session.close()
+
+
+def test_purge_session_scope_hold_protects_redaction_steps(schema):
+    """A session-scope hold must protect the turn.delete-adjacent redaction
+    steps (4 runtime events, 4 messages, 5 model invocations), not just the
+    step-8 Turn delete — this is the Fix 1 gap the final review flagged as
+    Critical."""
+    from app.services.retention.holds import create_hold
+    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge
+
+    session = _session(schema)
+    _seed_turn(session, turn_id="t-1", age_days=200)  # past every redaction cutoff
+
+    session.execute(text(
+        "INSERT INTO agent_runtime_events (id, turn_id, sequence, event_type, payload, created_at) "
+        "VALUES ('re-1', 't-1', 1, 'node_start', '{\"k\": \"v\"}'::json, "
+        "now() - interval '200 days')"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_model_invocations (id, turn_id, invocation_slot, idempotency_key, "
+        "request_hash, status, created_at) "
+        "VALUES ('mi-1', 't-1', 1, 'idem-1', 'hash-1', 'succeeded', now() - interval '200 days')"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_purge_jobs (id, security_domain_id, purge_class, cursor_time, batch_size, generation) "
+        "VALUES ('j-1', :dom, 'turn', now(), 500, 0)"
+    ), {"dom": DEFAULT_DOMAIN})
+    session.commit()
+
+    create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+               scope_type="session", scope_id="s-1", reason="litigation")
+
+    claim = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
+    run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN, job_id=claim["id"], claim_token=claim["claim_token"])
+
+    event_payload = session.execute(text(
+        "SELECT payload FROM agent_runtime_events WHERE id = 're-1'"
+    )).scalar_one()
+    assert event_payload == {"k": "v"}  # NOT redacted — session hold protects it
+
+    message_content = session.execute(text(
+        "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'user'"
+    )).scalar_one()
+    assert message_content == "hello"  # NOT redacted (from _seed_turn's own insert)
+
+    mi_count = session.execute(text(
+        "SELECT count(*) FROM agent_model_invocations WHERE id = 'mi-1'"
+    )).scalar_one()
+    assert mi_count == 1  # NOT deleted — session hold protects it
+    session.close()
