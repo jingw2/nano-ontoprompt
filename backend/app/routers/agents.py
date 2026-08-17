@@ -125,6 +125,17 @@ def _require_agent_grant(db: Session, user_id: str, agent_id: str, capability: s
         raise HTTPException(404, detail="Not found")
 
 
+def _require_agent_version_owned(db: Session, agent_id: str, version_id: str) -> None:
+    """Existence-hiding sub-resource check: the path's version must belong to
+    the path's agent; otherwise 404 (a grant on one agent must not reach
+    another agent's immutable versions)."""
+    owned = db.execute(text(
+        "SELECT 1 FROM agent_versions WHERE id = :vid AND agent_id = :aid"
+    ), {"vid": version_id, "aid": agent_id}).scalar_one_or_none()
+    if owned is None:
+        raise HTTPException(404, detail="Not found")
+
+
 def _ontology_data_capabilities(db: Session, user_id: str, ontology_id: str) -> frozenset[str]:
     """The principal's effective data capabilities for one Ontology: the union
     of their active `ontology_data_grants` capabilities on that Ontology,
@@ -442,6 +453,7 @@ def bind_external_tool_route(agent_id: str, version_id: str, body: BindExternalT
                              x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     _require_idempotency_key(x_idempotency_key)
     _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_agent_version_owned(db, agent_id, version_id)
     try:
         result = bind_external_tool(db, actor_id=current_user.id, agent_version_id=version_id,
                                     tool_connection_version_id=body.tool_connection_version_id,
@@ -456,6 +468,7 @@ def unbind_external_tool_route(agent_id: str, version_id: str, alias: str,
                                db: Session = Depends(get_db),
                                current_user: User = Depends(require_editor)):
     _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_agent_version_owned(db, agent_id, version_id)
     try:
         unbind_external_tool(db, actor_id=current_user.id, agent_version_id=version_id, alias=alias)
     except AgentConfigError as exc:

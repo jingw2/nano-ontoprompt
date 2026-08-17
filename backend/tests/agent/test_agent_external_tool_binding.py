@@ -116,3 +116,54 @@ def test_duplicate_alias_rejected(session):
     with pytest.raises(AgentConfigError):
         bind_external_tool(session, actor_id="u-1", agent_version_id="av-1",
                            tool_connection_version_id=version_id, alias="search")
+
+
+def test_cross_agent_version_rejected(session):
+    """A grant on agent A must not reach agent B's immutable version: the
+    version-ownership check 404s before any binding mutation."""
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+
+    app_schema_version_id = session.execute(text(
+        "SELECT active_version_id FROM application_state_schema_registries WHERE application_key = 'chat-v1'"
+    )).scalar_one()
+    session.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES ('ag-2','private','active','u-1',now(),now())"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_versions (id, agent_id, version_no, name, default_model_config_version_id, "
+        "default_model_name, system_prompt, application_state_schema_version_id, config_hash, created_by, created_at) "
+        "VALUES ('av-2', 'ag-2', 1, 'test-version', 'mcv-1', 'test-model', '', :svid, 'h', 'u-1', now())"
+    ), {"svid": app_schema_version_id})
+    session.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, status, created_by) "
+        "VALUES ('aag-1', 'ag-1', 'u-1', '[\"edit\"]'::json, 'active', 'u-1')"
+    ))
+    session.commit()
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.post("/api/v1/agents/ag-1/versions/av-2/external-tools",
+                            json={"tool_connection_version_id": "tcv-x", "alias": "search"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-cross-1234567890"})
+            assert r.status_code == 404, r.text
+            r = client.delete("/api/v1/agents/ag-1/versions/av-2/external-tools/search",
+                              headers=headers)
+            assert r.status_code == 404, r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_unbind_missing_alias_rejected(session):
+    from app.services.agent.configuration import AgentConfigError, unbind_external_tool
+    with pytest.raises(AgentConfigError):
+        unbind_external_tool(session, actor_id="u-1", agent_version_id="av-1", alias="nope")
