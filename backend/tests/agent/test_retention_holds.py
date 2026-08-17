@@ -90,3 +90,14 @@ def test_create_hold_bumps_epoch(session):
     create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
                scope_type="session", scope_id="s-1", reason="audit")
     assert current_epoch(session, DEFAULT_DOMAIN) == epoch_before + 1
+
+
+def test_is_held_true_with_multiple_concurrent_holds_on_same_scope(session):
+    """is_held must not crash (MultipleResultsFound) when 2+ holds are
+    active on the same scope — nothing in the schema prevents this."""
+    from app.services.retention.holds import create_hold, is_held
+    create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+               scope_type="object", scope_id="o-1", reason="matter A")
+    create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+               scope_type="object", scope_id="o-1", reason="matter B")
+    assert is_held(session, DEFAULT_DOMAIN, "object", "o-1") is True

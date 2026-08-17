@@ -57,6 +57,6 @@ def release_hold(db: Session, *, actor_id: str, security_domain_id: str, hold_id
 
 def is_held(db: Session, security_domain_id: str, scope_type: str, scope_id: str) -> bool:
     return bool(db.execute(text(
-        "SELECT 1 FROM retention_holds WHERE security_domain_id = :domain "
-        "AND scope_type = :stype AND scope_id = :sid AND released_at IS NULL"
-    ), {"domain": security_domain_id, "stype": scope_type, "sid": scope_id}).scalar_one_or_none())
+        "SELECT EXISTS(SELECT 1 FROM retention_holds WHERE security_domain_id = :domain "
+        "AND scope_type = :stype AND scope_id = :sid AND released_at IS NULL)"
+    ), {"domain": security_domain_id, "stype": scope_type, "sid": scope_id}).scalar_one())
