@@ -15,8 +15,10 @@ import pytest
 
 from app.services.llm_service import (
     VAGUE_RELATION_TYPES,
+    apply_entity_resolution,
     extract_ontology,
     normalize_extracted_ontology,
+    resolve_entities,
 )
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -140,3 +142,116 @@ def test_extract_ontology_applies_normalization():
         llm_service._call_llm = original
     assert [e["name_cn"] for e in result["entities"]] == ["客户"]
     assert result["relations"] == []
+
+
+def test_resolve_entities_clusters_cross_file_surface_forms():
+    """resolve_entities (playbook resolution stage): two entities that survive
+    exact-name dedup because they're spelled differently across files ('供应商
+    甲' vs '供应商甲有限公司') get clustered into one alias map entry using
+    their descriptions; a genuinely distinct entity of the same type keeps its
+    own single-element cluster (no over-merging)."""
+    from app.services import llm_service
+    original = llm_service._call_llm
+
+    def fake_call(provider, api_key, api_base, model, messages):
+        return (
+            '{"clusters": ['
+            '{"canonical": "供应商甲有限公司", "aliases": ["供应商甲", "供应商甲有限公司"]},'
+            '{"canonical": "供应商乙", "aliases": ["供应商乙"]}'
+            ']}'
+        )
+
+    llm_service._call_llm = fake_call
+    try:
+        entities = [
+            {"name_cn": "供应商甲", "type": "Supplier", "description": "文件1中提及的供应商甲"},
+            {"name_cn": "供应商甲有限公司", "type": "Supplier", "description": "文件2中提及的供应商甲有限公司，注册地上海"},
+            {"name_cn": "供应商乙", "type": "Supplier", "description": "另一家供应商，与甲无关"},
+        ]
+        alias_map = resolve_entities(entities, {"provider": "openai", "api_key": "x"}, "m")
+    finally:
+        llm_service._call_llm = original
+
+    assert alias_map["供应商甲"] == "供应商甲有限公司"
+    assert alias_map["供应商甲有限公司"] == "供应商甲有限公司"
+    assert alias_map["供应商乙"] == "供应商乙"
+
+
+def test_resolve_entities_falls_back_to_identity_on_failure():
+    """A failed resolution call never drops an entity: every input name still
+    maps to itself."""
+    from app.services import llm_service
+    original = llm_service._call_llm
+    llm_service._call_llm = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        entities = [
+            {"name_cn": "A", "type": "Concept", "description": "d1"},
+            {"name_cn": "B", "type": "Concept", "description": "d2"},
+        ]
+        alias_map = resolve_entities(entities, {"provider": "openai", "api_key": "x"}, "m")
+    finally:
+        llm_service._call_llm = original
+    assert alias_map == {"A": "A", "B": "B"}
+
+
+def test_resolve_entities_single_type_member_skips_llm_call():
+    """A type with only one entity needs no clustering — no LLM call, identity
+    mapping only."""
+    from app.services import llm_service
+    original = llm_service._call_llm
+    llm_service._call_llm = lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called"))
+    try:
+        entities = [{"name_cn": "唯一实体", "type": "Concept", "description": "d"}]
+        alias_map = resolve_entities(entities, {"provider": "openai", "api_key": "x"}, "m")
+    finally:
+        llm_service._call_llm = original
+    assert alias_map == {"唯一实体": "唯一实体"}
+
+
+def test_apply_entity_resolution_merges_and_remaps_references():
+    """apply_entity_resolution merges aliased entities (keeping the richer
+    description), remaps relation endpoints, drops self-loops created by the
+    merge, and remaps linked_entities on logic rules/actions."""
+    result = {
+        "entities": [
+            {"name_cn": "供应商甲", "type": "Supplier", "description": "短描述", "properties": {"tier": "A"}},
+            {"name_cn": "供应商甲有限公司", "type": "Supplier",
+             "description": "文件2中提及的供应商甲有限公司，注册地上海，更完整的描述", "properties": {"city": "上海"}},
+            {"name_cn": "仓库", "type": "Warehouse", "description": "仓储节点", "properties": {}},
+        ],
+        "relations": [
+            {"source": "供应商甲", "target": "仓库", "type": "SUPPLIES", "confidence": 0.9},
+            {"source": "供应商甲有限公司", "target": "仓库", "type": "SUPPLIES", "confidence": 0.8},
+            {"source": "供应商甲", "target": "供应商甲有限公司", "type": "IS-A", "confidence": 0.5},
+        ],
+        "logic_rules": [
+            {"name_cn": "规则1", "linked_entities": ["供应商甲", "供应商甲有限公司", "仓库"]},
+        ],
+        "actions": [],
+    }
+    alias_map = {"供应商甲": "供应商甲有限公司", "供应商甲有限公司": "供应商甲有限公司", "仓库": "仓库"}
+
+    merged = apply_entity_resolution(result, alias_map)
+
+    names = [e["name_cn"] for e in merged["entities"]]
+    assert names == ["供应商甲有限公司", "仓库"]
+    canonical_entity = merged["entities"][0]
+    # the richer description survives the merge
+    assert canonical_entity["description"] == "文件2中提及的供应商甲有限公司，注册地上海，更完整的描述"
+    # non-conflicting properties from both surface forms are kept
+    assert canonical_entity["properties"] == {"tier": "A", "city": "上海"}
+
+    triples = {(r["source"], r["type"], r["target"]) for r in merged["relations"]}
+    # both SUPPLIES relations collapse to one (duplicate after remap)
+    assert triples == {("供应商甲有限公司", "SUPPLIES", "仓库")}
+    # the IS-A relation between the two aliases became a self-loop and was dropped
+
+    assert merged["logic_rules"][0]["linked_entities"] == ["供应商甲有限公司", "仓库"]
+
+
+def test_apply_entity_resolution_is_noop_for_identity_map():
+    """When resolution changes nothing (every name maps to itself), the result
+    is returned unchanged."""
+    result = {"entities": [{"name_cn": "A"}], "relations": []}
+    assert apply_entity_resolution(result, {"A": "A"}) is result
+    assert apply_entity_resolution(result, {}) is result

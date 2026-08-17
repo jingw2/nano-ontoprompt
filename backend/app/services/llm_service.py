@@ -138,6 +138,120 @@ def _is_junk_entity_name(name: str) -> bool:
     return False
 
 
+def resolve_entities(entities: list[dict], model_config: dict, model_name: str) -> dict[str, str]:
+    """Cross-document entity resolution (graph-engineering playbook, resolution
+    stage): within each entity type, cluster surface-form variants of the same
+    real-world concept using the extraction-time descriptions as disambiguation
+    context — catches cases exact-name matching misses (abbreviation vs full
+    name, alias vs formal name across files).  Returns an alias map
+    {raw_name_cn: canonical_name_cn} covering every input name; unmatched names
+    and failed calls fall back to identity so no entity is ever silently lost."""
+    alias_map: dict[str, str] = {}
+    by_type: dict[str, list[dict]] = {}
+    for e in entities:
+        name = e.get("name_cn")
+        if not name:
+            continue
+        alias_map[name] = name
+        by_type.setdefault(e.get("type") or "", []).append(e)
+
+    provider = model_config.get("provider", "openai")
+    api_key = model_config.get("api_key", "")
+    api_base = model_config.get("api_base")
+
+    for etype, group in by_type.items():
+        if len(group) < 2:
+            continue
+        entity_list = "\n".join(
+            f"- {e['name_cn']}: {(e.get('description') or '').strip()[:100]}" for e in group
+        )
+        system_prompt = (
+            f"你是实体消歧专家。下面是同一类型（{etype or '未分类'}）从文档中提取的实体，"
+            "其中部分可能是同一概念的不同写法（如全称/简称、中英文并列、别名）。请聚类："
+            "每个输入名称必须出现在且仅出现在一个簇的 aliases 中；确实不同的概念各自单独成簇；"
+            "结合描述判断，不要仅凭字面相似合并不同概念；canonical 取信息最完整、无歧义的写法。\n\n"
+            '只返回 JSON：{"clusters": [{"canonical": "规范名", "aliases": ["写法1", "写法2"]}]}'
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"实体列表：\n{entity_list}"},
+        ]
+        try:
+            parsed = _parse_response(_call_llm(provider, api_key, api_base, model_name, messages))
+        except Exception:
+            continue  # resolution is best-effort; keep identity mapping on failure
+        group_names = {e["name_cn"] for e in group}
+        for cluster in (parsed.get("clusters") or []) if isinstance(parsed, dict) else []:
+            if not isinstance(cluster, dict):
+                continue
+            canonical = _clean_entity_name(cluster.get("canonical"))
+            if not canonical or canonical not in group_names:
+                continue
+            for alias in cluster.get("aliases") or []:
+                alias = _clean_entity_name(alias)
+                if alias and alias in group_names:
+                    alias_map[alias] = canonical
+    return alias_map
+
+
+def apply_entity_resolution(result: dict, alias_map: dict) -> dict:
+    """Rewrite entities/relations/logic_rules/actions through an alias map from
+    `resolve_entities()`, merging duplicate surface forms into their canonical
+    entity (keeping the richer description/properties) and remapping every
+    downstream name reference so nothing is left pointing at a dropped alias."""
+    if not alias_map or all(k == v for k, v in alias_map.items()):
+        return result  # no-op: nothing to merge
+
+    def _remap(name: Any) -> Any:
+        return alias_map.get(name, name) if isinstance(name, str) else name
+
+    merged: dict[str, dict] = {}
+    for e in result.get("entities") or []:
+        name = e.get("name_cn")
+        if not name:
+            continue
+        canonical = _remap(name)
+        if canonical not in merged:
+            e = dict(e)
+            e["name_cn"] = canonical
+            merged[canonical] = e
+        else:
+            existing = merged[canonical]
+            if len(e.get("description") or "") > len(existing.get("description") or ""):
+                existing["description"] = e["description"]
+            if isinstance(e.get("properties"), dict):
+                existing.setdefault("properties", {})
+                for k, v in e["properties"].items():
+                    existing["properties"].setdefault(k, v)
+
+    result = dict(result)
+    result["entities"] = list(merged.values())
+
+    relations = []
+    seen_rel: set[tuple] = set()
+    for r in result.get("relations") or []:
+        r = dict(r)
+        r["source"] = _remap(r.get("source", ""))
+        r["target"] = _remap(r.get("target", ""))
+        key = (r["source"], r.get("type"), r["target"])
+        if r["source"] and r["target"] and r["source"] != r["target"] and key not in seen_rel:
+            seen_rel.add(key)
+            relations.append(r)
+    result["relations"] = relations
+
+    for coll in ("logic_rules", "actions"):
+        items = []
+        for item in result.get(coll) or []:
+            item = dict(item)
+            linked = item.get("linked_entities")
+            if isinstance(linked, list):
+                item["linked_entities"] = list(dict.fromkeys(_remap(n) for n in linked))
+            items.append(item)
+        result[coll] = items
+
+    return result
+
+
 def infer_relations(entities: list, existing_relations: list, text: str,
                     model_config: dict, model_name: str) -> list:
     """Second-pass relation inference: find IS-A / PART-OF / INSTANCE-OF links the first pass missed."""
