@@ -97,6 +97,8 @@ def create_policy_version(db: Session, *, actor_id: str, security_domain_id: str
         if int(value) < TABLE_MINIMUMS[key]:
             raise RetentionPolicyError("RETENTION_MINIMUM_VIOLATION")
 
+    acquire_domain_lock(db, security_domain_id)
+
     policy_id = db.execute(text(
         "SELECT id FROM retention_policies WHERE security_domain_id = :domain"
     ), {"domain": security_domain_id}).scalar_one_or_none()
