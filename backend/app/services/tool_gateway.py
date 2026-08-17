@@ -26,6 +26,15 @@ TRUSTED_READ_DESCRIPTORS = {
     "ontology.preview_action": frozenset({"execute_instance_action"}),
 }
 
+# untrusted external descriptors -> required data capability. Distinct from
+# TRUSTED_READ_DESCRIPTORS: dispatch wraps results as UntrustedArtifact and
+# the recheck below additionally verifies the specific external-tool
+# binding (not just the Agent's own run grant), since a binding can be
+# removed from an Agent version independently of the Agent's overall grant.
+EXTERNAL_TOOL_DESCRIPTORS = {
+    "external.search": frozenset({"external_tool_call"}),
+}
+
 
 class ToolGatewayError(Exception):
     """A gateway request was rejected (fail closed)."""
@@ -70,6 +79,8 @@ class ToolGateway:
 
     def execute(self, request: GatewayRequest, *, ontology_id: str | None = None) -> GatewayResult:
         correlation_id = f"gateway:{request.descriptor_id}:{uuid.uuid4().hex[:12]}"
+        if request.descriptor_id in EXTERNAL_TOOL_DESCRIPTORS:
+            return self._execute_external(request, correlation_id)
         required = TRUSTED_READ_DESCRIPTORS.get(request.descriptor_id)
         if required is None:
             raise ToolGatewayError("DESCRIPTOR_UNKNOWN")
@@ -91,6 +102,50 @@ class ToolGateway:
         result = self._dispatch(request, required, correlation_id)
         result.trace = trace + result.trace
         return result
+
+    def _execute_external(self, request: GatewayRequest, correlation_id: str) -> GatewayResult:
+        if not self._recheck_grant(request.agent_id, request.user_id, "run"):
+            raise ToolGatewayError("AGENT_GRANT_REVOKED")
+        agent_version_id = request.parameters.get("agent_version_id")
+        tool_connection_version_id = request.parameters.get("tool_connection_version_id")
+        binding_alive = self._db.execute(text(
+            "SELECT 1 FROM agent_external_tool_bindings "
+            "WHERE agent_version_id = :av AND tool_connection_version_id = :tcv"
+        ), {"av": agent_version_id, "tcv": tool_connection_version_id}).scalar_one_or_none()
+        if binding_alive is None:
+            raise ToolGatewayError("EXTERNAL_TOOL_BINDING_REVOKED")
+        version = self._db.execute(text(
+            "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tp.kind "
+            "FROM tool_connection_versions tcv "
+            "JOIN tool_connections tc ON tc.id = tcv.connection_id "
+            "JOIN tool_providers tp ON tp.id = tc.provider_id "
+            "WHERE tcv.id = :id"
+        ), {"id": tool_connection_version_id}).mappings().one_or_none()
+        if version is None or version["approval_status"] != "approved":
+            raise ToolGatewayError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
+        if version["kind"] != "search":
+            raise ToolGatewayError("EXTERNAL_TOOL_KIND_UNSUPPORTED")
+
+        from app.services.tools.search import SearchError, web_search
+        try:
+            results = web_search(
+                endpoint=version["endpoint"] or "", api_key=version["credential_reference"],
+                query=str(request.parameters.get("query") or ""),
+                result_limit=int(request.parameters.get("result_limit") or 5),
+            )
+        except SearchError as exc:
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        except Exception as exc:  # raw transport errors (httpx.TimeoutException etc.) escape web_search's taxonomy
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
+        payload = {"results": [
+            {"title": r["title"], "url": r["url"], "content": r["artifact"].sanitized_content,
+             "source": r["artifact"].source, "sensitivity": r["artifact"].sensitivity}
+            for r in results
+        ]}
+        return GatewayResult(descriptor_id=request.descriptor_id, outcome="untrusted_read",
+                             payload=payload, correlation_id=correlation_id,
+                             trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
+                                    "grant_recheck": "passed", "binding_recheck": "passed"}])
 
     def _dispatch(self, request: GatewayRequest, required: frozenset[str], correlation_id: str) -> GatewayResult:
         from app.services.ontology_tools import execute_ontology_read

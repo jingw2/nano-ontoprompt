@@ -18,7 +18,7 @@ DATA_CAPABILITIES = frozenset({
     "discover", "read_schema", "read_instances", "traverse_relations",
     "execute_read_logic", "preview_instance_action", "execute_instance_action",
 })
-AGENT_CAPABILITIES = frozenset({"discover", "run", "view_config", "edit", "view_audit"})
+AGENT_CAPABILITIES = frozenset({"discover", "run", "view_config", "edit", "view_audit", "external_tool_call"})
 PROJECT_CAPABILITIES = frozenset({"discover", "read", "edit", "publish"})
 
 _DATA_ORDER = (
