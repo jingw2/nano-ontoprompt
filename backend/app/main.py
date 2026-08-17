@@ -34,6 +34,7 @@ from app.routers.models import admin_router as models_admin_router
 from app.routers.ontology_data_grants import router as data_grants_router
 from app.routers.application_state_schemas import router as app_state_schemas_router
 from app.routers import retention
+from app.routers import tool_connections
 from app.routers import (
     agents as agents_module,
     agent_approvals,
@@ -199,6 +200,7 @@ app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-ma
 app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"])
 app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"])
 app.include_router(retention.router, prefix="/api/v2", tags=["v2-retention"])
+app.include_router(tool_connections.router, prefix="/api/v2", tags=["tool-connections"])
 
 def get_db():
     db = SessionLocal()

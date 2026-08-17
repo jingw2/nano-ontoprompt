@@ -67,11 +67,16 @@ class ToolProvider(Base):
     __tablename__ = "tool_providers"
     __table_args__ = (
         CheckConstraint("status IN ('active', 'disabled')", name="ck_tool_providers_status"),
+        CheckConstraint(
+            "kind IN ('search', 'playwright', 'skill', 'external_mcp', 'ontology_mcp')",
+            name="ck_tool_providers_kind",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

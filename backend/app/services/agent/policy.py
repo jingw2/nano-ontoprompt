@@ -134,6 +134,8 @@ _PLATFORM_PREFIXES = (
     "/api/v2/application-state-schemas",
     "/api/v2/incremental",
     "/api/v2/retention",
+    "/api/v2/tool-providers",
+    "/api/v2/tool-connections",
     "/health",
 )
 
