@@ -140,6 +140,80 @@ def test_gateway_read_instances_mapped_and_traced(schema):
     s.close()
 
 
+def test_gateway_read_instances_sort_by_finds_min_max(schema):
+    """sort_by/sort_order let the model find a min/max in one call instead of
+    paging through every row (fixes TOOL_ROUND_LIMIT on "which X has the
+    least/most Y" questions): numeric-aware ordering on a row_data field."""
+    release_id = _seed(schema)
+    s = _session(schema)
+    s.execute(text(
+        "INSERT INTO entity_instances (id, entity_id, ontology_id, row_identity, row_data, created_at) "
+        "VALUES ('i-3', 'e-1', 'o-1', 'c', '{\"name\":\"Gamma\",\"stock\":\"5\"}'::json, now()),"
+        "('i-4', 'e-1', 'o-1', 'd', '{\"name\":\"Delta\",\"stock\":\"50\"}'::json, now()),"
+        "('i-5', 'e-1', 'o-1', 'e', '{\"name\":\"Epsilon\",\"stock\":\"20\"}'::json, now())"
+    ))
+    s.commit()
+    from app.services.tool_gateway import ToolGateway, GatewayRequest
+    gw = ToolGateway(s)
+
+    asc = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "query": "",
+                                   "sort_by": "stock", "sort_order": "asc"}),
+        ontology_id="o-1",
+    )
+    stocks_asc = [item["row_data"]["stock"] for item in asc.payload["items"]
+                  if item["row_data"].get("name") in ("Gamma", "Delta", "Epsilon")]
+    assert stocks_asc == ["5", "20", "50"]
+
+    desc = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "query": "",
+                                   "sort_by": "stock", "sort_order": "desc"}),
+        ontology_id="o-1",
+    )
+    stocks_desc = [item["row_data"]["stock"] for item in desc.payload["items"]
+                   if item["row_data"].get("name") in ("Gamma", "Delta", "Epsilon")]
+    assert stocks_desc == ["50", "20", "5"]
+
+    # a non-numeric field never errors — it just doesn't reorder meaningfully
+    text_sort = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "query": "",
+                                   "sort_by": "name", "sort_order": "asc"}),
+        ontology_id="o-1",
+    )
+    assert text_sort.outcome == "read"
+
+    # a full page WITHOUT sort_by carries an explicit "don't assume this is
+    # everything" note — the model must not answer a min/max question off an
+    # unsorted page it mistakes for the complete dataset
+    truncated = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "query": "",
+                                   "limit": 3}),
+        ontology_id="o-1",
+    )
+    assert len(truncated.payload["items"]) == 3
+    assert "sort_by" in truncated.payload["note"]
+
+    # the same page fetched WITH sort_by carries no such note (it's the
+    # deliberate top-N a min/max question asked for, not an arbitrary page)
+    sorted_page = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "query": "",
+                                   "limit": 3, "sort_by": "stock", "sort_order": "asc"}),
+        ontology_id="o-1",
+    )
+    assert "note" not in sorted_page.payload
+    s.close()
+
+
 def test_gateway_traverse_relations(schema):
     release_id = _seed(schema)
     s = _session(schema)

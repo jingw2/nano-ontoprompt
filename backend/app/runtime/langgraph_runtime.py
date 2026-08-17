@@ -410,9 +410,12 @@ class LangGraphRuntime:
         ontology_id = descriptor["ontology_id"]
         release_id = descriptor.get("release_id")
         if category == "query":
+            sort_order = arguments.get("sort_order")
             return _READ_INSTANCES, {
                 "ontology_id": ontology_id, "release_id": release_id,
                 "query": str(arguments.get("query") or ""), "limit": int(arguments.get("limit") or 10),
+                "sort_by": str(arguments.get("sort_by") or "") or None,
+                "sort_order": sort_order if sort_order in ("asc", "desc") else None,
             }
         if category == "logic":
             return _EXECUTE_READ_LOGIC, {"logic_id": descriptor["source_id"]}
