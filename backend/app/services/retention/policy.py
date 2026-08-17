@@ -158,9 +158,11 @@ def activate_policy_version(db: Session, *, actor_id: str, security_domain_id: s
     return {"policy_id": policy_id, "active_version_id": version_id, "epoch": new_epoch}
 
 
-def list_policy_versions(db: Session, limit: int = 100) -> list[dict]:
+def list_policy_versions(db: Session, limit: int = 100) -> dict:
     rows = db.execute(text(
-        "SELECT v.id, v.policy_id, v.version_no, v.status, v.rules "
-        "FROM retention_policy_versions v ORDER BY v.created_at DESC LIMIT :lim"
-    ), {"lim": limit}).mappings().all()
-    return [dict(r) for r in rows]
+        "SELECT v.id, v.policy_id, v.version_no, v.status, v.rules, p.security_domain_id "
+        "FROM retention_policy_versions v JOIN retention_policies p ON p.id = v.policy_id "
+        "ORDER BY v.created_at DESC LIMIT :lim"
+    ), {"lim": limit + 1}).mappings().all()
+    has_more = len(rows) > limit
+    return {"items": [dict(r) for r in rows[:limit]], "has_more": has_more}

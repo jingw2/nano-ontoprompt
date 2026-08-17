@@ -67,9 +67,11 @@ def is_held(db: Session, security_domain_id: str, scope_type: str, scope_id: str
     ), {"domain": security_domain_id, "stype": scope_type, "sid": scope_id}).scalar_one())
 
 
-def list_holds(db: Session, limit: int = 100) -> list[dict]:
+def list_holds(db: Session, limit: int = 100) -> dict:
     rows = db.execute(text(
-        "SELECT id, scope_type, scope_id, reason, released_at IS NOT NULL AS released "
+        "SELECT id, security_domain_id, scope_type, scope_id, reason, "
+        "released_at IS NOT NULL AS released "
         "FROM retention_holds ORDER BY issued_at DESC LIMIT :lim"
-    ), {"lim": limit}).mappings().all()
-    return [dict(r) for r in rows]
+    ), {"lim": limit + 1}).mappings().all()
+    has_more = len(rows) > limit
+    return {"items": [dict(r) for r in rows[:limit]], "has_more": has_more}

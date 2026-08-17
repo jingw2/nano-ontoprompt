@@ -42,8 +42,8 @@ def _hold_error(exc: Exception) -> HTTPException:
 
 @router.get("/retention-policies")
 def list_policies(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    items = list_policy_versions(db)
-    return {"data": {"items": items, "next_cursor": None, "has_more": False}}
+    result = list_policy_versions(db)
+    return {"data": {"items": result["items"], "next_cursor": None, "has_more": result["has_more"]}}
 
 
 @router.post("/retention-policies", status_code=201)
@@ -71,8 +71,8 @@ def activate_policy(version_id: str, body: ActivateRetentionPolicyRequest, db: S
 
 @router.get("/retention-holds")
 def list_holds(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    items = _list_holds(db)
-    return {"data": {"items": items, "next_cursor": None, "has_more": False}}
+    result = _list_holds(db)
+    return {"data": {"items": result["items"], "next_cursor": None, "has_more": result["has_more"]}}
 
 
 @router.post("/retention-holds", status_code=201)
