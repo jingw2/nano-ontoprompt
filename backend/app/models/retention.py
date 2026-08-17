@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger, CheckConstraint, DateTime, ForeignKey, Index, JSON,
-    String, Text, UniqueConstraint,
+    String, Text, UniqueConstraint, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,7 +42,7 @@ class RetentionPolicyVersion(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     policy_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("retention_policies.id", ondelete="RESTRICT"), nullable=False, index=True)
+        String(36), ForeignKey("retention_policies.id", ondelete="RESTRICT"), nullable=False)
     version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
     rules: Mapped[dict] = mapped_column(JSON, nullable=False)
     canonical_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -57,7 +57,7 @@ class RetentionHold(Base):
     __table_args__ = (
         CheckConstraint("scope_type IN ('subject', 'session', 'turn', 'object')", name="ck_rh_scope_type"),
         Index("ix_rh_active_scope", "security_domain_id", "scope_type", "scope_id",
-              postgresql_where=Text("released_at IS NULL")),
+              postgresql_where=text("released_at IS NULL")),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
