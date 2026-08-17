@@ -1,7 +1,9 @@
 """Fixed-policy Agent retention Celery task (P3A-RETENTION).
 
 Claims the per-domain purge job with a lease and runs the memory-free ten
-idempotent steps.  No dynamic policy, hold, epoch or memory cleanup.
+idempotent steps.  As of P6A, those steps honor the active
+RetentionPolicyVersion's duration (floored at TABLE_MINIMUMS) and legal
+holds; only memory cleanup is still out of scope.
 """
 from app.tasks.celery_app import celery_app
 

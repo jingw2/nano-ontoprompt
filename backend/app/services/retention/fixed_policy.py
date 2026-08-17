@@ -1,11 +1,13 @@
 """Memory-free fixed-policy retention (P3A-RETENTION, Section 7).
 
-The ten idempotent steps purge core Agent data at the compiled immutable
-minimums using a fenced purge job (lease/cursor/generation) and a purge
-marker that the checkpoint saver's `adelete_thread` requires.  Each step is
-independently durable: a crash mid-step resumes from the cursor; a step never
-runs a known effect twice.  No dynamic policy, hold, epoch, memory or vector
-cleanup exists.
+The ten idempotent steps purge core Agent data using a fenced purge job
+(lease/cursor/generation) and a purge marker that the checkpoint saver's
+`adelete_thread` requires.  Each step is independently durable: a crash
+mid-step resumes from the cursor; a step never runs a known effect twice.
+As of P6A, the steps honor the active `RetentionPolicyVersion`'s duration
+for each class (floored at `TABLE_MINIMUMS` — see policy.py) and legal
+holds (see holds.py); only memory/vector-store cleanup is still out of
+scope.
 """
 from __future__ import annotations
 
