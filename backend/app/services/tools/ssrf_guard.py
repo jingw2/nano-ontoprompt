@@ -78,8 +78,10 @@ def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
                     prev_origin = _origin(current)
                     next_origin = _origin(nxt)
                     # never forward credentials across an origin change — the SSRF
-                    # guard validates network destinations, not credential trust
-                    hop_headers = headers if prev_origin == next_origin else None
+                    # guard validates network destinations, not credential trust.
+                    # One-way latch: once dropped, headers stay dropped even if a
+                    # later same-origin hop on the new host would re-attach them.
+                    hop_headers = hop_headers if prev_origin == next_origin else None
                     current = nxt
                     continue
                 chunks: list[bytes] = []

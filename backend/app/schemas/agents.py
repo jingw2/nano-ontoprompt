@@ -149,4 +149,6 @@ class RevokeAgentAccessGrantRequest(BaseModel):
 
 class BindExternalToolRequest(BaseModel):
     tool_connection_version_id: str
-    alias: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", max_length=64)
+    # 55, not 64: the runtime derives the model function name as `external_<alias>`
+    # (9-char prefix), and OpenAI's function-name contract caps at 64 total.
+    alias: str = Field(pattern=r"^[A-Za-z0-9_-]{1,55}$", max_length=55)

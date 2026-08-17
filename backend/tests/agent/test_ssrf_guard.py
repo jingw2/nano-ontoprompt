@@ -130,3 +130,24 @@ def test_safe_get_keeps_headers_on_same_origin_redirect(monkeypatch):
                         headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert calls[1] == ("https://search.example.com/results", {"Authorization": "Bearer secret"})
+
+
+def test_safe_get_header_drop_is_one_way_latch(monkeypatch):
+    """Once headers are dropped on a cross-origin hop they stay dropped, even
+    when the attacker's host then redirects to its OWN origin (which would
+    otherwise re-attach the credential)."""
+    def _respond(url):
+        if url == "https://search.example.com/v1":
+            return _FakeResponse(302, {"location": "https://attacker.example.com/a"})
+        if url == "https://attacker.example.com/a":
+            return _FakeResponse(302, {"location": "https://attacker.example.com/collect"})
+        return _FakeResponse(200, body=b"ok")
+
+    calls = _patch_client(monkeypatch, _respond)
+    monkeypatch.setattr("app.services.tools.ssrf_guard._validate_url", lambda url: None)
+    response = safe_get("https://search.example.com/v1", timeout_seconds=5, max_bytes=100,
+                        headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert calls[0] == ("https://search.example.com/v1", {"Authorization": "Bearer secret"})
+    assert calls[1] == ("https://attacker.example.com/a", None)
+    assert calls[2] == ("https://attacker.example.com/collect", None)  # latch holds

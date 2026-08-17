@@ -149,7 +149,8 @@ class ToolGateway:
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
         from app.services.untrusted_artifact import safe_markdown
         payload = {"results": [
-            {"title": safe_markdown(r["title"] or ""), "url": _safe_external_url(r["url"]),
+            {"title": safe_markdown(r["title"] if isinstance(r["title"], str) else ""),
+             "url": _safe_external_url(r["url"] if isinstance(r["url"], str) else ""),
              "content": r["artifact"].sanitized_content,
              "source": r["artifact"].source, "sensitivity": r["artifact"].sensitivity}
             for r in results
