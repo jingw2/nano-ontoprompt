@@ -35,6 +35,8 @@ def _hold_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RetentionHoldError):
         message = str(exc)
         return HTTPException(404 if "NOT_FOUND" in message else 422, detail=message)
+    if isinstance(exc, RetentionPolicyError):
+        return _policy_error(exc)
     raise exc
 
 
@@ -79,7 +81,7 @@ def create_hold_route(body: CreateRetentionHoldRequest, db: Session = Depends(ge
     try:
         result = create_hold(db, actor_id=current_user.id, security_domain_id=body.security_domain_id,
                              scope_type=body.scope_type, scope_id=body.scope_id, reason=body.reason)
-    except RetentionHoldError as exc:
+    except (RetentionHoldError, RetentionPolicyError) as exc:
         raise _hold_error(exc)
     return {"data": result}
 
@@ -90,6 +92,6 @@ def release_hold_route(hold_id: str, body: ReleaseRetentionHoldRequest, db: Sess
     try:
         result = release_hold(db, actor_id=current_user.id, security_domain_id=body.security_domain_id,
                               hold_id=hold_id)
-    except RetentionHoldError as exc:
+    except (RetentionHoldError, RetentionPolicyError) as exc:
         raise _hold_error(exc)
     return {"data": result}
