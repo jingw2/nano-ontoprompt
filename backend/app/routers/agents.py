@@ -141,6 +141,8 @@ def _validate_ontology_bindings(db: Session, current_user: User, bindings: list[
     binding's data capabilities must fit the principal's effective data
     capabilities (data grants ∩ role ceiling), and every selected tool must be
     exposed by the Ontology.  Raises 422 on the first violation."""
+    if len(bindings) > 1:
+        raise HTTPException(422, detail="AGENTS_BINDING_SINGLE_ONTOLOGY_ONLY")
     for binding in bindings:
         ontology_id = binding["ontology_id"]
         discoverable = db.execute(text(

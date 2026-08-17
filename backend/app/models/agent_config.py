@@ -149,6 +149,10 @@ class PromptGeneration(Base):
 
 class AgentOntologyBinding(Base):
     __tablename__ = "agent_ontology_bindings"
+    __table_args__ = (
+        # one Agent (version) binds at most one published Ontology
+        UniqueConstraint("agent_version_id", name="uq_agent_ontology_binding_single"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     agent_version_id: Mapped[str] = mapped_column(

@@ -187,7 +187,7 @@ describe('P2C-TOOLS', () => {
     expect(bindings[0].enabled_categories).not.toContain('logic')
   })
 
-  it('supports multiple ontology bindings through the dropdown', async () => {
+  it('binds at most one ontology: the picker locks once bound, unbind to switch', async () => {
     toolsHandlers()
     server.use(
       http.get('*/api/v1/ontologies/o-2/tools', () =>
@@ -201,15 +201,19 @@ describe('P2C-TOOLS', () => {
     renderTab()
     await screen.findByTestId('ontology-picker')
     await pickOntology('Supply Ontology')
-    await screen.findByTestId('ontology-tools-o-1')
+    expect(await screen.findByTestId('ontology-tools-o-1')).toBeTruthy()
+    // the ontology carries ALL categories by default
+    expect((screen.getByTestId('category-o-1-query') as HTMLInputElement).checked).toBe(true)
+    // once bound, the picker locks — an Agent binds at most one ontology
+    expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(true)
+    // unbind, then a different ontology can be picked — it REPLACES, not adds
+    await userEvent.click(screen.getByRole('button', { name: '解绑' }))
+    expect(screen.queryByTestId('ontology-tools-o-1')).toBeNull()
+    expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(false)
     await pickOntology('Policy Ontology')
     expect(await screen.findByTestId('ontology-tools-o-2')).toBeTruthy()
-    // both bindings carry ALL categories by default
-    expect((screen.getByTestId('category-o-1-query') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByTestId('category-o-2-query') as HTMLInputElement).checked).toBe(true)
-    // the bound ontology is removed from the picker
-    const select = screen.getByTestId('ontology-picker') as HTMLSelectElement
-    expect([...select.options].some(o => o.textContent?.includes('o-1'))).toBe(false)
+    expect(screen.queryByTestId('ontology-tools-o-1')).toBeNull()
+    expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(true)
   })
 
   it('restores persisted bindings from the active version', async () => {

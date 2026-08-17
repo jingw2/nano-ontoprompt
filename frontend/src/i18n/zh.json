@@ -451,7 +451,7 @@
       "category_action": "实例 Action",
       "category_tools_note": "勾选的类别默认全部启用；取消勾选后该类别下的工具不会在本 Turn 中执行",
       "select_ontology": "选择要绑定的已发布本体…",
-      "picker_note": "下拉选择已发布本体（编码 + 名称），绑定后默认启用全部工具类别",
+      "picker_note": "每个 Agent 仅能绑定一个已发布本体；绑定后默认启用全部工具类别，如需更换请先解绑",
       "unbind": "解绑"
     }
   },

@@ -117,10 +117,11 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bindings.map(b => b.ontology_id).join(',')])
 
+  // an Agent binds at most one Ontology: picking one REPLACES any existing binding
   const bindOntology = useCallback((ontologyId: string) => {
     const ontology = ontologies.find(o => o.id === ontologyId)
-    if (!ontology || bindings.some(b => b.ontology_id === ontologyId)) return
-    setBindings(prev => [...prev, {
+    if (!ontology) return
+    setBindings([{
       ontology_id: ontology.id,
       capabilities: [...BASE_CAPABILITIES],
       allowlists: {},
@@ -129,7 +130,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
       enabled_categories: [...TOOL_CATEGORIES],
     }])
     loadTools(ontology.id)
-  }, [ontologies, bindings, loadTools])
+  }, [ontologies, loadTools])
 
   const unbindOntology = useCallback((ontologyId: string) => {
     setBindings(prev => prev.filter(b => b.ontology_id !== ontologyId))
@@ -217,8 +218,9 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
     }
   }, [agentId, activeVersion, bindings, onSaved, t])
 
-  const boundIds = new Set(bindings.map(b => b.ontology_id))
-  const pickable = ontologies.filter(o => !boundIds.has(o.id))
+  // one Agent binds at most one Ontology: once bound, the picker is disabled —
+  // unbind first to switch to a different published ontology
+  const pickable = bindings.length > 0 ? [] : ontologies
 
   return (
     <div className="p-6 space-y-6" data-testid="tool-config-tab">
@@ -229,7 +231,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
           <div className="flex items-center gap-2">
             <select
               data-testid="ontology-picker"
-              disabled={!canEdit || pickable.length === 0}
+              disabled={!canEdit || bindings.length > 0 || pickable.length === 0}
               value=""
               onChange={e => { if (e.target.value) bindOntology(e.target.value) }}
               className="border rounded-lg px-3 py-2 text-sm bg-white"
@@ -241,7 +243,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
                 <option key={o.id} value={o.id}>{o.name} ({o.id})</option>
               ))}
             </select>
-            <span className="text-xs text-gray-400">{t('agent.tools.picker_note', '下拉选择已发布本体（编码 + 名称），绑定后默认启用全部工具类别')}</span>
+            <span className="text-xs text-gray-400">{t('agent.tools.picker_note', '每个 Agent 仅能绑定一个已发布本体；绑定后默认启用全部工具类别，如需更换请先解绑')}</span>
           </div>
           {ontologies.length === 0 && !error && (
             <p className="text-sm text-gray-400">{t('agent.tools.no_ontologies', '没有可绑定的已发布本体')}</p>
