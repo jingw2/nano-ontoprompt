@@ -111,6 +111,29 @@ def test_gateway_dispatches_search_and_wraps_results(session, monkeypatch):
     assert result.payload["results"][0]["content"] == "hi"  # sanitized, script/tags stripped upstream
 
 
+def test_gateway_sanitizes_title_and_url_at_payload_boundary(session, monkeypatch):
+    """Malicious upstream `title`/`url` must not reach the model context:
+    title goes through Safe Markdown, non-http(s) urls collapse to ''."""
+    from app.services.tool_gateway import GatewayRequest, ToolGateway
+
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        from app.services.untrusted_artifact import make_artifact
+        return [{"title": "<img src=x onerror=1>", "url": "javascript:alert(1)",
+                 "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
+                                           raw_content="ok")}]
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _fake_web_search)
+    version_id = _bound_search_version(session)
+    gateway = ToolGateway(session)
+    result = gateway.execute(GatewayRequest(
+        agent_id="ag-1", user_id="u-1", descriptor_id="external.search", operation="external_tool_call",
+        parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id, "query": "hi"},
+    ))
+    entry = result.payload["results"][0]
+    assert "<" not in entry["title"]  # <img ...> stripped by Safe Markdown
+    assert entry["url"] == ""  # javascript: scheme blocked
+
+
 def test_gateway_rejects_revoked_binding(session, monkeypatch):
     from app.services.tool_gateway import GatewayRequest, ToolGateway, ToolGatewayError
     from app.services.agent.configuration import unbind_external_tool

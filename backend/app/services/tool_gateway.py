@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -34,6 +35,15 @@ TRUSTED_READ_DESCRIPTORS = {
 EXTERNAL_TOOL_DESCRIPTORS = {
     "external.search": frozenset({"external_tool_call"}),
 }
+
+
+def _safe_external_url(raw_url: str) -> str:
+    """Only http(s) URLs pass; anything else (javascript:, data:, garbage)
+    collapses to the empty string rather than reaching the model."""
+    parsed = urlparse(raw_url or "")
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        return raw_url
+    return ""
 
 
 class ToolGatewayError(Exception):
@@ -137,8 +147,10 @@ class ToolGateway:
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
         except Exception as exc:  # raw transport errors (httpx.TimeoutException etc.) escape web_search's taxonomy
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
+        from app.services.untrusted_artifact import safe_markdown
         payload = {"results": [
-            {"title": r["title"], "url": r["url"], "content": r["artifact"].sanitized_content,
+            {"title": safe_markdown(r["title"] or ""), "url": _safe_external_url(r["url"]),
+             "content": r["artifact"].sanitized_content,
              "source": r["artifact"].source, "sensitivity": r["artifact"].sensitivity}
             for r in results
         ]}
