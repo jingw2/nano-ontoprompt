@@ -1,5 +1,5 @@
 from typing import List, Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 
@@ -149,4 +149,4 @@ class RevokeAgentAccessGrantRequest(BaseModel):
 
 class BindExternalToolRequest(BaseModel):
     tool_connection_version_id: str
-    alias: str
+    alias: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", max_length=64)

@@ -163,6 +163,42 @@ def test_cross_agent_version_rejected(session):
         app.dependency_overrides.clear()
 
 
+def test_bind_route_rejects_invalid_alias(session):
+    """The alias charset/length contract is enforced at the schema boundary:
+    a space-containing alias is 422 before any DB work; a valid one binds."""
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+
+    session.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, status, created_by) "
+        "VALUES ('aag-1', 'ag-1', 'u-1', '[\"edit\"]'::json, 'active', 'u-1')"
+    ))
+    session.commit()
+    version_id = _approved_version(session)
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.post("/api/v1/agents/ag-1/versions/av-1/external-tools",
+                            json={"tool_connection_version_id": version_id, "alias": "web search"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-alias-1234567890"})
+            assert r.status_code == 422, r.text
+            r = client.post("/api/v1/agents/ag-1/versions/av-1/external-tools",
+                            json={"tool_connection_version_id": version_id, "alias": "search"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-alias-0987654321"})
+            assert r.status_code == 201, r.text
+            assert r.json()["data"]["alias"] == "search"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_unbind_missing_alias_rejected(session):
     from app.services.agent.configuration import AgentConfigError, unbind_external_tool
     with pytest.raises(AgentConfigError):
