@@ -9,14 +9,22 @@ The final answer is the model's real content — never the canned
 """
 import asyncio
 import os
+import subprocess
+import sys
 import uuid
+from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 from app.runtime.langgraph_runtime import LangGraphRuntime
 from app.runtime.protocol import TurnRuntimeContext
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
 # pinned encryption key so any real-caller resolution in this module can never
 # depend on module import order (same pattern as the other agent modules)
@@ -28,6 +36,39 @@ os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
 def _pin_encryption_key():
     os.environ["ENCRYPTION_KEY"] = TEST_FERNET_KEY
     yield
+
+
+def _scoped_url(schema: str) -> str:
+    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
+
+
+def _alembic(schema: str, *args, check=True):
+    return subprocess.run(
+        [sys.executable, "scripts/run_migrations.py", *args],
+        cwd=BACKEND_DIR, env=dict(os.environ, DATABASE_URL=_scoped_url(schema)),
+        capture_output=True, text=True, check=check,
+    )
+
+
+@pytest.fixture
+def pg_session():
+    """Schema-isolated PostgreSQL session: the REAL ToolGateway executes
+    PostgreSQL-only SQL (`::text` casts) that the SQLite `db` harness cannot
+    run, so the end-to-end external-tool test runs on a disposable schema
+    migrated to the same head as `test_tool_gateway_external.py`."""
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "p7a_runtime_" + uuid.uuid4().hex
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    assert _alembic(schema, "upgrade", "0013_external_tool_alias_unique").returncode == 0
+    s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
+    yield s
+    s.close()
+    with engine.begin() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    engine.dispose()
 
 
 def _context(**overrides) -> TurnRuntimeContext:
@@ -56,6 +97,27 @@ def _seed_unit_graph(db, *, system_prompt="You are a supply-chain assistant."):
         "INSERT INTO users (id, username, email, password_hash, role, is_active, security_domain_id, created_at, updated_at) "
         "VALUES ('u-1', 'u', 'u@t.com', 'h', 'editor', true, '00000000-0000-0000-0000-000000000001', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ))
+    # model chain: agent_versions.default_model_config_version_id is a NOT NULL
+    # FK that PostgreSQL enforces (the SQLite harness ignores it but keeps the rows)
+    db.execute(text(
+        "INSERT INTO model_configs (id, name, config_type, api_base, api_key_encrypted, provider, models, options, created_by, created_at, updated_at) "
+        "VALUES ('mc-1', 'm', 'llm', NULL, '', 'openai', '[]', '{}', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO model_config_versions (id, model_config_id, version_no, provider, options, behavior_hash, model_contract, created_at) "
+        "VALUES ('mv-1', 'mc-1', 1, 'openai', '{}', :h, '[]', CURRENT_TIMESTAMP)"
+    ), {"h": "c" * 64})
+    db.execute(text(
+        "INSERT INTO application_state_schema_registries (id, application_key, status, created_at, updated_at) "
+        "VALUES ('reg-1', 'chat-v1-runtime-test', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO application_state_schema_versions (id, registry_id, version_no, json_schema, canonical_hash, created_at) "
+        "VALUES ('as-1', 'reg-1', 1, '{\"type\": \"object\", \"properties\": {}}', :h, CURRENT_TIMESTAMP)"
+    ), {"h": "b" * 64})
+    db.execute(text(
+        "UPDATE application_state_schema_registries SET active_version_id = 'as-1' WHERE id = 'reg-1'"
+    ))
     db.execute(text(
         "INSERT INTO agents (id, visibility, status, owner_id, created_at, updated_at) "
         "VALUES ('a-1', 'private', 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
@@ -70,19 +132,13 @@ def _seed_unit_graph(db, *, system_prompt="You are a supply-chain assistant."):
         "UPDATE agents SET active_version_id = 'v-1' WHERE id = 'a-1'"
     ))
     db.execute(text(
-        "INSERT INTO application_state_schema_registries (id, application_key, status, created_at, updated_at) "
-        "VALUES ('reg-1', 'chat-v1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-    ))
-    db.execute(text(
-        "INSERT INTO application_state_schema_versions (id, registry_id, version_no, json_schema, canonical_hash, created_at) "
-        "VALUES ('as-1', 'reg-1', 1, '{\"type\": \"object\", \"properties\": {}}', :h, CURRENT_TIMESTAMP)"
-    ), {"h": "b" * 64})
-    db.execute(text(
-        "UPDATE application_state_schema_registries SET active_version_id = 'as-1' WHERE id = 'reg-1'"
-    ))
-    db.execute(text(
         "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
         "VALUES ('s-1', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    # agent_messages.turn_id is a NOT-NULL-enforced FK on PostgreSQL
+    db.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-0', 's-1', 'succeeded', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ))
     db.execute(text(
         "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
@@ -237,3 +293,70 @@ def test_real_runtime_uses_pinned_system_prompt_and_context(db):
     assert "available_tools" in seen["system"]
     assert "application_state" in seen["system"]
     assert events[-2].payload["message"] == "好的。"
+
+
+def _seed_search_binding(db):
+    db.execute(text(
+        "INSERT INTO tool_providers (id, name, status, kind, created_by, created_at, updated_at) "
+        "VALUES ('tp-1', 'Web Search', 'active', 'search', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO tool_connections (id, provider_id, status, created_by, created_at, updated_at) "
+        "VALUES ('tc-1', 'tp-1', 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO tool_connection_versions (id, connection_id, version_no, endpoint, scopes, "
+        "allowlists, approval_status, health_status, created_by, created_at) "
+        "VALUES ('tcv-1', 'tc-1', 1, 'https://search.example.com/v1', '[]', '{}', "
+        "'approved', 'unknown', 'u-1', CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO agent_external_tool_bindings (id, agent_version_id, tool_connection_version_id, alias, created_at) "
+        "VALUES ('aetb-1', 'v-1', 'tcv-1', 'search', CURRENT_TIMESTAMP)"
+    ))
+    # the real gateway rechecks the user's run grant before external dispatch
+    db.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
+        "created_by, created_at, updated_at) "
+        "VALUES ('grant-1', 'a-1', 'u-1', '[\"run\"]', 1, 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
+
+
+def test_real_runtime_external_search_tool_offered_and_dispatched(pg_session, monkeypatch):
+    from app.services.untrusted_artifact import make_artifact
+
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        return [{"title": "OntoPrompt", "url": "https://docs.example.com",
+                 "artifact": make_artifact(source="https://docs.example.com", media_type="text/plain",
+                                           raw_content="<b>hi from search</b>")}]
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _fake_web_search)
+    _seed_unit_graph(pg_session)
+    _seed_search_binding(pg_session)
+    rounds = []
+
+    def caller(caller_info, messages, tools):
+        round_index = len(rounds)
+        rounds.append((round_index, [t["function"]["name"] for t in tools]))
+        if round_index == 0:
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "external_search",
+                "arguments_json": '{"query": "ontoprompt docs"}',
+            }]}
+        return {"content": "根据搜索结果：hi from search。", "tool_calls": []}
+
+    context = _context(extra={
+        "user_id": "u-1",
+        "citations": [],
+        "ontology_tool_selection": [],
+        "external_tool_bindings": [{"tool_connection_version_id": "tcv-1", "alias": "search"}],
+    })
+    runtime = LangGraphRuntime(pg_session, caller=caller)  # real ToolGateway — no FakeGateway substitution
+    events = _run(runtime, context)
+    assert "external_search" in rounds[0][1]
+    executed = next(e for e in events if e.event_type == "tool_executed")
+    assert executed.payload["descriptor_id"] == "external.search"
+    assert executed.payload["outcome"] == "untrusted_read"
+    final = events[-2]
+    assert final.payload["message"] == "根据搜索结果：hi from search。"

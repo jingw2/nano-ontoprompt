@@ -64,6 +64,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             model_config_version_id=row["default_model_config_version_id"],
             model_name=row["default_model_name"], runtime_artifact_id=worker_artifact_id,
             ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
+            external_tool_bindings=[dict(b) for b in pinned.tool_bindings],
             citations=list(pinned.citations),
         )
         # the runtime executes the model + governed tools for this user
