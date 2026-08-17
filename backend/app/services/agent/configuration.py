@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 AGENT_CAPABILITIES = ("discover", "run", "view_config", "edit", "view_audit")
@@ -363,3 +364,49 @@ def restore_version(db: Session, *, actor_id: str, agent_id: str, source_version
                     "config_hash": source["config_hash"]})
     db.commit()
     return {"version_id": version_id, "version_no": next_no, "config_hash": source["config_hash"]}
+
+
+def _agent_id_for_version(db: Session, agent_version_id: str) -> str:
+    return db.execute(text(
+        "SELECT agent_id FROM agent_versions WHERE id = :id"
+    ), {"id": agent_version_id}).scalar_one()
+
+
+def bind_external_tool(db: Session, *, actor_id: str, agent_version_id: str,
+                       tool_connection_version_id: str, alias: str) -> dict:
+    """Bind an approved tool-connection version to an Agent version under an
+    alias (Task 7 derives the LangGraph tool name from the alias)."""
+    approved = db.execute(text(
+        "SELECT approval_status FROM tool_connection_versions WHERE id = :id"
+    ), {"id": tool_connection_version_id}).scalar_one_or_none()
+    if approved is None:
+        raise AgentConfigError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
+    if approved != "approved":
+        raise AgentConfigError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
+    binding_id = _new_id()
+    try:
+        db.execute(text(
+            "INSERT INTO agent_external_tool_bindings "
+            "(id, agent_version_id, tool_connection_version_id, alias, created_at) "
+            "VALUES (:id, :av, :tcv, :alias, now())"
+        ), {"id": binding_id, "av": agent_version_id, "tcv": tool_connection_version_id, "alias": alias})
+    except IntegrityError:
+        db.rollback()
+        raise AgentConfigError("EXTERNAL_TOOL_ALIAS_TAKEN")
+    _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
+          operation="bind_external_tool", payload={"alias": alias, "version_id": tool_connection_version_id})
+    db.commit()
+    return {"id": binding_id, "agent_version_id": agent_version_id,
+            "tool_connection_version_id": tool_connection_version_id, "alias": alias}
+
+
+def unbind_external_tool(db: Session, *, actor_id: str, agent_version_id: str, alias: str) -> None:
+    """Release a previously bound external-tool alias on an Agent version."""
+    deleted = db.execute(text(
+        "DELETE FROM agent_external_tool_bindings WHERE agent_version_id = :av AND alias = :alias RETURNING id"
+    ), {"av": agent_version_id, "alias": alias}).scalar_one_or_none()
+    if deleted is None:
+        raise AgentConfigError("EXTERNAL_TOOL_BINDING_NOT_FOUND")
+    _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
+          operation="unbind_external_tool", payload={"alias": alias})
+    db.commit()

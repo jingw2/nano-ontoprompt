@@ -176,6 +176,9 @@ class AgentOntologyBinding(Base):
 
 class AgentExternalToolBinding(Base):
     __tablename__ = "agent_external_tool_bindings"
+    __table_args__ = (
+        UniqueConstraint("agent_version_id", "alias", name="uq_aetb_version_alias"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     agent_version_id: Mapped[str] = mapped_column(

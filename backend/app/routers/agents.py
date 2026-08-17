@@ -25,6 +25,7 @@ from app.schemas.agents import (
     AgentCreateRequest,
     AgentOut,
     AgentVersionOut,
+    BindExternalToolRequest,
     CreateAgentAccessGrantRequest,
     PromptGenerationDecisionRequest,
     PromptGenerationOut,
@@ -53,10 +54,12 @@ from app.services.agent.tool_categories import validate_categories
 from app.services.agent.configuration import (
     AgentConfigConflict,
     AgentConfigError,
+    bind_external_tool,
     create_agent,
     get_version,
     restore_version,
     save_basic_version,
+    unbind_external_tool,
 )
 from app.services.agent.policy import ceiling_intersection
 from app.services.agent.prompt_generation import (
@@ -430,6 +433,34 @@ def restore_agent_version(agent_id: str, version_no: int, body: RestoreVersionRe
     except AgentConfigError as exc:
         raise HTTPException(422, detail=str(exc))
     return {"data": result}
+
+
+@router.post("/{agent_id}/versions/{version_id}/external-tools", status_code=201)
+def bind_external_tool_route(agent_id: str, version_id: str, body: BindExternalToolRequest,
+                             db: Session = Depends(get_db),
+                             current_user: User = Depends(require_editor),
+                             x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        result = bind_external_tool(db, actor_id=current_user.id, agent_version_id=version_id,
+                                    tool_connection_version_id=body.tool_connection_version_id,
+                                    alias=body.alias)
+    except AgentConfigError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": result}
+
+
+@router.delete("/{agent_id}/versions/{version_id}/external-tools/{alias}")
+def unbind_external_tool_route(agent_id: str, version_id: str, alias: str,
+                               db: Session = Depends(get_db),
+                               current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    try:
+        unbind_external_tool(db, actor_id=current_user.id, agent_version_id=version_id, alias=alias)
+    except AgentConfigError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": {"released": True}}
 
 
 @router.get("/{agent_id}/access-grants")

@@ -145,3 +145,8 @@ class ReviseAgentAccessGrantRequest(BaseModel):
 class RevokeAgentAccessGrantRequest(BaseModel):
     model_config = {"protected_namespaces": ()}
     base_revision: int
+
+
+class BindExternalToolRequest(BaseModel):
+    tool_connection_version_id: str
+    alias: str
