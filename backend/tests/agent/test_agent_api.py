@@ -65,7 +65,7 @@ def ctx():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0010_agent_single_binding").returncode == 0
+    assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     Session = sessionmaker(bind=create_engine(_scoped_url(schema)))
     with Session() as session:
         editor_id = str(uuid.uuid4())

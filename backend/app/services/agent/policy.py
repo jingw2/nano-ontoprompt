@@ -133,6 +133,7 @@ _PLATFORM_PREFIXES = (
     "/api/v1/security-domains",
     "/api/v2/application-state-schemas",
     "/api/v2/incremental",
+    "/api/v2/retention",
     "/health",
 )
 

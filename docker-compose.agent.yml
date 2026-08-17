@@ -36,7 +36,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
 
   api:
     image: ontoprompt-agent-api:agent-v1
@@ -49,7 +49,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   dispatcher:
     image: ontoprompt-agent-dispatcher:agent-v1
@@ -61,7 +61,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
 
   artifact_worker:
     image: ontoprompt-agent-worker:agent-v1
@@ -73,7 +73,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
 
   beat:
     image: ontoprompt-agent-beat:agent-v1
@@ -85,7 +85,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=warning"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=warning"
 
   watchdog:
     image: ontoprompt-agent-watchdog:agent-v1
@@ -97,7 +97,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
 
   sweeper:
     image: ontoprompt-agent-sweeper:agent-v1
@@ -109,7 +109,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0010_agent_single_binding && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0011_retention_governance && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
 
   frontend:
     image: ontoprompt-agent-frontend:agent-v1

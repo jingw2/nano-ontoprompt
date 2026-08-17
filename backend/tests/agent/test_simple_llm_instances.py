@@ -43,7 +43,7 @@ def schema():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0010_agent_single_binding").returncode == 0
+    assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     yield schema
     with engine.begin() as connection:
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

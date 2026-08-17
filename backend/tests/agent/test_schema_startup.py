@@ -202,6 +202,10 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "agent_stream_tickets",
         "agent_purge_jobs",
         "agent_purge_markers",
+        "retention_policies",
+        "retention_policy_versions",
+        "retention_holds",
+        "retention_epochs",
     } <= after
 
 

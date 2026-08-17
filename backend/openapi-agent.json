@@ -375,6 +375,24 @@
         "title": "ActivateApplicationStateSchemaRequest",
         "type": "object"
       },
+      "ActivateRetentionPolicyRequest": {
+        "properties": {
+          "base_epoch": {
+            "title": "Base Epoch",
+            "type": "integer"
+          },
+          "security_domain_id": {
+            "title": "Security Domain Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "security_domain_id",
+          "base_epoch"
+        ],
+        "title": "ActivateRetentionPolicyRequest",
+        "type": "object"
+      },
       "AgentBasicVersionRequest": {
         "properties": {
           "application_state_schema_version_id": {
@@ -959,6 +977,55 @@
           "capabilities"
         ],
         "title": "CreateOntologyProjectAccessGrantRequest",
+        "type": "object"
+      },
+      "CreateRetentionHoldRequest": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_type": {
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "security_domain_id": {
+            "title": "Security Domain Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "security_domain_id",
+          "scope_type",
+          "scope_id",
+          "reason"
+        ],
+        "title": "CreateRetentionHoldRequest",
+        "type": "object"
+      },
+      "CreateRetentionPolicyRequest": {
+        "properties": {
+          "rules": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Rules",
+            "type": "object"
+          },
+          "security_domain_id": {
+            "title": "Security Domain Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "security_domain_id",
+          "rules"
+        ],
+        "title": "CreateRetentionPolicyRequest",
         "type": "object"
       },
       "CreateSchemaVersionRequest": {
@@ -2638,6 +2705,19 @@
           "password"
         ],
         "title": "RegisterRequest",
+        "type": "object"
+      },
+      "ReleaseRetentionHoldRequest": {
+        "properties": {
+          "security_domain_id": {
+            "title": "Security Domain Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "security_domain_id"
+        ],
+        "title": "ReleaseRetentionHoldRequest",
         "type": "object"
       },
       "RemediateExecutableRequest": {
@@ -14726,6 +14806,248 @@
         "summary": "List Versions",
         "tags": [
           "v2-pipelines"
+        ]
+      }
+    },
+    "/api/v2/retention-holds": {
+      "get": {
+        "operationId": "list_holds_api_v2_retention_holds_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Holds",
+        "tags": [
+          "v2-retention"
+        ]
+      },
+      "post": {
+        "operationId": "create_hold_route_api_v2_retention_holds_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRetentionHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Hold Route",
+        "tags": [
+          "v2-retention"
+        ]
+      }
+    },
+    "/api/v2/retention-holds/{hold_id}/release": {
+      "post": {
+        "operationId": "release_hold_route_api_v2_retention_holds__hold_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hold_id",
+            "required": true,
+            "schema": {
+              "title": "Hold Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseRetentionHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Hold Route",
+        "tags": [
+          "v2-retention"
+        ]
+      }
+    },
+    "/api/v2/retention-policies": {
+      "get": {
+        "operationId": "list_policies_api_v2_retention_policies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Policies",
+        "tags": [
+          "v2-retention"
+        ]
+      },
+      "post": {
+        "operationId": "create_policy_api_v2_retention_policies_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRetentionPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Policy",
+        "tags": [
+          "v2-retention"
+        ]
+      }
+    },
+    "/api/v2/retention-policies/{version_id}/activate": {
+      "post": {
+        "operationId": "activate_policy_api_v2_retention_policies__version_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateRetentionPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Activate Policy",
+        "tags": [
+          "v2-retention"
         ]
       }
     },

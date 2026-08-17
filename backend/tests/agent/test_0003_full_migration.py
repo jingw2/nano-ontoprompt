@@ -82,6 +82,10 @@ LATER_REVISION_TABLES = {
     "agent_stream_tickets",
     "agent_purge_jobs",
     "agent_purge_markers",
+    "retention_policies",
+    "retention_policy_versions",
+    "retention_holds",
+    "retention_epochs",
 }
 
 

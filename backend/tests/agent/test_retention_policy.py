@@ -37,7 +37,7 @@ def session():
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     # Run migrations up to 0010, which creates security_domains + other base tables
     # Then 0011 will auto-backfill policies for any existing domains
-    assert _alembic(schema, "upgrade", "0010_agent_single_binding").returncode == 0
+    assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     # Now run 0011 which will create the policy + epoch for the default domain created in 0003
     assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
