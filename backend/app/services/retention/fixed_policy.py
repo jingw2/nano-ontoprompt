@@ -101,6 +101,12 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
         raise RetentionError("RETENTION_JOB_REQUIRED")
     acquire_domain_lock(db, security_domain_id)
     _fenced(db, job_id, claim_token)
+    # Candidate tables (agent_turns, agent_sessions, etc.) have no
+    # security_domain_id column to filter on, so a per-domain sweep can't be
+    # scoped safely today; raise rather than silently cross domain boundaries.
+    domain_count = db.execute(text("SELECT count(*) FROM security_domains")).scalar_one()
+    if domain_count > 1:
+        raise RetentionError("RETENTION_MULTI_DOMAIN_PURGE_UNSUPPORTED")
     now = _now()
     ledger: dict[str, int] = {}
 
