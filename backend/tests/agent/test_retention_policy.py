@@ -41,6 +41,11 @@ def session():
     # Now run 0011 which will create the policy + epoch for the default domain created in 0003
     assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
+    s.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-1','a','a@t.com','h','admin',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    s.commit()
     yield s
     s.close()
     with engine.begin() as connection:
@@ -96,3 +101,46 @@ def test_resolve_active_duration_never_goes_below_minimum_even_if_rules_missing_
     ), {"v": version_id, "p": policy_id})
     session.commit()
     assert resolve_active_duration(session, DEFAULT_DOMAIN, "message.redact") == 90
+
+
+def test_create_policy_version_rejects_below_minimum(session):
+    from app.services.retention.policy import create_policy_version, RetentionPolicyError
+    with pytest.raises(RetentionPolicyError, match="RETENTION_MINIMUM_VIOLATION"):
+        create_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                              rules={"message.redact": 10})  # below the 90-day floor
+
+
+def test_create_policy_version_rejects_unknown_class(session):
+    from app.services.retention.policy import create_policy_version, RetentionPolicyError
+    with pytest.raises(RetentionPolicyError, match="RETENTION_CLASS_UNKNOWN"):
+        create_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                              rules={"not_a_real_class": 999})
+
+
+def test_create_and_activate_policy_version_extends_duration(session):
+    from app.services.retention.policy import (
+        activate_policy_version, create_policy_version, current_epoch, resolve_active_duration,
+    )
+    created = create_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                                    rules={"message.redact": 180})
+    assert created["version_no"] == 2
+    assert created["status"] == "pending"
+    epoch_before = current_epoch(session, DEFAULT_DOMAIN)
+
+    activated = activate_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                                        version_id=created["id"], base_epoch=epoch_before)
+    assert activated["epoch"] == epoch_before + 1
+    assert resolve_active_duration(session, DEFAULT_DOMAIN, "message.redact") == 180
+    # a class omitted from the new policy's rules still floors to its minimum
+    assert resolve_active_duration(session, DEFAULT_DOMAIN, "turn.delete") == 7
+
+
+def test_activate_policy_version_stale_epoch_conflicts(session):
+    from app.services.retention.policy import (
+        activate_policy_version, create_policy_version, RetentionPolicyConflict,
+    )
+    created = create_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                                    rules={"message.redact": 180})
+    with pytest.raises(RetentionPolicyConflict, match="RETENTION_EPOCH_CONFLICT"):
+        activate_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                                version_id=created["id"], base_epoch=999)
