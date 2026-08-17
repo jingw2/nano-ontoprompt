@@ -102,3 +102,11 @@ def test_0011_downgrade_drops_retention_tables(schema):
     for table in ("retention_policies", "retention_policy_versions", "retention_holds", "retention_epochs"):
         assert table not in tables, table
     engine.dispose()
+
+
+def test_orm_models_match_migration_shape():
+    from app.models.retention import RetentionPolicy, RetentionPolicyVersion, RetentionHold, RetentionEpoch
+    assert RetentionPolicy.__tablename__ == "retention_policies"
+    assert RetentionPolicyVersion.__tablename__ == "retention_policy_versions"
+    assert RetentionHold.__tablename__ == "retention_holds"
+    assert RetentionEpoch.__tablename__ == "retention_epochs"

@@ -123,6 +123,7 @@ def load_all_models():
         AgentPurgeJob,
         AgentPurgeMarker,
     )
+    from app.models import retention  # noqa: F401
 
     return Base.metadata
 
