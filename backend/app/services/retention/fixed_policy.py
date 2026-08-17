@@ -92,9 +92,11 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
     """Execute the ten idempotent steps for a claimed batch of terminal Turns,
     using each class's currently active retention duration (never below its
     table minimum — see app/services/retention/policy.py:TABLE_MINIMUMS).
-    Held Turns are skipped in step 8. The whole batch runs inside the
-    domain's advisory lock so a hold or policy committed mid-batch is either
-    fully visible or not yet visible — never torn."""
+    A hold on a turn or its session protects that turn's redaction/deletion
+    across steps 1, 4, 5, 6 in addition to the final Turn/message delete in
+    step 8. The whole batch runs inside the domain's advisory lock so a hold
+    or policy committed mid-batch is either fully visible or not yet
+    visible — never torn."""
     if job_id is None or claim_token is None:
         raise RetentionError("RETENTION_JOB_REQUIRED")
     acquire_domain_lock(db, security_domain_id)
@@ -108,8 +110,11 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
     # 1. redact payloads of snapshots
     ledger["redact_payloads"] = db.execute(text(
         "UPDATE agent_application_state_snapshots SET canonical_bytes = ''::bytea "
-        "WHERE created_at < :cutoff"
-    ), {"cutoff": cutoff("application_state_snapshot.redact")}).rowcount or 0
+        "WHERE created_at < :cutoff AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND h.scope_type = 'session' "
+        "  AND h.scope_id = agent_application_state_snapshots.session_id)"
+    ), {"cutoff": cutoff("application_state_snapshot.redact"), "domain": security_domain_id}).rowcount or 0
 
     # 2. delete expired stream tickets (tied to each ticket's own expiry, not policy-governed)
     ledger["delete_expired_stream_tickets"] = db.execute(text(
@@ -123,29 +128,64 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
 
     # 4. redact runtime event/trace/message content while keeping audit hashes
     ledger["redact_runtime_content"] = db.execute(text(
-        "UPDATE agent_runtime_events SET payload = '{}'::json WHERE created_at < :cutoff"
-    ), {"cutoff": cutoff("runtime_event.redact")}).rowcount or 0
+        "UPDATE agent_runtime_events SET payload = '{}'::json WHERE created_at < :cutoff "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_runtime_events.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = ("
+        "      SELECT t.session_id FROM agent_turns t WHERE t.id = agent_runtime_events.turn_id))))"
+    ), {"cutoff": cutoff("runtime_event.redact"), "domain": security_domain_id}).rowcount or 0
     ledger["redact_runtime_content"] += db.execute(text(
-        "UPDATE agent_messages SET content = NULL WHERE created_at < :cutoff AND role != 'user'"
-    ), {"cutoff": cutoff("message.redact")}).rowcount or 0
+        "UPDATE agent_messages SET content = NULL WHERE created_at < :cutoff AND role != 'user' "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_messages.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = agent_messages.session_id)))"
+    ), {"cutoff": cutoff("message.redact"), "domain": security_domain_id}).rowcount or 0
 
     # 5. delete model invocations and node executions
     ledger["delete_model_and_node_rows"] = db.execute(text(
-        "DELETE FROM agent_model_invocations WHERE created_at < :cutoff"
-    ), {"cutoff": cutoff("model_invocation.delete")}).rowcount or 0
+        "DELETE FROM agent_model_invocations WHERE created_at < :cutoff "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_model_invocations.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = ("
+        "      SELECT t.session_id FROM agent_turns t WHERE t.id = agent_model_invocations.turn_id))))"
+    ), {"cutoff": cutoff("model_invocation.delete"), "domain": security_domain_id}).rowcount or 0
     ledger["delete_model_and_node_rows"] += db.execute(text(
-        "DELETE FROM agent_node_executions WHERE created_at < :cutoff"
-    ), {"cutoff": cutoff("node_execution.delete")}).rowcount or 0
+        "DELETE FROM agent_node_executions WHERE created_at < :cutoff "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_node_executions.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = ("
+        "      SELECT t.session_id FROM agent_turns t WHERE t.id = agent_node_executions.turn_id))))"
+    ), {"cutoff": cutoff("node_execution.delete"), "domain": security_domain_id}).rowcount or 0
 
     # 6. mark/delete checkpoint writes + child checkpoints
     checkpoint_cutoff = cutoff("checkpoint.delete")
     ledger["delete_checkpoint_rows"] = db.execute(text(
         "DELETE FROM agent_turn_checkpoint_writes WHERE created_at < :cutoff "
-        "AND consumed_child_checkpoint_id IS NOT NULL"
-    ), {"cutoff": checkpoint_cutoff}).rowcount or 0
+        "AND consumed_child_checkpoint_id IS NOT NULL "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_turn_checkpoint_writes.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = ("
+        "      SELECT t.session_id FROM agent_turns t WHERE t.id = agent_turn_checkpoint_writes.turn_id))))"
+    ), {"cutoff": checkpoint_cutoff, "domain": security_domain_id}).rowcount or 0
     ledger["delete_checkpoint_rows"] += db.execute(text(
-        "DELETE FROM agent_turn_checkpoints WHERE created_at < :cutoff"
-    ), {"cutoff": checkpoint_cutoff}).rowcount or 0
+        "DELETE FROM agent_turn_checkpoints WHERE created_at < :cutoff "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM retention_holds h WHERE h.security_domain_id = :domain "
+        "  AND h.released_at IS NULL AND ("
+        "    (h.scope_type = 'turn' AND h.scope_id = agent_turn_checkpoints.turn_id) OR "
+        "    (h.scope_type = 'session' AND h.scope_id = ("
+        "      SELECT t.session_id FROM agent_turns t WHERE t.id = agent_turn_checkpoints.turn_id))))"
+    ), {"cutoff": checkpoint_cutoff, "domain": security_domain_id}).rowcount or 0
 
     # 7. delete delivered outbox rows
     ledger["delete_delivered_outbox"] = db.execute(text(

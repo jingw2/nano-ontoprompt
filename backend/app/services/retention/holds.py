@@ -1,7 +1,12 @@
-"""Legal holds (P6A): an active hold blocks payload redaction, FK nulling,
-and purge for its scoped dependency closure. Create/release both bump the
-domain epoch so an in-flight purge batch selected before the hold committed
-is forced to re-check eligibility on its next batch."""
+"""Legal holds (P6A): an active hold on a turn or session blocks payload
+redaction and row deletion for that turn/session's runtime events, messages,
+model invocations, node executions, checkpoints, and (session-scope only)
+application-state snapshots, plus the final Turn/message delete in
+run_fixed_purge step 8. Operational bookkeeping (stream tickets,
+clarifications, delivered outbox, session-pointer cleanup, graph-index
+outbox) is not hold-scoped. Create/release both bump the domain epoch so an
+in-flight purge batch selected before the hold committed is forced to
+re-check eligibility on its next batch."""
 from __future__ import annotations
 
 import uuid
