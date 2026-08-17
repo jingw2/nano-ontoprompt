@@ -50,8 +50,24 @@ export default function AgentApplicationTab({ agentId }: Props) {
     setStream(initialStreamState)
     setLastTurnId(null)
     setSseDone(false)
-    agentSessionsApi.messages(sessionId).then(res => {
-      setMessages(Array.isArray(res.items) ? res.items : [])
+    agentSessionsApi.messages(sessionId).then(async res => {
+      const items = Array.isArray(res.items) ? res.items : []
+      setMessages(items)
+      // a session reopened after its last Turn failed has a dangling user
+      // message with no assistant reply — without this check it looks
+      // exactly like the agent silently never responded, with no error
+      // shown (only a Turn that fails while the tab is open surfaces one)
+      const last = items[items.length - 1]
+      if (last?.role === 'user' && last.turn_id) {
+        setLastTurnId(last.turn_id)
+        try {
+          const status = await agentStreamApi.getTurnStatus(last.turn_id)
+          if (status.status === 'failed') {
+            setStream({ ...initialStreamState, terminal: true, phase: 'error',
+                        error: status.error_code ?? 'TURN_FAILED' })
+          }
+        } catch { /* transient — leave the composer usable, no error shown */ }
+      }
     }).catch(() => setMessages([]))
   }, [])
 

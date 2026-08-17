@@ -113,6 +113,58 @@ describe('P4B-STREAMUI', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
   })
 
+  it('shows an error for a session reopened after its last Turn failed', async () => {
+    // the session's last message is a dangling user message with no
+    // assistant reply — this happens when the Turn failed; without checking
+    // its status, reopening the session looks exactly like the agent never
+    // responded, with no error shown at all
+    server.use(
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agent-sessions/s-1/messages', () =>
+        HttpResponse.json({
+          data: {
+            items: [
+              { id: 'u-1', session_id: 's-1', turn_id: 't-1', role: 'user', ordinal: 1, content: 'hello', created_at: 'x' },
+            ],
+            next_cursor: null, has_more: false,
+          },
+          message: 'ok',
+        })),
+      http.get('*/api/v1/agent-turns/t-1', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', session_id: 's-1', status: 'failed',
+                                    error_code: 'TOOL_ROUND_LIMIT', dispatch_generation: 1 }, message: 'ok' })),
+    )
+    render(<AgentApplicationTab agentId="a-1" />)
+    await screen.findByTestId('session-sidebar')
+    await userEvent.click(screen.getByText(/s-1/))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByText('TOOL_ROUND_LIMIT')).toBeTruthy()
+  })
+
+  it('does not show an error for a session that ended in a real assistant reply', async () => {
+    server.use(
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agent-sessions/s-1/messages', () =>
+        HttpResponse.json({
+          data: {
+            items: [
+              { id: 'u-1', session_id: 's-1', turn_id: 't-1', role: 'user', ordinal: 1, content: 'hello', created_at: 'x' },
+              { id: 'a-1', session_id: 's-1', turn_id: 't-1', role: 'assistant', ordinal: 2, content: '你好', created_at: 'x' },
+            ],
+            next_cursor: null, has_more: false,
+          },
+          message: 'ok',
+        })),
+    )
+    render(<AgentApplicationTab agentId="a-1" />)
+    await screen.findByTestId('session-sidebar')
+    await userEvent.click(screen.getByText(/s-1/))
+    await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('toggles the execution trace and ontology access panels after a turn', async () => {
     server.use(
       http.get('*/api/v1/agents/a-1/sessions', () =>
