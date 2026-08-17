@@ -62,7 +62,7 @@ def schema():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0006_agent_runtime").returncode == 0
+    assert _alembic(schema, "upgrade", "0011_retention_governance").returncode == 0
     yield schema
     with engine.begin() as connection:
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -184,4 +184,68 @@ def test_fence_lost_raises(schema):
     with pytest.raises(RetentionError):
         run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN,
                         job_id=claim["id"], claim_token="forged")
+    session.close()
+
+
+def test_purge_honors_extended_policy_duration(schema):
+    """Activating a longer policy for message.redact means a message younger
+    than the new (longer) duration is NOT redacted, even though it's older
+    than the old 90-day minimum would have required... this test uses a
+    message exactly between the two durations to prove the active policy,
+    not the hardcoded 90 days, drives the decision."""
+    from app.services.retention.policy import activate_policy_version, create_policy_version, current_epoch
+    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge
+
+    session = _session(schema)
+    _seed_turn(session, turn_id="t-1", age_days=0)  # recent turn: survives step 8 so its messages aren't bulk-deleted
+
+    old_enough_for_90_not_180 = datetime.now(timezone.utc) - timedelta(days=120)
+    session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-extend', 's-1', 't-1', 'assistant', 9, 'still here', :ts)"
+    ), {"ts": old_enough_for_90_not_180})
+    session.execute(text(
+        "INSERT INTO agent_purge_jobs (id, security_domain_id, purge_class, cursor_time, batch_size, generation) "
+        "VALUES ('j-1', :dom, 'turn', now(), 500, 0)"
+    ), {"dom": DEFAULT_DOMAIN})
+    session.commit()
+
+    version = create_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                                    rules={"message.redact": 180})
+    activate_policy_version(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+                            version_id=version["id"], base_epoch=current_epoch(session, DEFAULT_DOMAIN))
+
+    claim = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
+    run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN, job_id=claim["id"], claim_token=claim["claim_token"])
+
+    content = session.execute(text(
+        "SELECT content FROM agent_messages WHERE id = 'm-extend'"
+    )).scalar_one()
+    assert content == "still here"  # NOT redacted — 120 days < the newly active 180-day duration
+    session.close()
+
+
+def test_purge_skips_held_turn(schema):
+    from app.services.retention.holds import create_hold
+    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge
+
+    session = _session(schema)
+    _seed_turn(session, turn_id="t-1", age_days=30)  # well past the 7-day turn.delete minimum
+
+    create_hold(session, actor_id="u-1", security_domain_id=DEFAULT_DOMAIN,
+               scope_type="turn", scope_id="t-1", reason="litigation")
+
+    session.execute(text(
+        "INSERT INTO agent_purge_jobs (id, security_domain_id, purge_class, cursor_time, batch_size, generation) "
+        "VALUES ('j-1', :dom, 'turn', now(), 500, 0)"
+    ), {"dom": DEFAULT_DOMAIN})
+    session.commit()
+
+    claim = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
+    run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN, job_id=claim["id"], claim_token=claim["claim_token"])
+
+    still_there = session.execute(text(
+        "SELECT count(*) FROM agent_turns WHERE id = 't-1'"
+    )).scalar_one()
+    assert still_there == 1  # held — not purged despite being past the 7-day turn.delete minimum
     session.close()
