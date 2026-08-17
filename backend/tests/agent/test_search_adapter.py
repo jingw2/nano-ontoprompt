@@ -37,6 +37,19 @@ def test_wraps_results_as_untrusted_artifacts(monkeypatch):
     assert results[0]["artifact"].sanitized_content == "hi"  # <b> stripped by Safe Markdown
 
 
+def test_query_params_are_urlencoded(monkeypatch):
+    from urllib.parse import quote_plus
+
+    def _fake_safe_get(url, *, timeout_seconds, max_bytes, headers=None):
+        assert "q=" + quote_plus("A&B 财报") in url
+        assert "count=5" in url
+        assert "A&B" not in url  # the query's raw & is not a parameter separator
+        return _FakeResponse(200, {"results": []})
+
+    monkeypatch.setattr("app.services.tools.search.safe_get", _fake_safe_get)
+    web_search(endpoint="https://search.example.com", api_key=None, query="A&B 财报")
+
+
 def test_upstream_non_200_raises(monkeypatch):
     monkeypatch.setattr("app.services.tools.search.safe_get",
                         lambda *a, **k: _FakeResponse(500, {}))

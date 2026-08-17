@@ -6,6 +6,8 @@ snippet as an UntrustedArtifact. Never called directly by the model — only
 through ToolGateway (see app/services/tool_gateway.py)."""
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from app.services.tools.ssrf_guard import SsrfBlockedError, safe_get
 from app.services.untrusted_artifact import make_artifact
 
@@ -21,7 +23,7 @@ def web_search(*, endpoint: str, api_key: str | None, query: str,
     if not query.strip():
         raise SearchError("SEARCH_QUERY_EMPTY")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-    url = f"{endpoint}?q={query}&count={int(result_limit)}"
+    url = f"{endpoint}?{urlencode({'q': query, 'count': int(result_limit)})}"
     try:
         response = safe_get(url, timeout_seconds=timeout_seconds, max_bytes=1_000_000, headers=headers)
     except SsrfBlockedError as exc:
