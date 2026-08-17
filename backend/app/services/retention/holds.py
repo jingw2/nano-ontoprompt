@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.services.retention.policy import acquire_domain_lock, bump_epoch
 
-SCOPE_TYPES = ("subject", "session", "turn", "object")
+SCOPE_TYPES = ("session", "turn")
 
 
 class RetentionHoldError(Exception):
