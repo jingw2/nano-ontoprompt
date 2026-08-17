@@ -238,7 +238,7 @@ def test_gateway_unknown_descriptor_fails_closed(schema):
     gw = ToolGateway(s)
     with pytest.raises(ToolGatewayError, match="DESCRIPTOR_UNKNOWN"):
         gw.execute(GatewayRequest(agent_id="a-1", user_id="u-1",
-                                  descriptor_id="external.search", operation="read", parameters={}))
+                                  descriptor_id="ontology.nonexistent", operation="read", parameters={}))
     s.close()
 
 
