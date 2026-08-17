@@ -98,7 +98,7 @@ def test_fresh_0001_to_0003_creates_exact_orm_shapes(legacy_schema):
     assert result.returncode == 0, result.stderr
     migrated = create_engine(_scoped_url(schema))
     inspector = inspect(migrated)
-    assert {"entity_instances", "audit_tasks"} <= set(inspector.get_table_names())
+    assert {"entity_instances", "audit_tasks"} <= set(inspector.get_table_names(schema=schema))
     for table_name, orm_columns, orm_indexes in _orm_columns():
         reflected = {column["name"]: column for column in inspector.get_columns(table_name)}
         expected = set(orm_columns)
@@ -194,6 +194,6 @@ def test_0003_downgrade_drops_legacy_runtime_tables(legacy_schema):
     assert result.returncode == 0, result.stderr
     migrated = create_engine(_scoped_url(schema))
     inspector = inspect(migrated)
-    assert "entity_instances" not in set(inspector.get_table_names())
-    assert "audit_tasks" not in set(inspector.get_table_names())
+    assert "entity_instances" not in set(inspector.get_table_names(schema=schema))
+    assert "audit_tasks" not in set(inspector.get_table_names(schema=schema))
     migrated.dispose()

@@ -361,7 +361,7 @@ def test_postgresql_numeric_round_trip_and_helper_catalog(release_schema):
         numeric = Decimal("99999999999999999999.999999999999999999")
         assert connection.execute(text("SELECT CAST(:value AS numeric(38,18))"), {"value": numeric}).scalar_one() == numeric
         catalog = inspect(connection)
-        assert catalog.has_table("ontology_releases")
+        assert catalog.has_table("ontology_releases", schema=release_schema)
         assert "latest_published_release_id" in {column["name"] for column in catalog.get_columns("ontology_projects")}
         triggers = {row[0] for row in connection.execute(text("SELECT tgname FROM pg_trigger WHERE tgrelid='ontology_releases'::regclass AND NOT tgisinternal"))}
         assert triggers >= {"ontology_releases_validate_domain", "ontology_releases_immutable"}
@@ -448,6 +448,6 @@ def test_postgresql_numeric_round_trip_and_helper_catalog(release_schema):
         connection.execute(text(f'SET LOCAL search_path TO "{release_schema}", public'))
         connection.execute(text("UPDATE ontology_projects SET latest_published_release_id=NULL WHERE id='ontology'"))
         publication_release.downgrade_release_foundation()
-        assert not inspect(connection).has_table("ontology_releases")
+        assert not inspect(connection).has_table("ontology_releases", schema=release_schema)
         assert "latest_published_release_id" not in {column["name"] for column in inspect(connection).get_columns("ontology_projects")}
     engine.dispose()

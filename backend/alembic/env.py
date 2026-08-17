@@ -7,7 +7,9 @@ from check_python_version import require_supported_python  # noqa: E402
 require_supported_python()
 
 import os
+import re
 from logging.config import fileConfig
+from urllib.parse import parse_qs, unquote, urlparse
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -27,6 +29,29 @@ if config.config_file_name is not None:
 database_url = os.environ.get("DATABASE_URL")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
+
+
+def _search_path_schema(url: str | None) -> str | None:
+    """When DATABASE_URL carries a `-csearch_path=schema[,...]` libpq option
+    (schema-isolated test fixtures use this), pin Alembic's own version
+    table to that schema explicitly. Without this, Alembic resolves the
+    unqualified `alembic_version` table via search_path and can silently
+    find an existing tracking table in a later schema (e.g. `public`) when
+    the isolated schema doesn't have one yet — it then believes migrations
+    are already at head and skips creating every table in the isolated
+    schema, while the caller's own inserts fall through to the real tables.
+    Returns None (no override — current behavior) when DATABASE_URL carries
+    no search_path option, which is always true in production/dev."""
+    if not url:
+        return None
+    options = parse_qs(urlparse(url).query).get("options", [None])[0]
+    if not options:
+        return None
+    match = re.search(r"-csearch_path=([^,\s]+)", unquote(options))
+    return match.group(1) if match else None
+
+
+version_table_schema = _search_path_schema(database_url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
@@ -60,6 +85,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=version_table_schema,
     )
 
     with context.begin_transaction():
@@ -81,7 +107,8 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata,
+            version_table_schema=version_table_schema,
         )
 
         with context.begin_transaction():

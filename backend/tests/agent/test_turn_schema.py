@@ -96,7 +96,7 @@ def test_fresh_0006_runtime_schema_and_fk_graph(full_schema):
     _alembic(full_schema, "upgrade", "0006_agent_runtime")
     engine = _connection(full_schema)
     inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
+    tables = set(inspector.get_table_names(schema=full_schema))
     for table in ("agent_sessions", "agent_turns", "agent_messages",
                   "agent_turn_dispatch_outbox", "agent_index_outbox"):
         assert table in tables, table
@@ -305,7 +305,7 @@ def test_0006_downgrade_drops_runtime_and_outbox(full_schema):
     assert result.returncode == 0, result.stderr
     engine = _connection(full_schema)
     inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
+    tables = set(inspector.get_table_names(schema=full_schema))
     for table in ("agent_index_outbox", "agent_turn_dispatch_outbox", "agent_messages",
                   "agent_turns", "agent_sessions", "runtime_artifacts",
                   "agent_turn_checkpoints", "agent_turn_checkpoint_writes",
