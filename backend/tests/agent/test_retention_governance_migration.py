@@ -10,6 +10,8 @@ from urllib.parse import quote
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
+from app.services.retention.policy import TABLE_MINIMUMS
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
@@ -88,6 +90,7 @@ def test_fresh_0011_creates_tables_and_backfills(schema):
         # built-in minimums are present verbatim (see Task 3 TABLE_MINIMUMS)
         assert policy["rules"]["message.redact"] == 90
         assert policy["rules"]["turn.delete"] == 7
+        assert policy["rules"] == TABLE_MINIMUMS
 
     engine.dispose()
 
