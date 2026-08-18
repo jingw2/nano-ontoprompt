@@ -91,6 +91,21 @@ def _bound_search_version(session) -> str:
     return version["id"]
 
 
+def _bound_playwright_version(session) -> str:
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version, create_provider,
+    )
+    from app.services.agent.configuration import bind_external_tool
+    provider = create_provider(session, actor_id="u-1", name="Web Browser", kind="playwright")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        allowlists={"domains": ["example.com"]})
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    bind_external_tool(session, actor_id="u-1", agent_version_id="av-1",
+                       tool_connection_version_id=version["id"], alias="browse")
+    return version["id"]
+
+
 def test_gateway_dispatches_search_and_wraps_results(session, monkeypatch):
     from app.services.tool_gateway import GatewayRequest, ToolGateway
 
@@ -186,4 +201,45 @@ def test_gateway_rejects_unapproved_version(session):
         gateway.execute(GatewayRequest(
             agent_id="ag-1", user_id="u-1", descriptor_id="external.search", operation="external_tool_call",
             parameters={"agent_version_id": "av-1", "tool_connection_version_id": version["id"], "query": "hi"},
+        ))
+
+
+def test_gateway_dispatches_playwright_and_wraps_results(session, monkeypatch):
+    from app.services.tool_gateway import GatewayRequest, ToolGateway
+
+    def _fake_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        from app.services.untrusted_artifact import make_artifact
+        return {"title": "<b>Docs</b>", "final_url": "https://docs.example.com/",
+                "artifact": make_artifact(source="https://docs.example.com/", media_type="text/plain",
+                                          raw_content="rendered text")}
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _fake_browse_page)
+    version_id = _bound_playwright_version(session)
+    gateway = ToolGateway(session)
+    result = gateway.execute(GatewayRequest(
+        agent_id="ag-1", user_id="u-1", descriptor_id="external.playwright", operation="external_tool_call",
+        parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id,
+                    "url": "https://docs.example.com/"},
+    ))
+    assert result.outcome == "untrusted_read"
+    entry = result.payload["results"][0]
+    assert "<" not in entry["title"]  # Safe Markdown applied at the boundary
+    assert entry["content"] == "rendered text"
+
+
+def test_gateway_playwright_domain_mismatch_fails_closed(session, monkeypatch):
+    from app.services.tool_gateway import GatewayRequest, ToolGateway, ToolGatewayError
+
+    def _fake_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        from app.services.tools.playwright import PlaywrightError
+        raise PlaywrightError("PLAYWRIGHT_DOMAIN_NOT_ALLOWED")
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _fake_browse_page)
+    version_id = _bound_playwright_version(session)
+    gateway = ToolGateway(session)
+    with pytest.raises(ToolGatewayError):
+        gateway.execute(GatewayRequest(
+            agent_id="ag-1", user_id="u-1", descriptor_id="external.playwright", operation="external_tool_call",
+            parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id,
+                        "url": "https://evil.example.com/"},
         ))

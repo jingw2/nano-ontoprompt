@@ -34,6 +34,7 @@ TRUSTED_READ_DESCRIPTORS = {
 # removed from an Agent version independently of the Agent's overall grant.
 EXTERNAL_TOOL_DESCRIPTORS = {
     "external.search": frozenset({"external_tool_call"}),
+    "external.playwright": frozenset({"external_tool_call"}),
 }
 
 
@@ -125,7 +126,7 @@ class ToolGateway:
         if binding_alive is None:
             raise ToolGatewayError("EXTERNAL_TOOL_BINDING_REVOKED")
         version = self._db.execute(text(
-            "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tp.kind "
+            "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
             "FROM tool_connection_versions tcv "
             "JOIN tool_connections tc ON tc.id = tcv.connection_id "
             "JOIN tool_providers tp ON tp.id = tc.provider_id "
@@ -133,6 +134,8 @@ class ToolGateway:
         ), {"id": tool_connection_version_id}).mappings().one_or_none()
         if version is None or version["approval_status"] != "approved":
             raise ToolGatewayError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
+        if version["kind"] == "playwright":
+            return self._execute_playwright(request, version, correlation_id)
         if version["kind"] != "search":
             raise ToolGatewayError("EXTERNAL_TOOL_KIND_UNSUPPORTED")
 
@@ -154,6 +157,33 @@ class ToolGateway:
              "content": r["artifact"].sanitized_content,
              "source": r["artifact"].source, "sensitivity": r["artifact"].sensitivity}
             for r in results
+        ]}
+        return GatewayResult(descriptor_id=request.descriptor_id, outcome="untrusted_read",
+                             payload=payload, correlation_id=correlation_id,
+                             trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
+                                    "grant_recheck": "passed", "binding_recheck": "passed"}])
+
+    def _execute_playwright(self, request: GatewayRequest, version, correlation_id: str) -> GatewayResult:
+        from app.services.tools.playwright import PlaywrightError, browse_page
+        from app.services.untrusted_artifact import safe_markdown
+        allowlists = version["allowlists"] or {}
+        domains = [str(d) for d in (allowlists.get("domains") or [])]
+        try:
+            result = browse_page(
+                url=str(request.parameters.get("url") or ""),
+                allowed_domains=domains,
+                timeout_seconds=float(request.parameters.get("timeout_seconds") or 20),
+                max_bytes=200_000,
+            )
+        except PlaywrightError as exc:
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        except Exception as exc:  # raw transport errors escape the adapter's taxonomy
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
+        payload = {"results": [
+            {"title": safe_markdown(result["title"] if isinstance(result["title"], str) else ""),
+             "url": _safe_external_url(result["final_url"] if isinstance(result["final_url"], str) else ""),
+             "content": result["artifact"].sanitized_content,
+             "source": result["artifact"].source, "sensitivity": result["artifact"].sensitivity}
         ]}
         return GatewayResult(descriptor_id=request.descriptor_id, outcome="untrusted_read",
                              payload=payload, correlation_id=correlation_id,
