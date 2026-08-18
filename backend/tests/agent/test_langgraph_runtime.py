@@ -429,3 +429,44 @@ def test_real_runtime_external_playwright_tool_offered_and_dispatched(pg_session
     assert executed.payload["outcome"] == "untrusted_read"
     final = events[-2]
     assert final.payload["message"] == "根据网页内容：rendered docs。"
+
+
+def test_real_runtime_playwright_runs_off_the_event_loop(pg_session, monkeypatch):
+    """Finding 1 regression: the sync model loop (and therefore the sync
+    Playwright adapter) must run OFF the running asyncio loop — Playwright's
+    sync API raises inside a running loop, which made every production
+    render fail while the sync-only test suite stayed green."""
+    from app.services.untrusted_artifact import make_artifact
+
+    def _fake_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        # if this runs on the loop thread, get_running_loop() succeeds and
+        # the real sync_playwright() would raise — assert the inverse
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return {"title": "Docs", "final_url": url,
+                "artifact": make_artifact(source=url, media_type="text/plain",
+                                          raw_content="rendered")}
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _fake_browse_page)
+    _seed_unit_graph(pg_session)
+    _seed_playwright_binding(pg_session)
+    rounds = []
+
+    def caller(caller_info, messages, tools):
+        round_index = len(rounds)
+        rounds.append(round_index)
+        if round_index == 0:
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "external_browser",
+                "arguments_json": '{"url": "https://docs.example.com/"}',
+            }]}
+        return {"content": "", "tool_calls": []}
+
+    context = _context(extra={
+        "user_id": "u-1", "citations": [], "ontology_tool_selection": [],
+        "external_tool_bindings": [{"tool_connection_version_id": "tcv-2", "alias": "browser"}],
+    })
+    runtime = LangGraphRuntime(pg_session, caller=caller)
+    events = asyncio.run(runtime.start_turn(context))
+    executed = next(e for e in events if e.event_type == "tool_executed")
+    assert executed.payload["outcome"] == "untrusted_read"

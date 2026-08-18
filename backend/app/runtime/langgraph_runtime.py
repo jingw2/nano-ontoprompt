@@ -21,6 +21,7 @@ a `turn_failed` event (no hidden reasoning, no canned answer).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -124,7 +125,11 @@ class LangGraphRuntime:
             _seq(events, context.turn_id, "assemble_context", assembled)
 
             messages, tools = self._build_messages_and_tools(context, assembled)
-            final = self._run_model_loop(context, events, messages, tools)
+            # the sync model loop (and therefore Playwright's sync adapter) must
+            # run OFF the running asyncio loop — Playwright's sync API raises
+            # inside a running loop.  `start_turn` does nothing with `self.db`
+            # or `events` while awaiting, so the sequential usage is safe.
+            final = await asyncio.to_thread(self._run_model_loop, context, events, messages, tools)
             _seq(events, context.turn_id, "final_response", {"message": final})
             _seq(events, context.turn_id, "turn_succeeded", {})
             return events
