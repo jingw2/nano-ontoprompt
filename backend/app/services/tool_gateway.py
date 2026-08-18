@@ -238,14 +238,17 @@ class ToolGateway:
         if not isinstance(model_parameters, dict):
             raise ToolGatewayError("SKILL_PARAMETERS_INVALID")
         leaf_parameters.update(model_parameters)
+        if leaf_descriptor_id in EXTERNAL_TOOL_DESCRIPTORS:
+            # the runtime — not the model — supplies the agent identity for
+            # nested external leaves; a model-supplied value is overwritten
+            leaf_parameters["agent_version_id"] = agent_version_id
         # recursive dispatch through the SAME governed execute() — skills can
         # never bypass the gateway; the leaf descriptor's own rechecks run here.
         # Manifest contract for skills bundling external.* leaf descriptors:
-        # such tools MUST carry tool_connection_version_id in the tool's
-        # `parameters` (the runtime fills agent_version_id) — the recursive
-        # execute() re-enters _execute_external and re-derives both IDs from
-        # the merged leaf parameters; the binding row above is still verified
-        # against the runtime-provided agent_version_id.
+        # the manifest MUST carry tool_connection_version_id in that tool's
+        # `parameters` (admin responsibility); the runtime injects the
+        # skill-level agent_version_id above, so the recursive execute()
+        # re-enters _execute_external with both IDs.
         leaf_request = GatewayRequest(
             agent_id=request.agent_id, user_id=request.user_id,
             descriptor_id=leaf_descriptor_id,

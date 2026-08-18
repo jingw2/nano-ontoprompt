@@ -77,18 +77,34 @@ def session():
     engine.dispose()
 
 
-def _bound_skill_version(session) -> str:
+def _bound_search_version(session) -> str:
+    from app.services.agent.configuration import bind_external_tool
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version, create_provider,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://search.example.com/v1")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    bind_external_tool(session, actor_id="u-1", agent_version_id="av-1",
+                       tool_connection_version_id=version["id"], alias="search")
+    return version["id"]
+
+
+def _bound_skill_version(session, manifest: dict | None = None) -> str:
     from app.services.agent.configuration import bind_skill
     from app.services.skills import manifest_canonical_hash
     from app.services.skills.admin import approve_skill_version, create_package, create_skill_version
     key = Ed25519PrivateKey.generate()
     package = create_package(session, actor_id="u-1", name="supplier-skill")
-    manifest = {
-        "name": "supplier-skill", "description": "read supplier instances", "instructions": "i",
-        "tools": [{"alias": "read_suppliers", "descriptor_id": "ontology.read_instances",
-                   "description": "read supplier instances",
-                   "parameters": {"query": "stale-default"}}],
-    }
+    if manifest is None:
+        manifest = {
+            "name": "supplier-skill", "description": "read supplier instances", "instructions": "i",
+            "tools": [{"alias": "read_suppliers", "descriptor_id": "ontology.read_instances",
+                       "description": "read supplier instances",
+                       "parameters": {"query": "stale-default"}}],
+        }
     signature = key.sign(bytes.fromhex(manifest_canonical_hash(manifest)))
     version = create_skill_version(session, actor_id="u-1", package_id=package["id"],
                                    manifest=manifest,
@@ -122,6 +138,42 @@ def test_gateway_dispatches_skill_to_ontology_leaf(session, monkeypatch):
     assert result.payload["skill_tool"] == "read_suppliers"
     assert result.payload["leaf_descriptor_id"] == "ontology.read_instances"
     assert captured.get("query") == "安全线"  # model params override manifest defaults
+
+
+def test_gateway_skill_nested_external_leaf_gets_agent_version(session, monkeypatch):
+    """Skills bundling external.* leaves: the runtime — not the model — injects
+    the request-level agent_version_id into the nested leaf dispatch. Without
+    the injection the nested execute() fails closed with
+    EXTERNAL_TOOL_BINDING_REVOKED because agent_version_id is None."""
+    from app.services.tool_gateway import GatewayRequest, ToolGateway
+    search_version_id = _bound_search_version(session)
+    version_id = _bound_skill_version(session, manifest={
+        "name": "web-skill", "description": "search the web", "instructions": "i",
+        "tools": [{"alias": "web", "descriptor_id": "external.search",
+                   "description": "search the web",
+                   "parameters": {"tool_connection_version_id": search_version_id,
+                                  "query": "安全线"}}],
+    })
+    captured = {}
+
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        captured["query"] = query
+        from app.services.untrusted_artifact import make_artifact
+        return [{"title": "Result", "url": "https://x.example.com",
+                 "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
+                                           raw_content="ok")}]
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _fake_web_search)
+    gateway = ToolGateway(session)
+    result = gateway.execute(GatewayRequest(
+        agent_id="ag-1", user_id="u-1", descriptor_id="external.skill", operation="external_tool_call",
+        parameters={"agent_version_id": "av-1", "skill_version_id": version_id,
+                    "tool": "web", "parameters": {}},
+    ))
+    assert result.outcome == "untrusted_read"
+    assert result.payload["skill_tool"] == "web"
+    assert result.payload["leaf_descriptor_id"] == "external.search"
+    assert captured.get("query") == "安全线"  # manifest defaults carried into the nested dispatch
 
 
 def test_gateway_rejects_unknown_skill_tool(session):
