@@ -19,6 +19,7 @@ from app.services.tool_connections import (
     create_provider,
     list_connections,
     list_providers,
+    test_connection_version,
 )
 
 router = APIRouter()
@@ -92,6 +93,16 @@ def activate_connection_version_route(body: ActivateConnectionVersionRequest, db
     try:
         result = activate_connection_version(
             db, actor_id=current_user.id, connection_id=body.connection_id, version_id=body.version_id)
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
+@router.post("/tool-connections/versions/{version_id}/test")
+def test_connection_version_route(version_id: str, db: Session = Depends(get_db),
+                                  _: User = Depends(require_admin)):
+    try:
+        result = test_connection_version(db, version_id=version_id)
     except ToolConnectionError as exc:
         raise _error(exc)
     return {"data": result}

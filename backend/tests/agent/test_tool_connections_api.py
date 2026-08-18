@@ -83,3 +83,48 @@ def test_activate_rejects_unapproved_version(session):
     with pytest.raises(ToolConnectionError):
         activate_connection_version(
             session, actor_id="u-1", connection_id=connection["id"], version_id=version["id"])
+
+
+def test_test_endpoint_search_healthy(session, monkeypatch):
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        return []
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _fake_web_search)
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://search.example.com/v1")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "healthy"
+
+
+def test_test_endpoint_unapproved_version_rejected(session):
+    from app.services.tool_connections import (
+        create_connection, create_connection_version, create_provider,
+        test_connection_version, ToolConnectionError,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"])
+    with pytest.raises(ToolConnectionError):
+        test_connection_version(session, version_id=version["id"])
+
+
+def test_test_endpoint_playwright_missing_allowlist_unhealthy(session):
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Render", kind="playwright")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"])
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "unhealthy"
+    assert "ALLOWLIST" in result["detail"]

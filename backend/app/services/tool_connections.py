@@ -98,6 +98,49 @@ def activate_connection_version(db: Session, *, actor_id: str, connection_id: st
     return {"connection_id": connection_id, "active_version_id": version_id}
 
 
+def test_connection_version(db: Session, *, version_id: str) -> dict:
+    """Health probe for an approved connection version. Search performs a
+    live single-result query; Playwright probes browser availability and
+    domain-allowlist configuration without navigating anywhere. Any probe
+    failure returns structured `unhealthy` state, never an exception."""
+    row = db.execute(text(
+        "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
+        "FROM tool_connection_versions tcv "
+        "JOIN tool_connections tc ON tc.id = tcv.connection_id "
+        "JOIN tool_providers tp ON tp.id = tc.provider_id "
+        "WHERE tcv.id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ToolConnectionError("VERSION_NOT_FOUND")
+    if row["approval_status"] != "approved":
+        raise ToolConnectionError("VERSION_NOT_APPROVED")
+    if row["kind"] == "search":
+        from app.services.tools.search import SearchError, web_search
+        try:
+            web_search(endpoint=row["endpoint"] or "", api_key=row["credential_reference"],
+                       query="health", result_limit=1)
+            return {"status": "healthy", "detail": "search:ok"}
+        except SearchError as exc:
+            return {"status": "unhealthy", "detail": str(exc)}
+    if row["kind"] == "playwright":
+        allowlists = row["allowlists"] or {}
+        domains = [str(d) for d in (allowlists.get("domains") or [])]
+        if not domains:
+            return {"status": "unhealthy", "detail": "PLAYWRIGHT_DOMAIN_ALLOWLIST_MISSING"}
+        from app.services.tools.playwright import browse_page, PlaywrightError
+        try:
+            # availability probe only — never navigate a live page from a health check
+            browse_page(url=f"https://{domains[0]}", allowed_domains=domains,
+                        timeout_seconds=1, max_bytes=1)
+        except PlaywrightError as exc:
+            message = str(exc)
+            if "UNAVAILABLE" in message:
+                return {"status": "unhealthy", "detail": "PLAYWRIGHT_UNAVAILABLE"}
+            return {"status": "healthy", "detail": f"playwright:ok ({message})"}
+        return {"status": "healthy", "detail": "playwright:ok"}
+    return {"status": "unhealthy", "detail": "PROVIDER_KIND_UNSUPPORTED"}
+
+
 def list_providers(db: Session) -> list[dict]:
     rows = db.execute(text(
         "SELECT id, name, kind, status FROM tool_providers ORDER BY name"
