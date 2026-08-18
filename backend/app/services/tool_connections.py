@@ -151,6 +151,43 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
                     result = {"status": "unhealthy", "detail": message}
                 else:
                     result = {"status": "healthy", "detail": f"playwright:ok ({message})"}
+    elif row["kind"] == "external_mcp":
+        schema_row = db.execute(text(
+            "SELECT tool_schema_hash, quarantined FROM mcp_connection_schemas "
+            "WHERE connection_version_id = :id"
+        ), {"id": version_id}).mappings().one_or_none()
+        token_row = db.execute(text(
+            "SELECT encrypted_access_token, expires_at FROM mcp_oauth_tokens "
+            "WHERE connection_version_id = :id"
+        ), {"id": version_id}).mappings().one_or_none()
+        allowlists = row["allowlists"] or {}
+        domains = [str(d) for d in (allowlists.get("domains") or [])]
+        if schema_row is None:
+            result = {"status": "unhealthy", "detail": "MCP_SCHEMA_UNPINNED"}
+        elif schema_row["quarantined"]:
+            result = {"status": "unhealthy", "detail": "TOOL_SCHEMA_QUARANTINED"}
+        elif token_row is None:
+            result = {"status": "unhealthy", "detail": "MCP_TOKEN_MISSING"}
+        elif not domains:
+            result = {"status": "unhealthy", "detail": "MCP_DOMAIN_ALLOWLIST_MISSING"}
+        else:
+            from datetime import datetime, timezone
+            if token_row["expires_at"].replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+                result = {"status": "unhealthy", "detail": "MCP_TOKEN_EXPIRED"}
+            else:
+                from app.services.encryption_service import decrypt
+                from app.services.tools.mcp_client import MCPClientError, list_tools, tools_schema_hash
+                try:
+                    tools = list_tools(endpoint=row["endpoint"] or "",
+                                       access_token=decrypt(token_row["encrypted_access_token"]),
+                                       allowed_domains=domains)
+                    live_hash = tools_schema_hash(tools)
+                    if live_hash != schema_row["tool_schema_hash"]:
+                        result = {"status": "unhealthy", "detail": "TOOL_SCHEMA_QUARANTINED"}
+                    else:
+                        result = {"status": "healthy", "detail": "mcp:ok"}
+                except MCPClientError as exc:
+                    result = {"status": "unhealthy", "detail": str(exc)}
     else:
         result = {"status": "unhealthy", "detail": "PROVIDER_KIND_UNSUPPORTED"}
     db.execute(text(
@@ -158,6 +195,91 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
     ), {"h": result["status"], "id": version_id})
     db.commit()
     return result
+
+
+def pin_mcp_schema(db: Session, *, actor_id: str, version_id: str) -> dict:
+    """Admin action: introspect the remote MCP server's tools/list and pin
+    the result as the approved shape. Re-running this after a legitimate
+    server-side change is the ONLY way to clear a prior quarantine — it is
+    always an explicit, audited admin action, never automatic."""
+    row = db.execute(text(
+        "SELECT tcv.approval_status, tcv.endpoint, tcv.allowlists, tp.kind "
+        "FROM tool_connection_versions tcv "
+        "JOIN tool_connections tc ON tc.id = tcv.connection_id "
+        "JOIN tool_providers tp ON tp.id = tc.provider_id "
+        "WHERE tcv.id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ToolConnectionError("VERSION_NOT_FOUND")
+    if row["kind"] != "external_mcp":
+        raise ToolConnectionError("MCP_KIND_REQUIRED")
+    if row["approval_status"] != "approved":
+        raise ToolConnectionError("VERSION_NOT_APPROVED")
+    domains = [str(d) for d in ((row["allowlists"] or {}).get("domains") or [])]
+    if not domains:
+        raise ToolConnectionError("MCP_DOMAIN_ALLOWLIST_MISSING")
+    token_row = db.execute(text(
+        "SELECT encrypted_access_token FROM mcp_oauth_tokens WHERE connection_version_id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    from app.services.encryption_service import decrypt
+    access_token = decrypt(token_row["encrypted_access_token"]) if token_row else ""
+    from app.services.tools.mcp_client import MCPClientError, list_tools, tools_schema_hash
+    try:
+        tools = list_tools(endpoint=row["endpoint"] or "", access_token=access_token, allowed_domains=domains)
+    except MCPClientError as exc:
+        raise ToolConnectionError(f"MCP_INTROSPECTION_FAILED:{exc}") from exc
+    schema_hash = tools_schema_hash(tools)
+    schema_id = _new_id()
+    db.execute(text(
+        "INSERT INTO mcp_connection_schemas "
+        "(id, connection_version_id, tool_schema_hash, tools, quarantined, pinned_by, pinned_at) "
+        "VALUES (:id, :cv, :hash, CAST(:tools AS json), false, :actor, now()) "
+        "ON CONFLICT (connection_version_id) DO UPDATE SET "
+        "tool_schema_hash = EXCLUDED.tool_schema_hash, tools = EXCLUDED.tools, "
+        "quarantined = false, quarantined_at = NULL, quarantined_reason = NULL, "
+        "pinned_by = EXCLUDED.pinned_by, pinned_at = now()"
+    ), {"id": schema_id, "cv": version_id, "hash": schema_hash, "tools": _json(tools), "actor": actor_id})
+    db.commit()
+    return {"connection_version_id": version_id, "tool_schema_hash": schema_hash, "tool_count": len(tools)}
+
+
+def issue_mcp_token(db: Session, *, actor_id: str, version_id: str, access_token: str,
+                    refresh_token: str | None, expires_in_seconds: int, scope: list[str],
+                    audience: str | None) -> dict:
+    """Admin action: store an out-of-band-obtained confidential-client bearer
+    token, encrypted at rest. Replaces any prior token for this version
+    (rotation) — issuing a fresh token is how an admin recovers from
+    MCP_TOKEN_EXPIRED."""
+    row = db.execute(text(
+        "SELECT tcv.approval_status, tp.kind FROM tool_connection_versions tcv "
+        "JOIN tool_connections tc ON tc.id = tcv.connection_id "
+        "JOIN tool_providers tp ON tp.id = tc.provider_id "
+        "WHERE tcv.id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ToolConnectionError("VERSION_NOT_FOUND")
+    if row["kind"] != "external_mcp":
+        raise ToolConnectionError("MCP_KIND_REQUIRED")
+    if row["approval_status"] != "approved":
+        raise ToolConnectionError("VERSION_NOT_APPROVED")
+    from app.services.encryption_service import encrypt
+    token_id = _new_id()
+    db.execute(text(
+        "INSERT INTO mcp_oauth_tokens "
+        "(id, connection_version_id, encrypted_access_token, encrypted_refresh_token, "
+        "scope, audience, expires_at, issued_by, rotated_at) "
+        "VALUES (:id, :cv, :access, :refresh, CAST(:scope AS json), :aud, "
+        "now() + (:ttl || ' seconds')::interval, :actor, now()) "
+        "ON CONFLICT (connection_version_id) DO UPDATE SET "
+        "encrypted_access_token = EXCLUDED.encrypted_access_token, "
+        "encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, "
+        "scope = EXCLUDED.scope, audience = EXCLUDED.audience, "
+        "expires_at = EXCLUDED.expires_at, issued_by = EXCLUDED.issued_by, rotated_at = now()"
+    ), {"id": token_id, "cv": version_id, "access": encrypt(access_token),
+        "refresh": encrypt(refresh_token) if refresh_token else None,
+        "scope": _json(scope), "aud": audience, "ttl": expires_in_seconds, "actor": actor_id})
+    db.commit()
+    return {"connection_version_id": version_id, "scope": scope, "expires_in_seconds": expires_in_seconds}
 
 
 def list_providers(db: Session) -> list[dict]:

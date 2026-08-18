@@ -9,6 +9,7 @@ from app.schemas.tool_connections import (
     CreateConnectionRequest,
     CreateConnectionVersionRequest,
     CreateProviderRequest,
+    IssueMcpTokenRequest,
 )
 from app.services.tool_connections import (
     ToolConnectionError,
@@ -17,8 +18,10 @@ from app.services.tool_connections import (
     create_connection,
     create_connection_version,
     create_provider,
+    issue_mcp_token,
     list_connections,
     list_providers,
+    pin_mcp_schema,
     test_connection_version,
 )
 
@@ -103,6 +106,29 @@ def test_connection_version_route(version_id: str, db: Session = Depends(get_db)
                                   _: User = Depends(require_admin)):
     try:
         result = test_connection_version(db, version_id=version_id)
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
+@router.post("/tool-connections/versions/{version_id}/mcp/pin-schema")
+def pin_mcp_schema_route(version_id: str, db: Session = Depends(get_db),
+                         current_user: User = Depends(require_admin)):
+    try:
+        result = pin_mcp_schema(db, actor_id=current_user.id, version_id=version_id)
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
+@router.post("/tool-connections/versions/{version_id}/mcp/token", status_code=201)
+def issue_mcp_token_route(version_id: str, body: IssueMcpTokenRequest, db: Session = Depends(get_db),
+                          current_user: User = Depends(require_admin)):
+    try:
+        result = issue_mcp_token(
+            db, actor_id=current_user.id, version_id=version_id, access_token=body.access_token,
+            refresh_token=body.refresh_token, expires_in_seconds=body.expires_in_seconds,
+            scope=body.scope, audience=body.audience)
     except ToolConnectionError as exc:
         raise _error(exc)
     return {"data": result}
