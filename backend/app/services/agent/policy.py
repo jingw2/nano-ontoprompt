@@ -136,6 +136,7 @@ _PLATFORM_PREFIXES = (
     "/api/v2/retention",
     "/api/v2/tool-providers",
     "/api/v2/tool-connections",
+    "/api/v2/skills",
     "/health",
 )
 
