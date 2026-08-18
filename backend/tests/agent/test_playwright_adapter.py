@@ -39,7 +39,9 @@ class _FakePage:
     def url(self):
         return self._url
 
-    def evaluate(self, expr):
+    def evaluate(self, expr, timeout=None):
+        self.evaluate_expr = expr
+        self.evaluate_timeout = timeout
         return self._text
 
 
@@ -111,6 +113,9 @@ def test_browse_page_renders_and_wraps_as_artifact(monkeypatch):
     assert result["title"] == "Page"
     assert result["final_url"] == "https://docs.example.com/"
     assert result["artifact"].sanitized_content == "hello"
+    # extraction is byte-capped in JS and bounded by an explicit timeout
+    assert page.evaluate_timeout == 20_000  # timeout_seconds=20.0 -> ms
+    assert "innerText.slice(0, 200001)" in page.evaluate_expr
 
 
 def test_subresource_requests_are_validated_and_aborted(monkeypatch):
@@ -156,3 +161,17 @@ def test_browse_page_caps_extraction(monkeypatch):
     _install_fake(monkeypatch, page)
     with pytest.raises(PlaywrightError):
         browse_page(url="https://docs.example.com/", allowed_domains=["example.com"], max_bytes=100)
+
+
+def test_browse_page_evaluate_timeout_maps_to_playwright_timeout(monkeypatch):
+    monkeypatch.setattr("app.services.tools.playwright._validate_url", lambda url: None)
+    page = _FakePage()
+
+    def _evaluate_timeout(expr, timeout=None):
+        raise TimeoutError("page.evaluate: Timeout 20000ms exceeded")
+
+    page.evaluate = _evaluate_timeout
+    _install_fake(monkeypatch, page)
+    with pytest.raises(PlaywrightError) as exc_info:
+        browse_page(url="https://docs.example.com/", allowed_domains=["example.com"])
+    assert "PLAYWRIGHT_TIMEOUT" in str(exc_info.value)

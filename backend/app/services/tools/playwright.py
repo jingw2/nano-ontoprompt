@@ -57,32 +57,39 @@ def browse_page(*, url: str, allowed_domains: list[str],
         raise PlaywrightError("PLAYWRIGHT_UNAVAILABLE") from exc
 
     try:
+        browser = None
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(accept_downloads=False)
-            page = context.new_page()
-            page.set_default_timeout(timeout_seconds * 1000)
+            try:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(accept_downloads=False)
+                page = context.new_page()
+                page.set_default_timeout(timeout_seconds * 1000)
 
-            def _route_handler(route) -> None:
-                request_url = route.request.url
-                try:
-                    _validate_url(request_url)
-                except SsrfBlockedError:
-                    route.abort()
-                    return
-                if not _domain_allowed(request_url, allowed_domains):
-                    route.abort()
-                    return
-                route.continue_()
+                def _route_handler(route) -> None:
+                    request_url = route.request.url
+                    try:
+                        _validate_url(request_url)
+                    except SsrfBlockedError:
+                        route.abort()
+                        return
+                    if not _domain_allowed(request_url, allowed_domains):
+                        route.abort()
+                        return
+                    route.continue_()
 
-            page.route("**/*", _route_handler)
-            context.on("page", lambda popup: popup.close())
+                page.route("**/*", _route_handler)
+                context.on("page", lambda popup: popup.close())
 
-            page.goto(url, wait_until="domcontentloaded")
-            title = page.title() or ""
-            final_url = page.url or url
-            text = page.evaluate("document.body ? document.body.innerText : ''") or ""
-            browser.close()
+                page.goto(url, wait_until="domcontentloaded")
+                title = page.title() or ""
+                final_url = page.url or url
+                text = page.evaluate(
+                    f"document.body ? document.body.innerText.slice(0, {int(max_bytes) + 1}) : ''",
+                    timeout=timeout_seconds * 1000,
+                ) or ""
+            finally:
+                if browser is not None:
+                    browser.close()
     except PlaywrightError:
         raise
     except Exception as exc:
