@@ -128,3 +128,44 @@ def test_test_endpoint_playwright_missing_allowlist_unhealthy(session):
     result = test_connection_version(session, version_id=version["id"])
     assert result["status"] == "unhealthy"
     assert "ALLOWLIST" in result["detail"]
+
+
+def test_test_endpoint_search_connection_error_unhealthy(session, monkeypatch):
+    import httpx
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _failing_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _failing_web_search)
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://search.example.com/v1")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result == {"status": "unhealthy", "detail": "boom"}
+
+
+def test_test_endpoint_playwright_navigation_failure_unhealthy(session, monkeypatch):
+    from app.services.tools.playwright import PlaywrightError
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _failing_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        raise PlaywrightError("PLAYWRIGHT_NAVIGATION_FAILED:Error:executable missing")
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _failing_browse_page)
+    provider = create_provider(session, actor_id="u-1", name="Web Render", kind="playwright")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        allowlists={"domains": ["example.com"]})
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "unhealthy"
+    assert "NAVIGATION_FAILED" in result["detail"]

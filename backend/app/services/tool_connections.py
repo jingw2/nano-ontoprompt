@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -101,8 +102,9 @@ def activate_connection_version(db: Session, *, actor_id: str, connection_id: st
 def test_connection_version(db: Session, *, version_id: str) -> dict:
     """Health probe for an approved connection version. Search performs a
     live single-result query; Playwright probes browser availability and
-    domain-allowlist configuration without navigating anywhere. Any probe
-    failure returns structured `unhealthy` state, never an exception."""
+    domain-allowlist configuration via a capped navigation of the allowlisted
+    domain. Any probe failure returns structured `unhealthy` state, never an
+    exception."""
     row = db.execute(text(
         "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
         "FROM tool_connection_versions tcv "
@@ -120,7 +122,7 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
             web_search(endpoint=row["endpoint"] or "", api_key=row["credential_reference"],
                        query="health", result_limit=1)
             return {"status": "healthy", "detail": "search:ok"}
-        except SearchError as exc:
+        except (SearchError, httpx.HTTPError) as exc:
             return {"status": "unhealthy", "detail": str(exc)}
     if row["kind"] == "playwright":
         allowlists = row["allowlists"] or {}
@@ -129,13 +131,17 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
             return {"status": "unhealthy", "detail": "PLAYWRIGHT_DOMAIN_ALLOWLIST_MISSING"}
         from app.services.tools.playwright import browse_page, PlaywrightError
         try:
-            # availability probe only — never navigate a live page from a health check
+            # probe the allowlisted domain with a 1-byte cap: a response — even
+            # capped (RESPONSE_TOO_LARGE) or slow (TIMEOUT) — proves the browser
+            # and sandbox engage; UNAVAILABLE (missing package) or
+            # NAVIGATION_FAILED (missing binary / unreachable domain) means the
+            # connection cannot render.
             browse_page(url=f"https://{domains[0]}", allowed_domains=domains,
                         timeout_seconds=1, max_bytes=1)
         except PlaywrightError as exc:
             message = str(exc)
-            if "UNAVAILABLE" in message:
-                return {"status": "unhealthy", "detail": "PLAYWRIGHT_UNAVAILABLE"}
+            if "UNAVAILABLE" in message or "NAVIGATION_FAILED" in message:
+                return {"status": "unhealthy", "detail": message}
             return {"status": "healthy", "detail": f"playwright:ok ({message})"}
         return {"status": "healthy", "detail": "playwright:ok"}
     return {"status": "unhealthy", "detail": "PROVIDER_KIND_UNSUPPORTED"}
