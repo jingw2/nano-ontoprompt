@@ -70,6 +70,7 @@ from app.models.skill import (
     SkillSignature,
     AgentSkillBinding,
 )
+from app.models.mcp import McpConnectionSchema, McpOauthToken
 
 
 def load_all_models():
@@ -135,6 +136,10 @@ def load_all_models():
         SkillVersion,
         SkillSignature,
         AgentSkillBinding,
+    )
+    from app.models.mcp import (  # noqa: F401
+        McpConnectionSchema,
+        McpOauthToken,
     )
 
     return Base.metadata
@@ -203,5 +208,7 @@ __all__ = [
     "SkillVersion",
     "SkillSignature",
     "AgentSkillBinding",
+    "McpConnectionSchema",
+    "McpOauthToken",
     "load_all_models",
 ]
