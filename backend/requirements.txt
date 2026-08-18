@@ -37,3 +37,4 @@ python-crontab==3.2.0
 
 # agent runtime
 langgraph==1.2.9
+playwright==1.62.0
