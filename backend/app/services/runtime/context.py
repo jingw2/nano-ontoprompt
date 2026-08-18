@@ -35,6 +35,7 @@ class PinnedContext:
     ontology_ids: tuple[str, ...] = ()
     retrieval_sources: tuple[dict, ...] = ()
     tool_bindings: tuple[dict, ...] = ()
+    skill_bindings: tuple[dict, ...] = ()
     ontology_tool_selection: tuple[dict, ...] = ()  # per-binding enabled tools
     budgets: dict[str, int] = field(default_factory=lambda: {
         "messages": DEFAULT_MESSAGE_BUDGET, "context": DEFAULT_CONTEXT_BUDGET,
@@ -100,6 +101,10 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         "SELECT tool_connection_version_id, alias FROM agent_external_tool_bindings "
         "WHERE agent_version_id = :vid ORDER BY alias"
     ), {"vid": base["version_id"]}).mappings().all()
+    skills = db.execute(text(
+        "SELECT skill_version_id, alias FROM agent_skill_bindings "
+        "WHERE agent_version_id = :vid ORDER BY alias"
+    ), {"vid": base["version_id"]}).mappings().all()
 
     citations: list[dict] = []
     if release is not None:
@@ -124,6 +129,7 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         ontology_ids=ontology_ids,
         retrieval_sources=tuple(dict(r) for r in retrieval),
         tool_bindings=tuple(dict(t) for t in tools),
+        skill_bindings=tuple(dict(s) for s in skills),
         ontology_tool_selection=tool_selection,
         citations=tuple(citations),
     )

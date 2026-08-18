@@ -48,11 +48,13 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
                           runtime_artifact_id: str | None = None,
                           ontology_bindings: list[dict] | None = None,
                           external_tool_bindings: list[dict] | None = None,
+                          skill_bindings: list[dict] | None = None,
                           citations: list[dict] | None = None) -> TurnRuntimeContext:
     """Assemble the pinned Turn context.  `ontology_bindings` (when given)
     carries the Agent's enabled tool selection per bound Ontology;
     `external_tool_bindings` (when given) carries the Agent version's bound
-    external tool connections; `citations` carries the grounded
+    external tool connections; `skill_bindings` (when given) carries the
+    Agent version's bound signed Skills; `citations` carries the grounded
     release/lineage identifiers for the Turn.  All are exposed on `extra` so
     the Tool Gateway only exposes the selected tools for this Agent and the
     runtime persists the citations as observable events
@@ -71,6 +73,8 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
             extra["ontology_tool_selection"].append(entry)
     if external_tool_bindings:
         extra["external_tool_bindings"] = [dict(b) for b in external_tool_bindings]
+    if skill_bindings:
+        extra["skill_bindings"] = [dict(b) for b in skill_bindings]
     if citations:
         extra["citations"] = list(citations)
     return TurnRuntimeContext(

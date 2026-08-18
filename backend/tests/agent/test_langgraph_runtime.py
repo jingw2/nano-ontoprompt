@@ -62,7 +62,7 @@ def pg_session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0013_external_tool_alias_unique").returncode == 0
+    assert _alembic(schema, "upgrade", "0014_signed_skills").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     yield s
     s.close()
@@ -470,3 +470,93 @@ def test_real_runtime_playwright_runs_off_the_event_loop(pg_session, monkeypatch
     events = asyncio.run(runtime.start_turn(context))
     executed = next(e for e in events if e.event_type == "tool_executed")
     assert executed.payload["outcome"] == "untrusted_read"
+
+
+def _seed_skill_binding(db) -> str:
+    """Seed an approved signed Skill bound as alias `skill` on the unit graph's
+    agent version — the manifest carries HTML in its description/instructions
+    so the test can assert safe_markdown sanitization in the system prompt."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from app.services.agent.configuration import bind_skill
+    from app.services.skills import manifest_canonical_hash
+    from app.services.skills.admin import approve_skill_version, create_package, create_skill_version
+
+    key = Ed25519PrivateKey.generate()
+    manifest = {
+        "name": "supplier-skill",
+        "description": "read supplier instances <i>safely</i>",
+        "instructions": "Use read_suppliers <b>only</b> for supplier data",
+        "tools": [{"alias": "read_suppliers", "descriptor_id": "ontology.read_instances",
+                   "description": "read supplier instances",
+                   "parameters": {"query": "stale-default"}}],
+    }
+    signature = key.sign(bytes.fromhex(manifest_canonical_hash(manifest)))
+    package = create_package(db, actor_id="u-1", name="supplier-skill")
+    version = create_skill_version(db, actor_id="u-1", package_id=package["id"],
+                                   manifest=manifest,
+                                   signatures=[{"public_key_hex": key.public_key().public_bytes_raw().hex(),
+                                                "signature_hex": signature.hex()}])
+    approve_skill_version(db, actor_id="u-1", version_id=version["id"])
+    bind_skill(db, actor_id="u-1", agent_version_id="v-1",
+               skill_version_id=version["id"], alias="skill")
+    # the real gateway rechecks the user's run grant before external dispatch;
+    # each test runs in its own schema so this is never a duplicate of the
+    # grant seeded by the other binding seeders
+    db.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
+        "created_by, created_at, updated_at) "
+        "VALUES ('grant-1', 'a-1', 'u-1', '[\"run\"]', 1, 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
+    return version["id"]
+
+
+def test_real_runtime_skill_tool_offered_and_dispatched(pg_session, monkeypatch):
+    _seed_unit_graph(pg_session)
+    version_id = _seed_skill_binding(pg_session)
+    captured = {}
+
+    def _fake_ontology_read(db, *, descriptor_id, parameters, correlation_id):
+        captured["parameters"] = dict(parameters)
+        return ("read", {"items": [{"instance_id": "i-1", "entity_id": "e-1",
+                                    "row_data": {"name_cn": "华东供应商"}}],
+                         "correlation_id": correlation_id})
+
+    monkeypatch.setattr("app.services.ontology_tools.execute_ontology_read", _fake_ontology_read)
+    rounds = []
+
+    def caller(caller_info, messages, tools):
+        round_index = len(rounds)
+        rounds.append((round_index, [t["function"]["name"] for t in tools], messages[0]["content"]))
+        if round_index == 0:
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "skill_skill",
+                "arguments_json": '{"tool": "read_suppliers", "parameters": {}}',
+            }]}
+        return {"content": "技能结果：read_suppliers 返回了华东供应商。", "tool_calls": []}
+
+    context = _context(extra={
+        "user_id": "u-1",
+        "citations": [],
+        "ontology_tool_selection": [],
+        "skill_bindings": [{"skill_version_id": version_id, "alias": "skill"}],
+    })
+    runtime = LangGraphRuntime(pg_session, caller=caller)  # real ToolGateway — no FakeGateway substitution
+    events = _run(runtime, context)
+    # one tool per bound skill, named skill_<alias>, with the skill tool enum
+    assert "skill_skill" in rounds[0][1]
+    # provenance-cited, sanitized instructions injected into the system prompt
+    system = rounds[0][2]
+    assert "## Signed Skill instructions" in system
+    assert "Use read_suppliers only for supplier data" in system  # safe_markdown stripped the <b> tags
+    assert "<b>" not in system
+    assert "skill:supplier-skill v? (signed)" in system
+    # the gateway's external.skill branch dispatched through the signed-version rechecks
+    executed = next(e for e in events if e.event_type == "tool_executed")
+    assert executed.payload["descriptor_id"] == "external.skill"
+    assert executed.payload["outcome"] == "read"
+    assert executed.payload["item_count"] == 1  # the leaf result flows into the event
+    assert captured["parameters"].get("query") == "stale-default"  # manifest defaults merged in
+    final = events[-2]
+    assert final.payload["message"] == "技能结果：read_suppliers 返回了华东供应商。"
