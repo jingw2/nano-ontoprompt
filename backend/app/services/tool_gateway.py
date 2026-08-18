@@ -35,6 +35,7 @@ TRUSTED_READ_DESCRIPTORS = {
 EXTERNAL_TOOL_DESCRIPTORS = {
     "external.search": frozenset({"external_tool_call"}),
     "external.playwright": frozenset({"external_tool_call"}),
+    "external.skill": frozenset({"external_tool_call"}),
 }
 
 
@@ -115,6 +116,8 @@ class ToolGateway:
         return result
 
     def _execute_external(self, request: GatewayRequest, correlation_id: str) -> GatewayResult:
+        if request.descriptor_id == "external.skill":
+            return self._execute_skill(request, correlation_id)
         if not self._recheck_grant(request.agent_id, request.user_id, "run"):
             raise ToolGatewayError("AGENT_GRANT_REVOKED")
         agent_version_id = request.parameters.get("agent_version_id")
@@ -189,6 +192,77 @@ class ToolGateway:
                              payload=payload, correlation_id=correlation_id,
                              trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
                                     "grant_recheck": "passed", "binding_recheck": "passed"}])
+
+    def _execute_skill(self, request: GatewayRequest, correlation_id: str) -> GatewayResult:
+        from app.services.skills import (
+            manifest_canonical_hash, validate_skill_manifest, verify_manifest_signature,
+        )
+        if not self._recheck_grant(request.agent_id, request.user_id, "run"):
+            raise ToolGatewayError("AGENT_GRANT_REVOKED")
+        agent_version_id = request.parameters.get("agent_version_id")
+        skill_version_id = request.parameters.get("skill_version_id")
+        binding_alive = self._db.execute(text(
+            "SELECT 1 FROM agent_skill_bindings "
+            "WHERE agent_version_id = :av AND skill_version_id = :sv"
+        ), {"av": agent_version_id, "sv": skill_version_id}).scalar_one_or_none()
+        if binding_alive is None:
+            raise ToolGatewayError("SKILL_BINDING_REVOKED")
+        row = self._db.execute(text(
+            "SELECT v.manifest, v.canonical_hash, v.approval_status FROM skill_versions v WHERE v.id = :id"
+        ), {"id": skill_version_id}).mappings().one_or_none()
+        if row is None or row["approval_status"] != "approved":
+            raise ToolGatewayError("SKILL_VERSION_NOT_APPROVED")
+        manifest = row["manifest"]
+        if isinstance(manifest, str):
+            import json
+            manifest = json.loads(manifest)
+        # dispatch-time integrity recheck — approval and dispatch can never disagree
+        if manifest_canonical_hash(manifest) != row["canonical_hash"]:
+            raise ToolGatewayError("SKILL_CANONICAL_HASH_MISMATCH")
+        if validate_skill_manifest(manifest):
+            raise ToolGatewayError("SKILL_MANIFEST_INVALID")
+        signatures = self._db.execute(text(
+            "SELECT public_key_hex, signature_hex FROM skill_signatures WHERE version_id = :id"
+        ), {"id": skill_version_id}).mappings().all()
+        if not any(verify_manifest_signature(
+                manifest=manifest, public_key_hex=s["public_key_hex"],
+                signature_hex=s["signature_hex"]) for s in signatures):
+            raise ToolGatewayError("SKILL_SIGNATURE_INVALID")
+        tool_alias = str(request.parameters.get("tool") or "")
+        tool = next((t for t in (manifest.get("tools") or []) if t.get("alias") == tool_alias), None)
+        if tool is None:
+            raise ToolGatewayError("SKILL_TOOL_UNKNOWN")
+        leaf_descriptor_id = tool["descriptor_id"]
+        leaf_parameters = dict(tool.get("parameters") or {})
+        model_parameters = request.parameters.get("parameters") or {}
+        if not isinstance(model_parameters, dict):
+            raise ToolGatewayError("SKILL_PARAMETERS_INVALID")
+        leaf_parameters.update(model_parameters)
+        # recursive dispatch through the SAME governed execute() — skills can
+        # never bypass the gateway; the leaf descriptor's own rechecks run here.
+        # Manifest contract for skills bundling external.* leaf descriptors:
+        # such tools MUST carry tool_connection_version_id in the tool's
+        # `parameters` (the runtime fills agent_version_id) — the recursive
+        # execute() re-enters _execute_external and re-derives both IDs from
+        # the merged leaf parameters; the binding row above is still verified
+        # against the runtime-provided agent_version_id.
+        leaf_request = GatewayRequest(
+            agent_id=request.agent_id, user_id=request.user_id,
+            descriptor_id=leaf_descriptor_id,
+            operation="external_tool_call",
+            parameters=leaf_parameters,
+        )
+        ontology_id = leaf_parameters.get("ontology_id")
+        leaf_result = self.execute(leaf_request, ontology_id=ontology_id)
+        return GatewayResult(
+            descriptor_id=request.descriptor_id, outcome=leaf_result.outcome,
+            payload={"skill_tool": tool_alias, "leaf_descriptor_id": leaf_descriptor_id,
+                     **leaf_result.payload},
+            correlation_id=correlation_id,
+            trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
+                    "grant_recheck": "passed", "binding_recheck": "passed",
+                    "signature_recheck": "passed", "leaf_descriptor": leaf_descriptor_id}],
+        )
 
     def _dispatch(self, request: GatewayRequest, required: frozenset[str], correlation_id: str) -> GatewayResult:
         from app.services.ontology_tools import execute_ontology_read
