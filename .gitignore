@@ -64,3 +64,6 @@ test_data/screenshots/
 
 # Reviewer-owned e2e-review harness (never commit)
 frontend/e2e-review/
+
+# Local git worktrees (subagent-driven-development isolation)
+.worktrees/
