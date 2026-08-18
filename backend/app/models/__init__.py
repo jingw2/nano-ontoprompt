@@ -64,6 +64,12 @@ from app.models.agent_runtime import (
     AgentPurgeJob,
     AgentPurgeMarker,
 )
+from app.models.skill import (
+    SkillPackage,
+    SkillVersion,
+    SkillSignature,
+    AgentSkillBinding,
+)
 
 
 def load_all_models():
@@ -124,6 +130,12 @@ def load_all_models():
         AgentPurgeMarker,
     )
     from app.models import retention  # noqa: F401
+    from app.models.skill import (  # noqa: F401
+        SkillPackage,
+        SkillVersion,
+        SkillSignature,
+        AgentSkillBinding,
+    )
 
     return Base.metadata
 
@@ -187,5 +199,9 @@ __all__ = [
     "AgentStreamTicket",
     "AgentPurgeJob",
     "AgentPurgeMarker",
+    "SkillPackage",
+    "SkillVersion",
+    "SkillSignature",
+    "AgentSkillBinding",
     "load_all_models",
 ]
