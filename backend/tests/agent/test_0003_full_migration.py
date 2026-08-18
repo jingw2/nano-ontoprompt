@@ -86,6 +86,10 @@ LATER_REVISION_TABLES = {
     "retention_policy_versions",
     "retention_holds",
     "retention_epochs",
+    "skill_packages",
+    "skill_versions",
+    "skill_signatures",
+    "agent_skill_bindings",
 }
 
 

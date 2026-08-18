@@ -206,6 +206,10 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "retention_policy_versions",
         "retention_holds",
         "retention_epochs",
+        "skill_packages",
+        "skill_versions",
+        "skill_signatures",
+        "agent_skill_bindings",
     } <= after
 
 

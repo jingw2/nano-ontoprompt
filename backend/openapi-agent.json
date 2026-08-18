@@ -680,6 +680,26 @@
         "title": "BindExternalToolRequest",
         "type": "object"
       },
+      "BindSkillRequest": {
+        "properties": {
+          "alias": {
+            "maxLength": 55,
+            "pattern": "^[A-Za-z0-9_-]{1,55}$",
+            "title": "Alias",
+            "type": "string"
+          },
+          "skill_version_id": {
+            "title": "Skill Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill_version_id",
+          "alias"
+        ],
+        "title": "BindSkillRequest",
+        "type": "object"
+      },
       "Body_upload_dataset_api_v2_datasets_upload_post": {
         "properties": {
           "file": {
@@ -1201,6 +1221,45 @@
           }
         },
         "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "CreateSkillPackageRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateSkillPackageRequest",
+        "type": "object"
+      },
+      "CreateSkillVersionRequest": {
+        "properties": {
+          "manifest": {
+            "title": "Manifest",
+            "type": "object"
+          },
+          "package_id": {
+            "title": "Package Id",
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSignatureIn"
+            },
+            "title": "Signatures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "package_id",
+          "manifest",
+          "signatures"
+        ],
+        "title": "CreateSkillVersionRequest",
         "type": "object"
       },
       "CreateTurnRequest": {
@@ -3224,6 +3283,35 @@
           "query"
         ],
         "title": "SearchRequest",
+        "type": "object"
+      },
+      "SkillSignatureIn": {
+        "properties": {
+          "public_key_hex": {
+            "title": "Public Key Hex",
+            "type": "string"
+          },
+          "signature_hex": {
+            "title": "Signature Hex",
+            "type": "string"
+          },
+          "signer_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signer Identity"
+          }
+        },
+        "required": [
+          "public_key_hex",
+          "signature_hex"
+        ],
+        "title": "SkillSignatureIn",
         "type": "object"
       },
       "SuggestRequest": {
@@ -6264,6 +6352,149 @@
           }
         ],
         "summary": "Unbind External Tool Route",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/versions/{version_id}/skills": {
+      "post": {
+        "operationId": "bind_skill_route_api_v1_agents__agent_id__versions__version_id__skills_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindSkillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Bind Skill Route",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/versions/{version_id}/skills/{alias}": {
+      "delete": {
+        "operationId": "unbind_skill_route_api_v1_agents__agent_id__versions__version_id__skills__alias__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "alias",
+            "required": true,
+            "schema": {
+              "title": "Alias",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unbind Skill Route",
         "tags": [
           "agents"
         ]
@@ -15331,6 +15562,211 @@
         "summary": "Activate Policy",
         "tags": [
           "v2-retention"
+        ]
+      }
+    },
+    "/api/v2/skills/packages": {
+      "get": {
+        "operationId": "list_packages_api_v2_skills_packages_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Packages",
+        "tags": [
+          "skills"
+        ]
+      },
+      "post": {
+        "operationId": "create_package_route_api_v2_skills_packages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkillPackageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Package Route",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v2/skills/versions": {
+      "get": {
+        "operationId": "list_versions_api_v2_skills_versions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "package_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Package Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Versions",
+        "tags": [
+          "skills"
+        ]
+      },
+      "post": {
+        "operationId": "create_version_route_api_v2_skills_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkillVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Version Route",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v2/skills/versions/{version_id}/approve": {
+      "post": {
+        "operationId": "approve_version_route_api_v2_skills_versions__version_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Version Route",
+        "tags": [
+          "skills"
         ]
       }
     },

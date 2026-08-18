@@ -35,9 +35,9 @@ def session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    # Upgrade to the current head (0013); 0011's backfill creates the default
+    # Upgrade to the current head (0014); 0011's backfill creates the default
     # domain's policy + epoch, from the security_domain seeded in 0003.
-    assert _alembic(schema, "upgrade", "0013_external_tool_alias_unique").returncode == 0
+    assert _alembic(schema, "upgrade", "0014_signed_skills").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     s.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
