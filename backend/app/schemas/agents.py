@@ -152,3 +152,9 @@ class BindExternalToolRequest(BaseModel):
     # 55, not 64: the runtime derives the model function name as `external_<alias>`
     # (9-char prefix), and OpenAI's function-name contract caps at 64 total.
     alias: str = Field(pattern=r"^[A-Za-z0-9_-]{1,55}$", max_length=55)
+
+
+class BindSkillRequest(BaseModel):
+    skill_version_id: str
+    # 55, not 64: the runtime derives the model function name as `skill_<alias>`
+    alias: str = Field(pattern=r"^[A-Za-z0-9_-]{1,55}$", max_length=55)

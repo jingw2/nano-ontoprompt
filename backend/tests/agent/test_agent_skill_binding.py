@@ -1,0 +1,219 @@
+"""P7C: Agent skill binding write API."""
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
+
+
+def _scoped_url(schema: str) -> str:
+    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
+
+
+def _alembic(schema: str, *args, check=True):
+    return subprocess.run(
+        [sys.executable, "scripts/run_migrations.py", *args],
+        cwd=BACKEND_DIR, env=dict(os.environ, DATABASE_URL=_scoped_url(schema)),
+        capture_output=True, text=True, check=check,
+    )
+
+
+@pytest.fixture
+def session():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "p7c_bind_" + uuid.uuid4().hex
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    assert _alembic(schema, "upgrade", "0014_signed_skills").returncode == 0
+    s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
+    s.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-1','a','a@t.com','h','admin',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    # model chain: agent_versions.default_model_config_version_id is NOT NULL
+    s.execute(text(
+        "INSERT INTO model_configs (id,name,config_type,api_base,api_key_encrypted,provider,models,options,created_by,created_at,updated_at) "
+        "VALUES ('mc-1','m','llm',NULL,'','openai','[]'::json,'{}'::json,'u-1',now(),now())"
+    ))
+    s.execute(text(
+        "INSERT INTO model_config_versions (id, model_config_id, version_no, provider, options, behavior_hash, model_contract, created_at) "
+        "VALUES ('mcv-1', 'mc-1', 1, 'openai', '{}'::json, :hash, '[]'::json, now())"
+    ), {"hash": "0" * 64})
+    # application-state schema: 0005 seeds chat-v1 with an active version
+    app_schema_version_id = s.execute(text(
+        "SELECT active_version_id FROM application_state_schema_registries WHERE application_key = 'chat-v1'"
+    )).scalar_one()
+    s.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES ('ag-1','private','active','u-1',now(),now())"
+    ))
+    s.execute(text(
+        "INSERT INTO agent_versions (id, agent_id, version_no, name, default_model_config_version_id, "
+        "default_model_name, system_prompt, application_state_schema_version_id, config_hash, created_by, created_at) "
+        "VALUES ('av-1', 'ag-1', 1, 'test-version', 'mcv-1', 'test-model', '', :svid, 'h', 'u-1', now())"
+    ), {"svid": app_schema_version_id})
+    s.commit()
+    yield s
+    s.close()
+    with engine.begin() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    engine.dispose()
+
+
+def _approved_skill_version(session) -> str:
+    from app.services.skills.admin import approve_skill_version, create_package, create_skill_version
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from app.services.skills import manifest_canonical_hash
+    key = Ed25519PrivateKey.generate()
+    package = create_package(session, actor_id="u-1", name="pkg")
+    manifest = {
+        "name": "skill", "description": "d", "instructions": "i",
+        "tools": [{"alias": "read", "descriptor_id": "ontology.read_instances",
+                   "description": "read", "parameters": {}}],
+    }
+    signature = key.sign(bytes.fromhex(manifest_canonical_hash(manifest)))
+    version = create_skill_version(session, actor_id="u-1", package_id=package["id"],
+                                   manifest=manifest,
+                                   signatures=[{"public_key_hex": key.public_key().public_bytes_raw().hex(),
+                                                "signature_hex": signature.hex()}])
+    approve_skill_version(session, actor_id="u-1", version_id=version["id"])
+    return version["id"]
+
+
+def test_bind_rejects_unapproved_version(session):
+    from app.services.agent.configuration import bind_skill, AgentConfigError
+    from app.services.skills.admin import create_package, create_skill_version
+    # create a signed-but-pending version directly
+    key = Ed25519PrivateKey.generate()
+    from app.services.skills import manifest_canonical_hash
+    package = create_package(session, actor_id="u-1", name="pkg")
+    manifest = {"name": "s", "description": "d", "instructions": "i"}
+    signature = key.sign(bytes.fromhex(manifest_canonical_hash(manifest)))
+    pending = create_skill_version(session, actor_id="u-1", package_id=package["id"], manifest=manifest,
+                                   signatures=[{"public_key_hex": key.public_key().public_bytes_raw().hex(),
+                                                "signature_hex": signature.hex()}])
+    with pytest.raises(AgentConfigError):
+        bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+                   skill_version_id=pending["id"], alias="skill")
+
+
+def test_bind_then_unbind(session):
+    from app.services.agent.configuration import bind_skill, unbind_skill
+    version_id = _approved_skill_version(session)
+    bound = bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+                       skill_version_id=version_id, alias="skill")
+    assert bound["alias"] == "skill"
+    unbind_skill(session, actor_id="u-1", agent_version_id="av-1", alias="skill")
+    remaining = session.execute(text(
+        "SELECT count(*) FROM agent_skill_bindings WHERE agent_version_id = 'av-1'"
+    )).scalar_one()
+    assert remaining == 0
+
+
+def test_duplicate_alias_rejected(session):
+    from app.services.agent.configuration import bind_skill, AgentConfigError
+    version_id = _approved_skill_version(session)
+    bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+               skill_version_id=version_id, alias="skill")
+    with pytest.raises(AgentConfigError):
+        bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+                   skill_version_id=version_id, alias="skill")
+
+
+def test_cross_agent_version_rejected(session):
+    """A grant on agent A must not reach agent B's immutable version: the
+    version-ownership check 404s before any binding mutation."""
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+
+    app_schema_version_id = session.execute(text(
+        "SELECT active_version_id FROM application_state_schema_registries WHERE application_key = 'chat-v1'"
+    )).scalar_one()
+    session.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES ('ag-2','private','active','u-1',now(),now())"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_versions (id, agent_id, version_no, name, default_model_config_version_id, "
+        "default_model_name, system_prompt, application_state_schema_version_id, config_hash, created_by, created_at) "
+        "VALUES ('av-2', 'ag-2', 1, 'test-version', 'mcv-1', 'test-model', '', :svid, 'h', 'u-1', now())"
+    ), {"svid": app_schema_version_id})
+    session.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, status, created_by) "
+        "VALUES ('aag-1', 'ag-1', 'u-1', '[\"edit\"]'::json, 'active', 'u-1')"
+    ))
+    session.commit()
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.post("/api/v1/agents/ag-1/versions/av-2/skills",
+                            json={"skill_version_id": "sv-x", "alias": "skill"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-cross-1234567890"})
+            assert r.status_code == 404, r.text
+            r = client.delete("/api/v1/agents/ag-1/versions/av-2/skills/skill",
+                              headers=headers)
+            assert r.status_code == 404, r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bind_route_rejects_invalid_alias(session):
+    """The alias charset/length contract is enforced at the schema boundary:
+    a space-containing alias is 422 before any DB work; a valid one binds."""
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+
+    session.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, status, created_by) "
+        "VALUES ('aag-1', 'ag-1', 'u-1', '[\"edit\"]'::json, 'active', 'u-1')"
+    ))
+    session.commit()
+    version_id = _approved_skill_version(session)
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.post("/api/v1/agents/ag-1/versions/av-1/skills",
+                            json={"skill_version_id": version_id, "alias": "web search"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-alias-1234567890"})
+            assert r.status_code == 422, r.text
+            r = client.post("/api/v1/agents/ag-1/versions/av-1/skills",
+                            json={"skill_version_id": version_id, "alias": "skill"},
+                            headers={**headers, "Idempotency-Key": "ag-bind-alias-0987654321"})
+            assert r.status_code == 201, r.text
+            assert r.json()["data"]["alias"] == "skill"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_unbind_missing_alias_rejected(session):
+    from app.services.agent.configuration import AgentConfigError, unbind_skill
+    with pytest.raises(AgentConfigError):
+        unbind_skill(session, actor_id="u-1", agent_version_id="av-1", alias="nope")

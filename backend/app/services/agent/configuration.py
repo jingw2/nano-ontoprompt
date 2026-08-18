@@ -410,3 +410,37 @@ def unbind_external_tool(db: Session, *, actor_id: str, agent_version_id: str, a
     _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
           operation="unbind_external_tool", payload={"alias": alias})
     db.commit()
+
+
+def bind_skill(db: Session, *, actor_id: str, agent_version_id: str,
+               skill_version_id: str, alias: str) -> dict:
+    approved = db.execute(text(
+        "SELECT approval_status FROM skill_versions WHERE id = :id"
+    ), {"id": skill_version_id}).scalar_one_or_none()
+    if approved is None or approved != "approved":
+        raise AgentConfigError("SKILL_VERSION_NOT_APPROVED")
+    binding_id = _new_id()
+    try:
+        db.execute(text(
+            "INSERT INTO agent_skill_bindings (id, agent_version_id, skill_version_id, alias, created_at) "
+            "VALUES (:id, :av, :sv, :alias, now())"
+        ), {"id": binding_id, "av": agent_version_id, "sv": skill_version_id, "alias": alias})
+    except IntegrityError:
+        db.rollback()
+        raise AgentConfigError("SKILL_ALIAS_TAKEN")
+    _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
+          operation="bind_skill", payload={"alias": alias, "version_id": skill_version_id})
+    db.commit()
+    return {"id": binding_id, "agent_version_id": agent_version_id,
+            "skill_version_id": skill_version_id, "alias": alias}
+
+
+def unbind_skill(db: Session, *, actor_id: str, agent_version_id: str, alias: str) -> None:
+    deleted = db.execute(text(
+        "DELETE FROM agent_skill_bindings WHERE agent_version_id = :av AND alias = :alias RETURNING id"
+    ), {"av": agent_version_id, "alias": alias}).scalar_one_or_none()
+    if deleted is None:
+        raise AgentConfigError("SKILL_BINDING_NOT_FOUND")
+    _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
+          operation="unbind_skill", payload={"alias": alias})
+    db.commit()

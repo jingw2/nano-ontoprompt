@@ -26,6 +26,7 @@ from app.schemas.agents import (
     AgentOut,
     AgentVersionOut,
     BindExternalToolRequest,
+    BindSkillRequest,
     CreateAgentAccessGrantRequest,
     PromptGenerationDecisionRequest,
     PromptGenerationOut,
@@ -55,11 +56,13 @@ from app.services.agent.configuration import (
     AgentConfigConflict,
     AgentConfigError,
     bind_external_tool,
+    bind_skill,
     create_agent,
     get_version,
     restore_version,
     save_basic_version,
     unbind_external_tool,
+    unbind_skill,
 )
 from app.services.agent.policy import ceiling_intersection
 from app.services.agent.prompt_generation import (
@@ -471,6 +474,36 @@ def unbind_external_tool_route(agent_id: str, version_id: str, alias: str,
     _require_agent_version_owned(db, agent_id, version_id)
     try:
         unbind_external_tool(db, actor_id=current_user.id, agent_version_id=version_id, alias=alias)
+    except AgentConfigError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": {"released": True}}
+
+
+@router.post("/{agent_id}/versions/{version_id}/skills", status_code=201)
+def bind_skill_route(agent_id: str, version_id: str, body: BindSkillRequest,
+                     db: Session = Depends(get_db),
+                     current_user: User = Depends(require_editor),
+                     x_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    _require_idempotency_key(x_idempotency_key)
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_agent_version_owned(db, agent_id, version_id)
+    try:
+        result = bind_skill(db, actor_id=current_user.id, agent_version_id=version_id,
+                            skill_version_id=body.skill_version_id,
+                            alias=body.alias)
+    except AgentConfigError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"data": result}
+
+
+@router.delete("/{agent_id}/versions/{version_id}/skills/{alias}")
+def unbind_skill_route(agent_id: str, version_id: str, alias: str,
+                       db: Session = Depends(get_db),
+                       current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    _require_agent_version_owned(db, agent_id, version_id)
+    try:
+        unbind_skill(db, actor_id=current_user.id, agent_version_id=version_id, alias=alias)
     except AgentConfigError as exc:
         raise HTTPException(422, detail=str(exc))
     return {"data": {"released": True}}
