@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -104,7 +103,8 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
     live single-result query; Playwright probes browser availability and
     domain-allowlist configuration via a capped navigation of the allowlisted
     domain. Any probe failure returns structured `unhealthy` state, never an
-    exception."""
+    exception. The verdict is persisted to the version's `health_status` so
+    list views reflect probe results."""
     row = db.execute(text(
         "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
         "FROM tool_connection_versions tcv "
@@ -117,34 +117,47 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
     if row["approval_status"] != "approved":
         raise ToolConnectionError("VERSION_NOT_APPROVED")
     if row["kind"] == "search":
-        from app.services.tools.search import SearchError, web_search
+        from app.services.tools.search import web_search
         try:
             web_search(endpoint=row["endpoint"] or "", api_key=row["credential_reference"],
                        query="health", result_limit=1)
-            return {"status": "healthy", "detail": "search:ok"}
-        except (SearchError, httpx.HTTPError) as exc:
-            return {"status": "unhealthy", "detail": str(exc)}
-    if row["kind"] == "playwright":
+            result = {"status": "healthy", "detail": "search:ok"}
+        except Exception as exc:  # probe contract: never raise — non-dict JSON,
+            # broken endpoints and network failures all surface as unhealthy
+            result = {"status": "unhealthy", "detail": str(exc)}
+    elif row["kind"] == "playwright":
         allowlists = row["allowlists"] or {}
         domains = [str(d) for d in (allowlists.get("domains") or [])]
         if not domains:
-            return {"status": "unhealthy", "detail": "PLAYWRIGHT_DOMAIN_ALLOWLIST_MISSING"}
-        from app.services.tools.playwright import browse_page, PlaywrightError
-        try:
-            # probe the allowlisted domain with a 1-byte cap: a response — even
-            # capped (RESPONSE_TOO_LARGE) or slow (TIMEOUT) — proves the browser
-            # and sandbox engage; UNAVAILABLE (missing package) or
-            # NAVIGATION_FAILED (missing binary / unreachable domain) means the
-            # connection cannot render.
-            browse_page(url=f"https://{domains[0]}", allowed_domains=domains,
-                        timeout_seconds=1, max_bytes=1)
-        except PlaywrightError as exc:
-            message = str(exc)
-            if "UNAVAILABLE" in message or "NAVIGATION_FAILED" in message:
-                return {"status": "unhealthy", "detail": message}
-            return {"status": "healthy", "detail": f"playwright:ok ({message})"}
-        return {"status": "healthy", "detail": "playwright:ok"}
-    return {"status": "unhealthy", "detail": "PROVIDER_KIND_UNSUPPORTED"}
+            result = {"status": "unhealthy", "detail": "PLAYWRIGHT_DOMAIN_ALLOWLIST_MISSING"}
+        else:
+            from app.services.tools.playwright import browse_page, PlaywrightError
+            try:
+                # probe the allowlisted domain with a 1-byte cap: a response —
+                # even capped (RESPONSE_TOO_LARGE) or slow (TIMEOUT) — proves
+                # the browser and sandbox engage. UNAVAILABLE (missing package)
+                # or NAVIGATION_FAILED (missing binary / unreachable domain)
+                # means the connection cannot render, and URL_BLOCKED /
+                # DOMAIN_NOT_ALLOWED mean the stored allowlist itself is a
+                # config defect — the probe never reached the browser, and
+                # every agent call would fail closed forever.
+                browse_page(url=f"https://{domains[0]}", allowed_domains=domains,
+                            timeout_seconds=1, max_bytes=1)
+                result = {"status": "healthy", "detail": "playwright:ok"}
+            except PlaywrightError as exc:
+                message = str(exc)
+                if "UNAVAILABLE" in message or "NAVIGATION_FAILED" in message \
+                        or "URL_BLOCKED" in message or "DOMAIN_NOT_ALLOWED" in message:
+                    result = {"status": "unhealthy", "detail": message}
+                else:
+                    result = {"status": "healthy", "detail": f"playwright:ok ({message})"}
+    else:
+        result = {"status": "unhealthy", "detail": "PROVIDER_KIND_UNSUPPORTED"}
+    db.execute(text(
+        "UPDATE tool_connection_versions SET health_status = :h WHERE id = :id"
+    ), {"h": result["status"], "id": version_id})
+    db.commit()
+    return result
 
 
 def list_providers(db: Session) -> list[dict]:

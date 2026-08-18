@@ -102,6 +102,11 @@ def test_test_endpoint_search_healthy(session, monkeypatch):
     approve_connection_version(session, actor_id="u-1", version_id=version["id"])
     result = test_connection_version(session, version_id=version["id"])
     assert result["status"] == "healthy"
+    # the verdict is persisted so list views reflect probe results
+    persisted = session.execute(text(
+        "SELECT health_status FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version["id"]}).scalar_one()
+    assert persisted == "healthy"
 
 
 def test_test_endpoint_unapproved_version_rejected(session):
@@ -150,6 +155,29 @@ def test_test_endpoint_search_connection_error_unhealthy(session, monkeypatch):
     assert result == {"status": "unhealthy", "detail": "boom"}
 
 
+def test_test_endpoint_search_non_dict_json_unhealthy(session, monkeypatch):
+    """The probe's "never an exception" contract holds even when the provider
+    returns a JSON array/string (web_search raises AttributeError on
+    body.get — the probe must surface it as structured unhealthy, not 500)."""
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _non_dict_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+        raise AttributeError("'list' object has no attribute 'get'")
+
+    monkeypatch.setattr("app.services.tools.search.web_search", _non_dict_web_search)
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://search.example.com/v1")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "unhealthy"
+    assert "'list' object has no attribute 'get'" in result["detail"]
+
+
 def test_test_endpoint_playwright_navigation_failure_unhealthy(session, monkeypatch):
     from app.services.tools.playwright import PlaywrightError
     from app.services.tool_connections import (
@@ -169,3 +197,27 @@ def test_test_endpoint_playwright_navigation_failure_unhealthy(session, monkeypa
     result = test_connection_version(session, version_id=version["id"])
     assert result["status"] == "unhealthy"
     assert "NAVIGATION_FAILED" in result["detail"]
+
+
+def test_test_endpoint_playwright_allowlist_defect_unhealthy(session, monkeypatch):
+    """A guard-blocked probe (URL_BLOCKED / DOMAIN_NOT_ALLOWED) proves nothing
+    about browser engagement — the stored allowlist is a config defect and
+    every agent call would fail closed forever, so the probe is unhealthy."""
+    from app.services.tools.playwright import PlaywrightError
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _blocked_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        raise PlaywrightError("PLAYWRIGHT_DOMAIN_NOT_ALLOWED")
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _blocked_browse_page)
+    provider = create_provider(session, actor_id="u-1", name="Web Render", kind="playwright")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        allowlists={"domains": ["127.0.0.1"]})
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "unhealthy"
+    assert "DOMAIN_NOT_ALLOWED" in result["detail"]
