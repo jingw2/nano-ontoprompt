@@ -123,3 +123,96 @@ def test_issue_token_rejects_non_mcp_kind(session):
     with pytest.raises(ToolConnectionError, match="MCP_KIND_REQUIRED"):
         issue_mcp_token(session, actor_id="u-1", version_id=version["id"], access_token="t",
                         refresh_token=None, expires_in_seconds=3600, scope=[], audience=None)
+
+
+# --- test_connection_version's external_mcp health-probe branch ---
+# Ordering matters: schema pinned? -> quarantined (skip network)? -> token
+# present? -> domain allowlist present? -> token expired? -> only then does
+# the probe make a live list_tools call and compare hashes.
+
+_TOOLS_A = [{"name": "read_suppliers", "description": "d", "input_schema": {}}]
+_TOOLS_B = [{"name": "different_tool", "description": "d2", "input_schema": {}}]
+
+
+def test_probe_unpinned_schema_unhealthy(session):
+    from app.services.tool_connections import test_connection_version
+    version_id = _approved_mcp_version(session)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "unhealthy", "detail": "MCP_SCHEMA_UNPINNED"}
+
+
+def test_probe_quarantined_schema_skips_network(session, monkeypatch):
+    from app.services.tool_connections import pin_mcp_schema, test_connection_version
+    version_id = _approved_mcp_version(session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_A)
+    pin_mcp_schema(session, actor_id="u-1", version_id=version_id)
+    session.execute(text(
+        "UPDATE mcp_connection_schemas SET quarantined = true, quarantined_reason = 'x' "
+        "WHERE connection_version_id = :id"
+    ), {"id": version_id})
+    session.commit()
+
+    calls = []
+
+    def _tracking_list_tools(**kw):
+        calls.append(kw)
+        raise AssertionError("list_tools must not be called when the schema is already quarantined")
+
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", _tracking_list_tools)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "unhealthy", "detail": "TOOL_SCHEMA_QUARANTINED"}
+    assert calls == []
+
+
+def test_probe_missing_token_unhealthy(session, monkeypatch):
+    from app.services.tool_connections import pin_mcp_schema, test_connection_version
+    version_id = _approved_mcp_version(session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_A)
+    pin_mcp_schema(session, actor_id="u-1", version_id=version_id)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "unhealthy", "detail": "MCP_TOKEN_MISSING"}
+
+
+def test_probe_expired_token_unhealthy(session, monkeypatch):
+    from app.services.tool_connections import issue_mcp_token, pin_mcp_schema, test_connection_version
+    version_id = _approved_mcp_version(session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_A)
+    pin_mcp_schema(session, actor_id="u-1", version_id=version_id)
+    issue_mcp_token(session, actor_id="u-1", version_id=version_id, access_token="tok",
+                    refresh_token=None, expires_in_seconds=-10, scope=[], audience=None)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "unhealthy", "detail": "MCP_TOKEN_EXPIRED"}
+
+
+def test_probe_healthy_when_live_hash_matches_pinned(session, monkeypatch):
+    from app.services.tool_connections import issue_mcp_token, pin_mcp_schema, test_connection_version
+    version_id = _approved_mcp_version(session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_A)
+    pin_mcp_schema(session, actor_id="u-1", version_id=version_id)
+    issue_mcp_token(session, actor_id="u-1", version_id=version_id, access_token="tok",
+                    refresh_token=None, expires_in_seconds=3600, scope=[], audience=None)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "healthy", "detail": "mcp:ok"}
+    persisted = session.execute(text(
+        "SELECT health_status FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version_id}).scalar_one()
+    assert persisted == "healthy"
+
+
+def test_probe_hash_mismatch_unhealthy_and_does_not_persist_quarantine(session, monkeypatch):
+    """A live-probe hash mismatch reports unhealthy but is advisory only —
+    only the later Tool Gateway dispatch path is allowed to persist
+    quarantine=true to mcp_connection_schemas."""
+    from app.services.tool_connections import issue_mcp_token, pin_mcp_schema, test_connection_version
+    version_id = _approved_mcp_version(session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_A)
+    pin_mcp_schema(session, actor_id="u-1", version_id=version_id)
+    issue_mcp_token(session, actor_id="u-1", version_id=version_id, access_token="tok",
+                    refresh_token=None, expires_in_seconds=3600, scope=[], audience=None)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: _TOOLS_B)
+    result = test_connection_version(session, version_id=version_id)
+    assert result == {"status": "unhealthy", "detail": "TOOL_SCHEMA_QUARANTINED"}
+    stored = session.execute(text(
+        "SELECT quarantined FROM mcp_connection_schemas WHERE connection_version_id = :id"
+    ), {"id": version_id}).mappings().one()
+    assert stored["quarantined"] is False

@@ -172,7 +172,10 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
             result = {"status": "unhealthy", "detail": "MCP_DOMAIN_ALLOWLIST_MISSING"}
         else:
             from datetime import datetime, timezone
-            if token_row["expires_at"].replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+            expires_at = token_row["expires_at"]
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
                 result = {"status": "unhealthy", "detail": "MCP_TOKEN_EXPIRED"}
             else:
                 from app.services.encryption_service import decrypt
@@ -197,11 +200,11 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
     return result
 
 
-def pin_mcp_schema(db: Session, *, actor_id: str, version_id: str) -> dict:
-    """Admin action: introspect the remote MCP server's tools/list and pin
-    the result as the approved shape. Re-running this after a legitimate
-    server-side change is the ONLY way to clear a prior quarantine — it is
-    always an explicit, audited admin action, never automatic."""
+def _require_approved_mcp_version(db: Session, version_id: str):
+    """Shared lookup+validation for MCP admin actions: the version must
+    exist, belong to an external_mcp provider, and be approved. Selects the
+    columns both pin_mcp_schema and issue_mcp_token need (issue_mcp_token
+    simply ignores endpoint/allowlists)."""
     row = db.execute(text(
         "SELECT tcv.approval_status, tcv.endpoint, tcv.allowlists, tp.kind "
         "FROM tool_connection_versions tcv "
@@ -215,6 +218,15 @@ def pin_mcp_schema(db: Session, *, actor_id: str, version_id: str) -> dict:
         raise ToolConnectionError("MCP_KIND_REQUIRED")
     if row["approval_status"] != "approved":
         raise ToolConnectionError("VERSION_NOT_APPROVED")
+    return row
+
+
+def pin_mcp_schema(db: Session, *, actor_id: str, version_id: str) -> dict:
+    """Admin action: introspect the remote MCP server's tools/list and pin
+    the result as the approved shape. Re-running this after a legitimate
+    server-side change is the ONLY way to clear a prior quarantine — it is
+    always an explicit, audited admin action, never automatic."""
+    row = _require_approved_mcp_version(db, version_id)
     domains = [str(d) for d in ((row["allowlists"] or {}).get("domains") or [])]
     if not domains:
         raise ToolConnectionError("MCP_DOMAIN_ALLOWLIST_MISSING")
@@ -244,24 +256,13 @@ def pin_mcp_schema(db: Session, *, actor_id: str, version_id: str) -> dict:
 
 
 def issue_mcp_token(db: Session, *, actor_id: str, version_id: str, access_token: str,
-                    refresh_token: str | None, expires_in_seconds: int, scope: list[str],
-                    audience: str | None) -> dict:
+                    refresh_token: str | None = None, expires_in_seconds: int, scope: list[str],
+                    audience: str | None = None) -> dict:
     """Admin action: store an out-of-band-obtained confidential-client bearer
     token, encrypted at rest. Replaces any prior token for this version
     (rotation) — issuing a fresh token is how an admin recovers from
     MCP_TOKEN_EXPIRED."""
-    row = db.execute(text(
-        "SELECT tcv.approval_status, tp.kind FROM tool_connection_versions tcv "
-        "JOIN tool_connections tc ON tc.id = tcv.connection_id "
-        "JOIN tool_providers tp ON tp.id = tc.provider_id "
-        "WHERE tcv.id = :id"
-    ), {"id": version_id}).mappings().one_or_none()
-    if row is None:
-        raise ToolConnectionError("VERSION_NOT_FOUND")
-    if row["kind"] != "external_mcp":
-        raise ToolConnectionError("MCP_KIND_REQUIRED")
-    if row["approval_status"] != "approved":
-        raise ToolConnectionError("VERSION_NOT_APPROVED")
+    _require_approved_mcp_version(db, version_id)
     from app.services.encryption_service import encrypt
     token_id = _new_id()
     db.execute(text(
