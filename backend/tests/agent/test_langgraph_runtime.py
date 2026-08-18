@@ -360,3 +360,72 @@ def test_real_runtime_external_search_tool_offered_and_dispatched(pg_session, mo
     assert executed.payload["outcome"] == "untrusted_read"
     final = events[-2]
     assert final.payload["message"] == "根据搜索结果：hi from search。"
+
+
+def _seed_playwright_binding(db):
+    db.execute(text(
+        "INSERT INTO tool_providers (id, name, status, kind, created_by, created_at, updated_at) "
+        "VALUES ('tp-2', 'Web Render', 'active', 'playwright', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO tool_connections (id, provider_id, status, created_by, created_at, updated_at) "
+        "VALUES ('tc-2', 'tp-2', 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO tool_connection_versions (id, connection_id, version_no, endpoint, scopes, "
+        "allowlists, approval_status, health_status, created_by, created_at) "
+        "VALUES ('tcv-2', 'tc-2', 1, NULL, '[]', '{\"domains\": [\"example.com\"]}'::json, "
+        "'approved', 'unknown', 'u-1', CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO agent_external_tool_bindings (id, agent_version_id, tool_connection_version_id, alias, created_at) "
+        "VALUES ('aetb-2', 'v-1', 'tcv-2', 'browser', CURRENT_TIMESTAMP)"
+    ))
+    # the real gateway rechecks the user's run grant before external dispatch;
+    # each test runs in its own schema so this is never a duplicate of the
+    # grant seeded by _seed_search_binding
+    db.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
+        "created_by, created_at, updated_at) "
+        "VALUES ('grant-1', 'a-1', 'u-1', '[\"run\"]', 1, 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
+
+
+def test_real_runtime_external_playwright_tool_offered_and_dispatched(pg_session, monkeypatch):
+    from app.services.untrusted_artifact import make_artifact
+
+    def _fake_browse_page(*, url, allowed_domains, timeout_seconds=20.0, max_bytes=200_000):
+        return {"title": "Docs", "final_url": url,
+                "artifact": make_artifact(source=url, media_type="text/plain",
+                                          raw_content="<b>rendered docs</b>")}
+
+    monkeypatch.setattr("app.services.tools.playwright.browse_page", _fake_browse_page)
+    _seed_unit_graph(pg_session)
+    _seed_playwright_binding(pg_session)
+    rounds = []
+
+    def caller(caller_info, messages, tools):
+        round_index = len(rounds)
+        rounds.append((round_index, [t["function"]["name"] for t in tools]))
+        if round_index == 0:
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "external_browser",
+                "arguments_json": '{"url": "https://docs.example.com/"}',
+            }]}
+        return {"content": "根据网页内容：rendered docs。", "tool_calls": []}
+
+    context = _context(extra={
+        "user_id": "u-1",
+        "citations": [],
+        "ontology_tool_selection": [],
+        "external_tool_bindings": [{"tool_connection_version_id": "tcv-2", "alias": "browser"}],
+    })
+    runtime = LangGraphRuntime(pg_session, caller=caller)  # real ToolGateway — no FakeGateway substitution
+    events = _run(runtime, context)
+    assert "external_browser" in rounds[0][1]
+    executed = next(e for e in events if e.event_type == "tool_executed")
+    assert executed.payload["descriptor_id"] == "external.playwright"
+    assert executed.payload["outcome"] == "untrusted_read"
+    final = events[-2]
+    assert final.payload["message"] == "根据网页内容：rendered docs。"
