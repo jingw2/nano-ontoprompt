@@ -96,3 +96,40 @@ def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
                 response._content = b"".join(chunks)
                 return response
     raise SsrfBlockedError("SSRF_BLOCKED_TOO_MANY_REDIRECTS")
+
+
+def safe_post(url: str, *, timeout_seconds: float, max_bytes: int,
+              json_body: dict, headers: dict | None = None) -> httpx.Response:
+    """Same validation/redirect/byte-cap discipline as safe_get, but POSTs a
+    JSON body — MCP's Streamable HTTP transport is POST-based JSON-RPC.
+    Redirects re-POST the same body (matching MCP servers' documented
+    behavior of not redirecting JSON-RPC calls); credentials still drop
+    one-way across an origin change exactly as safe_get does."""
+    current = url
+    hop_headers = dict(headers or {})
+    hop_headers.setdefault("Content-Type", "application/json")
+    for _ in range(MAX_REDIRECTS + 1):
+        _validate_url(current)
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
+            with client.stream("POST", current, json=json_body, headers=hop_headers) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    if not location:
+                        raise SsrfBlockedError("SSRF_BLOCKED_REDIRECT_NO_LOCATION")
+                    nxt = str(httpx.URL(current).join(location))
+                    prev_origin = _origin(current)
+                    next_origin = _origin(nxt)
+                    hop_headers = hop_headers if prev_origin == next_origin else \
+                        {"Content-Type": "application/json"}
+                    current = nxt
+                    continue
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise SsrfBlockedError(f"SSRF_BLOCKED_OVERSIZED_RESPONSE:{total}")
+                    chunks.append(chunk)
+                response._content = b"".join(chunks)
+                return response
+    raise SsrfBlockedError("SSRF_BLOCKED_TOO_MANY_REDIRECTS")
