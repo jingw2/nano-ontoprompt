@@ -62,14 +62,34 @@ def _origin(url: str) -> tuple[str, str, int | None]:
     return (parsed.scheme, parsed.hostname or "", parsed.port)
 
 
-def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
-            headers: dict | None = None) -> httpx.Response:
+def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
+            headers: dict | None = None, json_body: dict | None = None) -> httpx.Response:
+    """Shared per-hop validate/redirect/byte-cap-stream discipline used by
+    both safe_get and safe_post: validates the URL/host, streams the
+    response body with a byte cap, and independently revalidates each
+    redirect hop rather than trusting httpx's automatic redirect follower.
+
+    Credentials never cross an origin change — the SSRF guard validates
+    network destinations, not credential trust. One-way latch: once
+    dropped, headers stay dropped even if a later same-origin hop on the
+    new host would re-attach them. When json_body is provided (the POST
+    case), the cross-origin reset keeps a bare Content-Type header instead
+    of dropping to no headers at all, matching safe_post's documented
+    behavior.
+    """
     current = url
     hop_headers = headers
+    stream_kwargs: dict = {}
+    cross_origin_reset = None
+    if json_body is not None:
+        hop_headers = dict(headers or {})
+        hop_headers.setdefault("Content-Type", "application/json")
+        stream_kwargs["json"] = json_body
+        cross_origin_reset = {"Content-Type": "application/json"}
     for _ in range(MAX_REDIRECTS + 1):
         _validate_url(current)
         with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
-            with client.stream("GET", current, headers=hop_headers) as response:
+            with client.stream(method, current, headers=hop_headers, **stream_kwargs) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get("location")
                     if not location:
@@ -77,11 +97,7 @@ def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
                     nxt = str(httpx.URL(current).join(location))
                     prev_origin = _origin(current)
                     next_origin = _origin(nxt)
-                    # never forward credentials across an origin change — the SSRF
-                    # guard validates network destinations, not credential trust.
-                    # One-way latch: once dropped, headers stay dropped even if a
-                    # later same-origin hop on the new host would re-attach them.
-                    hop_headers = hop_headers if prev_origin == next_origin else None
+                    hop_headers = hop_headers if prev_origin == next_origin else cross_origin_reset
                     current = nxt
                     continue
                 chunks: list[bytes] = []
@@ -98,6 +114,11 @@ def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
     raise SsrfBlockedError("SSRF_BLOCKED_TOO_MANY_REDIRECTS")
 
 
+def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
+            headers: dict | None = None) -> httpx.Response:
+    return _request("GET", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, headers=headers)
+
+
 def safe_post(url: str, *, timeout_seconds: float, max_bytes: int,
               json_body: dict, headers: dict | None = None) -> httpx.Response:
     """Same validation/redirect/byte-cap discipline as safe_get, but POSTs a
@@ -105,31 +126,5 @@ def safe_post(url: str, *, timeout_seconds: float, max_bytes: int,
     Redirects re-POST the same body (matching MCP servers' documented
     behavior of not redirecting JSON-RPC calls); credentials still drop
     one-way across an origin change exactly as safe_get does."""
-    current = url
-    hop_headers = dict(headers or {})
-    hop_headers.setdefault("Content-Type", "application/json")
-    for _ in range(MAX_REDIRECTS + 1):
-        _validate_url(current)
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
-            with client.stream("POST", current, json=json_body, headers=hop_headers) as response:
-                if response.status_code in (301, 302, 303, 307, 308):
-                    location = response.headers.get("location")
-                    if not location:
-                        raise SsrfBlockedError("SSRF_BLOCKED_REDIRECT_NO_LOCATION")
-                    nxt = str(httpx.URL(current).join(location))
-                    prev_origin = _origin(current)
-                    next_origin = _origin(nxt)
-                    hop_headers = hop_headers if prev_origin == next_origin else \
-                        {"Content-Type": "application/json"}
-                    current = nxt
-                    continue
-                chunks: list[bytes] = []
-                total = 0
-                for chunk in response.iter_bytes():
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise SsrfBlockedError(f"SSRF_BLOCKED_OVERSIZED_RESPONSE:{total}")
-                    chunks.append(chunk)
-                response._content = b"".join(chunks)
-                return response
-    raise SsrfBlockedError("SSRF_BLOCKED_TOO_MANY_REDIRECTS")
+    return _request("POST", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes,
+                    headers=headers, json_body=json_body)
