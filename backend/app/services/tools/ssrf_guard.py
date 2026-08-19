@@ -63,7 +63,8 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 
 
 def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
-            headers: dict | None = None, json_body: dict | None = None) -> httpx.Response:
+            headers: dict | None = None, json_body: dict | None = None,
+            follow_redirects: bool = True) -> httpx.Response:
     """Shared per-hop validate/redirect/byte-cap-stream discipline used by
     both safe_get and safe_post: validates the URL/host, streams the
     response body with a byte cap, and independently revalidates each
@@ -76,6 +77,13 @@ def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
     case), the cross-origin reset keeps a bare Content-Type header instead
     of dropping to no headers at all, matching safe_post's documented
     behavior.
+
+    When follow_redirects is False (safe_post's default), any 3xx response
+    is rejected outright rather than followed — a caller-supplied domain
+    allowlist (e.g. MCP's) is only ever checked against the original
+    endpoint, never re-checked on a redirect hop, so a compromised-but-
+    approved origin could otherwise 302 the request body to an arbitrary
+    host.
     """
     current = url
     hop_headers = headers
@@ -91,6 +99,8 @@ def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
         with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
             with client.stream(method, current, headers=hop_headers, **stream_kwargs) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
+                    if not follow_redirects:
+                        raise SsrfBlockedError("SSRF_BLOCKED_UNEXPECTED_REDIRECT")
                     location = response.headers.get("location")
                     if not location:
                         raise SsrfBlockedError("SSRF_BLOCKED_REDIRECT_NO_LOCATION")
@@ -116,15 +126,20 @@ def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
 
 def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
             headers: dict | None = None) -> httpx.Response:
-    return _request("GET", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, headers=headers)
+    return _request("GET", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, headers=headers,
+                    follow_redirects=True)
 
 
 def safe_post(url: str, *, timeout_seconds: float, max_bytes: int,
               json_body: dict, headers: dict | None = None) -> httpx.Response:
-    """Same validation/redirect/byte-cap discipline as safe_get, but POSTs a
-    JSON body — MCP's Streamable HTTP transport is POST-based JSON-RPC.
-    Redirects re-POST the same body (matching MCP servers' documented
-    behavior of not redirecting JSON-RPC calls); credentials still drop
-    one-way across an origin change exactly as safe_get does."""
+    """Same validation/byte-cap discipline as safe_get, but POSTs a JSON
+    body — MCP's Streamable HTTP transport is POST-based JSON-RPC. Unlike
+    safe_get, redirects are never followed: any 3xx response raises
+    SsrfBlockedError outright. A caller-supplied domain allowlist (e.g.
+    MCP's) is only checked against the original endpoint, never re-checked
+    on a redirect hop, so a compromised-but-approved origin could otherwise
+    302 the POST body — which may carry model-supplied arguments — to an
+    arbitrary host. This matches mcp_client.py's documented expectation
+    that MCP servers don't redirect JSON-RPC calls."""
     return _request("POST", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes,
-                    headers=headers, json_body=json_body)
+                    headers=headers, json_body=json_body, follow_redirects=False)

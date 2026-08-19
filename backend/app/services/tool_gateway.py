@@ -231,8 +231,19 @@ class ToolGateway:
             raise ToolGatewayError("MCP_TOKEN_EXPIRED")
         declared_scopes = set(row["scopes"] or [])
         token_scopes = set(token_row["scope"] or [])
-        if not declared_scopes <= token_scopes:
+        # Symmetric equality, not subset: a token with FEWER scopes than
+        # declared is under-privileged for the connection, but a token with
+        # MORE scopes than declared is over-privileged and must be rejected
+        # too — dispatch may only proceed on an exact match.
+        if declared_scopes != token_scopes:
             raise ToolGatewayError("OAUTH_SCOPE_DENIED")
+        # `audience` is recorded on both mcp_oauth_tokens and
+        # tool_connection_versions but is not compared/enforced here — a
+        # documented residual gap (see ssrf_guard.py's DNS-rebinding note
+        # for the same "known gap, not silently assumed closed" pattern),
+        # not an oversight. What tool_connection_versions.audience should
+        # mean as a comparison target is a bigger design question deferred
+        # to a future pass.
         domains = [str(d) for d in ((row["allowlists"] or {}).get("domains") or [])]
         access_token = decrypt(token_row["encrypted_access_token"])
         try:
@@ -240,6 +251,8 @@ class ToolGateway:
                                     allowed_domains=domains)
         except MCPClientError as exc:
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        except Exception as exc:  # raw transport errors escape the adapter's taxonomy
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
         if tools_schema_hash(live_tools) != schema_row["tool_schema_hash"]:
             self._db.execute(text(
                 "UPDATE mcp_connection_schemas SET quarantined = true, quarantined_at = now(), "
@@ -258,6 +271,8 @@ class ToolGateway:
                                     allowed_domains=domains, tool_name=tool_name, arguments=model_parameters)
         except MCPClientError as exc:
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        except Exception as exc:  # raw transport errors escape the adapter's taxonomy
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
         payload = {"content": safe_markdown(call_result["content"]), "is_error": call_result["is_error"]}
         return GatewayResult(
             descriptor_id=request.descriptor_id, outcome="untrusted_read", payload=payload,

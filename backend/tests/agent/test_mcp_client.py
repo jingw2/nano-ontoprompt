@@ -60,6 +60,19 @@ def test_call_tool_surfaces_protocol_error(monkeypatch):
                  allowed_domains=["mcp.example.com"], tool_name="x", arguments={})
 
 
+def test_call_tool_sanitizes_protocol_error_message(monkeypatch):
+    def fake_safe_post(url, *, timeout_seconds, max_bytes, json_body, headers=None):
+        return _FakeResponse(200, {"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32601, "message": "<script>alert(1)</script>boom"}})
+
+    monkeypatch.setattr("app.services.tools.mcp_client.safe_post", fake_safe_post)
+    with pytest.raises(MCPClientError) as excinfo:
+        call_tool(endpoint="https://mcp.example.com/rpc", access_token="tok-1",
+                 allowed_domains=["mcp.example.com"], tool_name="x", arguments={})
+    assert "<script>" not in str(excinfo.value)
+    assert "boom" in str(excinfo.value)
+
+
 def test_call_tool_wraps_ssrf_block(monkeypatch):
     from app.services.tools.ssrf_guard import SsrfBlockedError
 
@@ -76,6 +89,31 @@ def test_tools_schema_hash_is_key_order_independent():
     a = [{"name": "t", "description": "d", "input_schema": {"type": "object"}}]
     b = [{"input_schema": {"type": "object"}, "description": "d", "name": "t"}]
     assert tools_schema_hash(a) == tools_schema_hash(b)
+
+
+def test_list_tools_normalizes_list_order_regardless_of_server_order(monkeypatch):
+    """A benign reordering of tools/list's response between pin-time and
+    dispatch-time must not change the resulting hash, or a benign remote
+    reorder would permanently quarantine the connection."""
+    forward = [
+        {"name": "a_tool", "description": "d", "inputSchema": {}},
+        {"name": "b_tool", "description": "d", "inputSchema": {}},
+    ]
+    reversed_order = list(reversed(forward))
+
+    def fake_safe_post(order):
+        def _post(url, *, timeout_seconds, max_bytes, json_body, headers=None):
+            return _FakeResponse(200, {"jsonrpc": "2.0", "id": 1, "result": {"tools": order}})
+        return _post
+
+    monkeypatch.setattr("app.services.tools.mcp_client.safe_post", fake_safe_post(forward))
+    tools_a = list_tools(endpoint="https://mcp.example.com/rpc", access_token="tok-1",
+                         allowed_domains=["mcp.example.com"])
+    monkeypatch.setattr("app.services.tools.mcp_client.safe_post", fake_safe_post(reversed_order))
+    tools_b = list_tools(endpoint="https://mcp.example.com/rpc", access_token="tok-1",
+                         allowed_domains=["mcp.example.com"])
+    assert tools_a == tools_b
+    assert tools_schema_hash(tools_a) == tools_schema_hash(tools_b)
 
 
 def test_tools_schema_hash_detects_drift():

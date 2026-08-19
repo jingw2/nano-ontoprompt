@@ -175,59 +175,15 @@ def test_safe_post_rejects_oversized_response(monkeypatch):
         safe_post("https://example.com/", timeout_seconds=5, max_bytes=10, json_body={})
 
 
-def test_safe_post_rejects_too_many_redirects(monkeypatch):
-    _patch_client(monkeypatch,
-                  lambda url: _FakeResponse(302, {"location": "https://example.com/next"}))
-    monkeypatch.setattr("app.services.tools.ssrf_guard._validate_url", lambda url: None)
-    with pytest.raises(SsrfBlockedError):
-        safe_post("https://example.com/", timeout_seconds=5, max_bytes=1_000_000, json_body={})
-
-
-def test_safe_post_drops_headers_on_cross_origin_redirect(monkeypatch):
-    """A cross-origin hop must never receive the previous origin's headers —
-    the guard validates network destinations, not credential trust."""
+def test_safe_post_rejects_any_redirect_without_following(monkeypatch):
+    """Unlike safe_get, safe_post never follows a redirect hop — MCP's domain
+    allowlist is only checked against the original endpoint, so a 3xx must
+    be rejected outright rather than followed to an unchecked host."""
     calls = _patch_client(monkeypatch, lambda url: (
         _FakeResponse(302, {"location": "https://attacker.example.com/collect"})
         if url == "https://search.example.com/v1" else _FakeResponse(200, body=b"ok")))
     monkeypatch.setattr("app.services.tools.ssrf_guard._validate_url", lambda url: None)
-    response = safe_post("https://search.example.com/v1", timeout_seconds=5, max_bytes=100,
-                         json_body={"jsonrpc": "2.0"}, headers={"Authorization": "Bearer secret"})
-    assert response.status_code == 200
-    assert calls[0] == ("https://search.example.com/v1",
-                        {"Authorization": "Bearer secret", "Content-Type": "application/json"})
-    assert calls[1] == ("https://attacker.example.com/collect", {"Content-Type": "application/json"})
-
-
-def test_safe_post_keeps_headers_on_same_origin_redirect(monkeypatch):
-    calls = _patch_client(monkeypatch, lambda url: (
-        _FakeResponse(302, {"location": "/results"})
-        if url == "https://search.example.com/v1" else _FakeResponse(200, body=b"ok")))
-    monkeypatch.setattr("app.services.tools.ssrf_guard._validate_url", lambda url: None)
-    response = safe_post("https://search.example.com/v1", timeout_seconds=5, max_bytes=100,
-                         json_body={"jsonrpc": "2.0"}, headers={"Authorization": "Bearer secret"})
-    assert response.status_code == 200
-    assert calls[1] == ("https://search.example.com/results",
-                        {"Authorization": "Bearer secret", "Content-Type": "application/json"})
-
-
-def test_safe_post_header_drop_is_one_way_latch(monkeypatch):
-    """Once headers are dropped on a cross-origin hop they stay dropped, even
-    when the attacker's host then redirects to its OWN origin (which would
-    otherwise re-attach the credential)."""
-    def _respond(url):
-        if url == "https://search.example.com/v1":
-            return _FakeResponse(302, {"location": "https://attacker.example.com/a"})
-        if url == "https://attacker.example.com/a":
-            return _FakeResponse(302, {"location": "https://attacker.example.com/collect"})
-        return _FakeResponse(200, body=b"ok")
-
-    calls = _patch_client(monkeypatch, _respond)
-    monkeypatch.setattr("app.services.tools.ssrf_guard._validate_url", lambda url: None)
-    response = safe_post("https://search.example.com/v1", timeout_seconds=5, max_bytes=100,
-                         json_body={"jsonrpc": "2.0"}, headers={"Authorization": "Bearer secret"})
-    assert response.status_code == 200
-    assert calls[0] == ("https://search.example.com/v1",
-                        {"Authorization": "Bearer secret", "Content-Type": "application/json"})
-    assert calls[1] == ("https://attacker.example.com/a", {"Content-Type": "application/json"})
-    assert calls[2] == ("https://attacker.example.com/collect",
-                        {"Content-Type": "application/json"})  # latch holds
+    with pytest.raises(SsrfBlockedError, match="SSRF_BLOCKED_UNEXPECTED_REDIRECT"):
+        safe_post("https://search.example.com/v1", timeout_seconds=5, max_bytes=100,
+                 json_body={"jsonrpc": "2.0"}, headers={"Authorization": "Bearer secret"})
+    assert len(calls) == 1  # no second hop is ever attempted

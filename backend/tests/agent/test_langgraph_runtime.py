@@ -610,11 +610,13 @@ def test_real_runtime_mcp_tool_offered_and_dispatched(pg_session, monkeypatch):
     monkeypatch.setattr("app.services.tools.mcp_client.call_tool",
                         lambda **kw: {"content": "supplier A", "is_error": False})
     rounds = []
+    offered_tools = []
 
     def caller(caller_info, messages, tools):
         round_index = len(rounds)
         rounds.append((round_index, [t["function"]["name"] for t in tools]))
         if round_index == 0:
+            offered_tools.extend(tools)
             return {"content": "", "tool_calls": [{
                 "id": "call-1", "name": "mcp_mcp1",
                 "arguments_json": '{"tool": "read_suppliers", "parameters": {"query": "supplier"}}',
@@ -630,6 +632,9 @@ def test_real_runtime_mcp_tool_offered_and_dispatched(pg_session, monkeypatch):
     runtime = LangGraphRuntime(pg_session, caller=caller)
     events = _run(runtime, context)
     assert "mcp_mcp1" in rounds[0][1]
+    mcp_tool = next(t for t in offered_tools if t["function"]["name"] == "mcp_mcp1")
+    assert "read_suppliers" in mcp_tool["function"]["description"]
+    assert "d" in mcp_tool["function"]["description"]
     executed = next(e for e in events if e.event_type == "tool_executed")
     assert executed.payload["descriptor_id"] == "external.mcp"
     assert executed.payload["outcome"] == "untrusted_read"

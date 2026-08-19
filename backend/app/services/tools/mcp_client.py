@@ -6,7 +6,12 @@ stdio) — a documented scope boundary, not a partial implementation. Every
 call goes through the SSRF guard and the connection version's domain
 allowlist (fail-closed, same discipline as the Playwright adapter). Never
 called directly by the model — only through ToolGateway
-(see app/services/tool_gateway.py)."""
+(see app/services/tool_gateway.py).
+
+Targets STATELESS MCP servers only: this client never performs the
+`initialize` / `notifications/initialized` lifecycle handshake defined in
+the MCP spec, so a strict, session-stateful server may reject calls — a
+documented scope boundary, not a partial implementation."""
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +19,9 @@ import json
 
 from app.services.tools.playwright import _domain_allowed
 from app.services.tools.ssrf_guard import SsrfBlockedError, safe_post
+from app.services.untrusted_artifact import safe_markdown
+
+MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
 class MCPClientError(Exception):
@@ -26,7 +34,10 @@ def _rpc_call(*, endpoint: str, access_token: str, allowed_domains: list[str],
         raise MCPClientError("MCP_ENDPOINT_MISSING")
     if not _domain_allowed(endpoint, allowed_domains):
         raise MCPClientError(f"MCP_DOMAIN_NOT_ALLOWED:{endpoint}")
-    headers = {"Authorization": f"Bearer {access_token}"} if access_token else None
+    headers = {"Accept": "application/json, text/event-stream",
+              "MCP-Protocol-Version": MCP_PROTOCOL_VERSION}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     try:
         response = safe_post(endpoint, timeout_seconds=timeout_seconds, max_bytes=1_000_000,
@@ -43,7 +54,7 @@ def _rpc_call(*, endpoint: str, access_token: str, allowed_domains: list[str],
         raise MCPClientError("MCP_UPSTREAM_INVALID_JSON")
     if "error" in payload:
         error = payload["error"] if isinstance(payload["error"], dict) else {}
-        raise MCPClientError(f"MCP_RPC_ERROR:{error.get('message', 'unknown')}")
+        raise MCPClientError(f"MCP_RPC_ERROR:{safe_markdown(str(error.get('message', 'unknown')))}")
     result = payload.get("result")
     if not isinstance(result, dict):
         raise MCPClientError("MCP_RPC_RESULT_MISSING")
@@ -66,6 +77,11 @@ def list_tools(*, endpoint: str, access_token: str, allowed_domains: list[str],
             "description": str(tool.get("description") or ""),
             "input_schema": tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else {},
         })
+    # Normalize list order regardless of what the server returned, so
+    # pin-time and dispatch-time hashes agree even if the remote reorders
+    # its tools/list response between calls (nothing in the MCP spec
+    # requires a stable order).
+    parsed.sort(key=lambda t: t["name"])
     return parsed
 
 

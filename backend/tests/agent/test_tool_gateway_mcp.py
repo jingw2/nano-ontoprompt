@@ -189,6 +189,20 @@ def test_dispatch_rejects_scope_narrower_than_declared(session, monkeypatch):
                        "tool": "read_suppliers", "parameters": {}}))
 
 
+def test_dispatch_rejects_scope_wider_than_declared(session, monkeypatch):
+    """A token issued with MORE scopes than the connection declares is
+    over-privileged and must be rejected too — not just a narrower token."""
+    from app.services.tool_gateway import GatewayRequest, ToolGateway, ToolGatewayError
+    version_id = _bound_mcp_version(session, scope=("ontology:query",),
+                                    token_scope=("ontology:query", "admin:write"))
+    gateway = ToolGateway(session)
+    with pytest.raises(ToolGatewayError, match="OAUTH_SCOPE_DENIED"):
+        gateway.execute(GatewayRequest(
+            agent_id="a-1", user_id="u-1", descriptor_id="external.mcp", operation="external_tool_call",
+            parameters={"agent_version_id": "v-1", "tool_connection_version_id": version_id,
+                       "tool": "read_suppliers", "parameters": {}}))
+
+
 def test_dispatch_rejects_unpinned_tool_name(session, monkeypatch):
     from app.services.tool_gateway import GatewayRequest, ToolGateway, ToolGatewayError
     version_id = _bound_mcp_version(session)
