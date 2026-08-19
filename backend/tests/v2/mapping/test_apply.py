@@ -24,7 +24,14 @@ def make_mapping_obj(field_mapping=None):
 
 def make_db(mapping_obj):
     db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = mapping_obj
+
+    def query_side_effect(model):
+        q = MagicMock()
+        first = mapping_obj if model is OntologyMapping else None
+        q.filter.return_value.first.return_value = first
+        return q
+
+    db.query.side_effect = query_side_effect
     db.commit = MagicMock()
     return db
 
