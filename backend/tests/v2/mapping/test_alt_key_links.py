@@ -70,8 +70,9 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id,
                                      Relation.type == "HAS_SUPPLIER").all()
-    # D1 → 天钢+芯联, D2 → 聚合+芯联(mentioned_supplier) = 4 个去重实体对
-    assert len(rels) == 4
+    # EntityInstance 重构后 Entity 表只存概念实体（每类一个），
+    # 关系在概念级连接：StrategyClause → Supplier 一条，不再按行展开成多条。
+    assert len(rels) == 1
     via = {(r.properties or {}).get("via") for r in rels}
     assert "alternate_key" in via
 
@@ -117,4 +118,6 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id).all()
     pairs = {(r.source_entity, r.target_entity) for r in rels}
-    assert len(pairs) == 2  # PO1→SUP001, PO2→SUP002, 无重复
+    # EntityInstance 重构后关系在概念级连接：PurchaseOrder → Supplier 一条，
+    # 同一概念下多行（PO1 展开成 A1/A2 两行）不产生重复关系对。
+    assert len(pairs) == 1  # PurchaseOrder → Supplier
