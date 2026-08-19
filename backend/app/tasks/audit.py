@@ -1,5 +1,9 @@
 from app.tasks.celery_app import celery_app
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @celery_app.task(bind=True)
 def run_audit(self, task_id: str):
@@ -112,11 +116,23 @@ def run_audit(self, task_id: str):
         db.commit()
 
     except Exception as e:
+        logger.exception("audit task %s failed", task_id)
         try:
             task.status = "failed"
             task.error = str(e)
             db.commit()
         except Exception:
-            pass
+            # session 可能已损坏，用新 session 兜底标记失败，避免任务永远卡在 running
+            logger.warning("primary session unusable, retrying with fresh session for task %s", task_id, exc_info=True)
+            try:
+                fresh_db = SessionLocal()
+                task = fresh_db.query(AuditTask).filter(AuditTask.id == task_id).first()
+                if task:
+                    task.status = "failed"
+                    task.error = str(e)
+                    fresh_db.commit()
+                fresh_db.close()
+            except Exception:
+                logger.error("无法将任务 %s 标记为 failed，原始错误: %s", task_id, e, exc_info=True)
     finally:
         db.close()
