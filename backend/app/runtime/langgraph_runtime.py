@@ -22,7 +22,9 @@ a `turn_failed` event (no hidden reasoning, no canned answer).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -533,7 +535,9 @@ class LangGraphRuntime:
         if category == "logic":
             return f"Evaluate Logic rule {source_id} of ontology {ontology_id} (read-only)."
         if category == "action":
-            return f"Preview instance Action {source_id} of ontology {ontology_id} without executing it."
+            return (f"Propose executing instance Action {source_id} of ontology {ontology_id}. "
+                    f"This requires human approval before it takes effect — calling it pauses "
+                    f"the conversation until the approval is resolved.")
         return f"Tool {descriptor.get('descriptor_id')} of ontology {ontology_id}."
 
     # ------------------------------------------------------------------ model
@@ -612,6 +616,15 @@ class LangGraphRuntime:
         if descriptor["descriptor_id"] == "runtime.request_clarification":
             return self._execute_clarification_call(context, arguments)
 
+        # `tool_category` fail-opens unrecognized descriptor shapes (e.g. the
+        # external.search/playwright/skill/mcp descriptors dispatched below)
+        # into the "action" bucket, so this must also require `ontology_id`
+        # — the marker `_build_messages_and_tools` only merges onto real
+        # ontology tool descriptors — to avoid misrouting those into the
+        # governed Action approval path.
+        if descriptor.get("ontology_id") and tool_category(descriptor) == "action":
+            return self._execute_action_call(context, events, descriptor, call, arguments)
+
         gateway_descriptor_id, parameters = self._gateway_request(descriptor, arguments)
         request = GatewayRequest(
             agent_id=context.agent_id, user_id=self._owner_user_id or "",
@@ -650,6 +663,95 @@ class LangGraphRuntime:
         raise TurnInterrupted("request_clarification", {
             "clarification_id": result["id"], "question": question,
         })
+
+    def _execute_action_call(self, context: TurnRuntimeContext, events: list[RuntimeEvent],
+                             descriptor: dict, call: dict, arguments: dict) -> dict:
+        """First time this exact tool-call id is seen: propose the action
+        (preview + approval) and pause. On resume (same tool-call id, found
+        via idempotency_key): check the approval's resolution and either
+        execute it (through the unmodified, already-fenced
+        execute_approved_action) or report it rejected/unavailable — never
+        re-propose, and never re-check the model's own arguments against a
+        second preview (the FIRST preview/approval is authoritative for this
+        tool-call id, exactly like every other idempotency-keyed write in
+        this codebase)."""
+        from app.services.actions.approval import _current_dependency_hashes, create_approval
+        from app.services.actions.execution import execute_approved_action
+        from app.services.actions.preview import preview_action
+
+        idempotency_key = call.get("id", "")
+        if not idempotency_key:
+            raise RuntimeModelError("TOOL_ARGUMENTS_INVALID", "action tool call is missing an id")
+        ontology_id = descriptor["ontology_id"]
+        release_id = descriptor.get("release_id")
+
+        existing = self.db.execute(text(
+            "SELECT te.id AS tool_execution_id, a.id AS approval_id, a.status AS approval_status "
+            "FROM agent_tool_executions te LEFT JOIN agent_approvals a ON a.tool_execution_id = te.id "
+            "WHERE te.idempotency_key = :key"
+        ), {"key": idempotency_key}).mappings().one_or_none()
+
+        if existing is None:
+            parameters = arguments.get("parameters") or {}
+            preview = preview_action(
+                self.db, actor_id=self._owner_user_id or "", agent_id=context.agent_id,
+                ontology_id=ontology_id, release_id=release_id,
+                descriptor_id=descriptor["descriptor_id"], parameters=parameters,
+                target_instance_id=arguments.get("target_instance_id"),
+            )
+            canonical_params = json.dumps(
+                {"descriptor_id": descriptor["descriptor_id"], "parameters": parameters},
+                sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            )
+            parameter_hash = hashlib.sha256(canonical_params.encode("utf-8")).hexdigest()
+            tool_execution_id = str(uuid.uuid4())
+            self.db.execute(text(
+                "INSERT INTO agent_tool_executions (id, turn_id, idempotency_key, status, descriptor, "
+                "parameters_hash, preview_hash, created_at, updated_at) "
+                "VALUES (:id, :turn, :key, 'proposed', CAST(:descriptor AS json), :ph, :prh, now(), now())"
+            ), {"id": tool_execution_id, "turn": context.turn_id, "key": idempotency_key,
+                "descriptor": json.dumps(descriptor["descriptor_id"]), "ph": parameter_hash,
+                "prh": preview["hash"]})
+            deps = _current_dependency_hashes(self.db, context.agent_id, ontology_id)
+            approval = create_approval(
+                self.db, turn_id=context.turn_id, tool_execution_id=tool_execution_id,
+                node_execution_id=None, designated_actor_id=self._owner_user_id or "",
+                preview_hash=preview["hash"], parameter_hash=parameter_hash,
+                schema_hash=deps["schema_hash"], release_hash=deps["release_hash"],
+                model_hash=deps["model_hash"], policy_hash="",
+            )
+            raise TurnInterrupted("approval_required", {
+                "approval_id": approval["id"], "tool_execution_id": tool_execution_id,
+                "descriptor_id": descriptor["descriptor_id"],
+            })
+
+        approval_status = existing["approval_status"]
+        if approval_status == "approved":
+            turn_row = self.db.execute(text(
+                "SELECT claim_token FROM agent_turns WHERE id = :id"
+            ), {"id": context.turn_id}).mappings().one()
+            result_hash = hashlib.sha256(existing["approval_id"].encode("utf-8")).hexdigest()
+            outcome = execute_approved_action(
+                self.db, approval_id=existing["approval_id"], worker_claim_token=turn_row["claim_token"],
+                effect_payload=arguments.get("parameters") or {}, result_hash=result_hash,
+            )
+            _seq(events, context.turn_id, "tool_executed", {
+                "descriptor_id": descriptor["descriptor_id"], "outcome": "approved_executed",
+            })
+            return {"descriptor_id": descriptor["descriptor_id"], "outcome": "approved_executed",
+                    "payload": {"execution_id": outcome["execution_id"], "result_hash": outcome["result_hash"]}}
+        if approval_status == "rejected":
+            _seq(events, context.turn_id, "tool_executed", {
+                "descriptor_id": descriptor["descriptor_id"], "outcome": "rejected",
+            })
+            return {"descriptor_id": descriptor["descriptor_id"], "outcome": "rejected",
+                    "payload": {"message": "The proposed action was rejected by the approver."}}
+        _seq(events, context.turn_id, "tool_executed", {
+            "descriptor_id": descriptor["descriptor_id"], "outcome": "unavailable",
+            "approval_status": approval_status,
+        })
+        return {"descriptor_id": descriptor["descriptor_id"], "outcome": "unavailable",
+                "payload": {"error": f"approval is {approval_status}, cannot proceed"}}
 
     def _gateway_request(self, descriptor: dict, arguments: dict) -> tuple[str, dict]:
         if descriptor.get("descriptor_id") == "external.search":

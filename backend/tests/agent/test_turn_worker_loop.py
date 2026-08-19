@@ -166,13 +166,15 @@ def _session(schema):
 def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-1",
                        user_message="库存低于安全线的订单有哪些？",
                        api_base="http://127.0.0.1:8123/v1", model_name="mock-chat",
-                       with_data_grant=False, with_instance=False):
+                       with_data_grant=False, with_instance=False,
+                       with_action=False, action_id="act-1"):
     """Full dependency graph for the worker query: user, model identity (an
     immutable version + encrypted credential pointing at the mock chat
     server), application-state schema (built-in chat-v1 from 0005), agent +
     active version with a bound published ontology (release citation),
     session, queued turn with request message + outbox.  `with_data_grant`/
-    `with_instance` enable the governed query-tool path."""
+    `with_instance` enable the governed query-tool path.  `with_action`
+    enables the governed Action propose/approve/execute path."""
     session.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
         "VALUES (:u,'w','w@t.com','h','editor',true,:d,now(),now())"
@@ -185,6 +187,16 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
         "INSERT INTO ontology_projects (id,name,domain,version,status,created_by,created_at,updated_at,security_domain_id,working_revision) "
         "VALUES ('o-1','Supply','test','v1','published','u-1',now(),now(),:d,1)"
     ), {"d": DEFAULT_DOMAIN})
+    action_entries, action_descriptors = [], []
+    if with_action:
+        action_entries = [{"id": action_id, "name": "ApproveOrder"}]
+        action_descriptors = [{
+            "descriptor_id": f"action:{action_id}", "version": 1, "source_kind": "action",
+            "source_id": action_id, "input_schema": {"parameters": {"type": "object"}},
+            "output_schema": {"result": {"type": "object"}},
+            "capability": "execute_instance_action", "timeout_ms": 30_000, "result_limit": 1,
+            "descriptor_hash": _hl.sha256(f"action:{action_id}".encode()).hexdigest(),
+        }]
     manifest = _json.dumps({
         "manifest_version": "ontology-manifest-v1",
         "compiler_version": "ontology-compiler-v1",
@@ -196,12 +208,12 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
         "entities": [{"id": "e-1", "name": "供应商", "type": "Supplier", "description": None,
                       "property_definitions": []}],
         "relations": [],
-        "logic_rules": [], "state_machines": [], "actions": [],
+        "logic_rules": [], "state_machines": [], "actions": action_entries,
         "tool_descriptors": [{"descriptor_id": "query:o-1", "version": 1, "source_kind": "builtin",
                               "source_id": "query", "input_schema": {"query": {"type": "string"}},
                               "output_schema": {"results": {"type": "array"}},
                               "capability": "read_instances", "timeout_ms": 10_000, "result_limit": 10,
-                              "descriptor_hash": "0" * 64}],
+                              "descriptor_hash": "0" * 64}] + action_descriptors,
     }, sort_keys=True)
     manifest_bytes = manifest.encode()
     session.execute(text(
@@ -236,11 +248,19 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
             "INSERT INTO entity_instances (id, entity_id, ontology_id, row_identity, row_data, created_at) "
             "VALUES ('i-1', 'e-1', 'o-1', 'row-1', CAST(:data AS jsonb), now())"
         ), {"data": _json.dumps({"name_cn": "华东供应商", "安全线": "500", "status": "active"}, ensure_ascii=False)})
+    data_caps, access_caps = [], []
     if with_data_grant:
+        data_caps.append("read_instances")
+        access_caps.append("run")
+    if with_action:
+        data_caps.append("execute_instance_action")
+        if "run" not in access_caps:
+            access_caps.append("run")
+    if data_caps:
         session.execute(text(
             "INSERT INTO ontology_data_grants (id, ontology_id, user_id, capabilities, policy_version, status, revision, created_by, created_at, updated_at) "
             "VALUES (:id, 'o-1', 'u-1', CAST(:caps AS jsonb), 'restricted-policy-dsl-v1', 'active', 1, 'u-1', now(), now())"
-        ), {"id": str(uuid.uuid4()), "caps": _json.dumps(["read_instances"])})
+        ), {"id": str(uuid.uuid4()), "caps": _json.dumps(data_caps)})
     schema_id = session.execute(text(
         "SELECT v.id FROM application_state_schema_versions v "
         "JOIN application_state_schema_registries r ON r.active_version_id = v.id "
@@ -259,17 +279,18 @@ def _seed_worker_graph(session, *, turn_id="t-1", session_id="s-1", agent_id="a-
     session.execute(text(
         "UPDATE agents SET active_version_id = 'v-1' WHERE id = :agent"
     ), {"agent": agent_id})
-    if with_data_grant:
+    if access_caps:
         session.execute(text(
             "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
             "created_by, created_at, updated_at) "
             "VALUES (:id, :agent, 'u-1', CAST(:caps AS jsonb), 1, 'active', 'u-1', now(), now())"
-        ), {"id": str(uuid.uuid4()), "agent": agent_id, "caps": _json.dumps(["run"])})
+        ), {"id": str(uuid.uuid4()), "agent": agent_id, "caps": _json.dumps(access_caps)})
+    selected_tools = ["query:o-1"] + ([f"action:{action_id}"] if with_action else [])
     session.execute(text(
         "INSERT INTO agent_ontology_bindings (id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, created_at) "
         "VALUES ('ab-1', 'v-1', 'o-1', CAST(:caps AS jsonb), CAST(:al AS jsonb), CAST(:st AS jsonb), now())"
     ), {"caps": '["read_schema", "read_instances", "traverse_relations"]', "al": '{}',
-        "st": '["query:o-1"]'})
+        "st": _json.dumps(selected_tools)})
     session.execute(text(
         "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status) "
         "VALUES (:sid, :aid, 'u-1', 'active')"
@@ -710,4 +731,133 @@ def test_worker_clarification_pauses_then_resumes_with_answer_visible(schema, mo
         "SELECT status FROM agent_turns WHERE id = 't-1'"
     )).mappings().one()
     assert turn2["status"] == "succeeded"
+    session.close()
+
+
+class ProposeActionHandler(BaseHTTPRequestHandler):
+    """First call: always proposes the bound action tool. Second call (a
+    tool result for the action call is already in the transcript): gives a
+    final grounded answer quoting the execution id, proving the model saw
+    the real execution outcome, not a canned string.  The runtime only ever
+    serializes `result["payload"]` back to the model (never the sibling
+    "outcome" field, which lives only in the persisted event), so detection
+    is by tool-message presence (mirroring `MockChatHandler`'s
+    `already_answered_tool` above), not by scanning payload content for an
+    outcome label."""
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        messages = body.get("messages", [])
+        tools = body.get("tools", [])
+        action_tool = next((t["function"]["name"] for t in tools if t["function"]["name"].startswith("action")), None)
+        already_executed = any(m.get("role") == "tool" for m in messages)
+        if action_tool and not already_executed:
+            content, tool_calls = "", [{
+                "id": "call-action-1", "type": "function",
+                "function": {"name": action_tool,
+                            "arguments": json.dumps({"parameters": {"approve": True}}, ensure_ascii=False)},
+            }]
+        else:
+            tool_msg = next((m["content"] for m in reversed(messages) if m.get("role") == "tool"), "{}")
+            execution_id = json.loads(tool_msg).get("execution_id", "")
+            content, tool_calls = f"已执行：{execution_id}", []
+        resp = {
+            "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def propose_action_chat_server():
+    server = HTTPServer(("127.0.0.1", 0), ProposeActionHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_worker_action_proposal_pauses_then_executes_on_approval(schema, monkeypatch, propose_action_chat_server):
+    session = _session(schema)
+    _seed_worker_graph(session, api_base=propose_action_chat_server, with_action=True,
+                       user_message="帮我批准这个订单")
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+    from app.services.runtime.dispatch import publish_pending_dispatch
+    publish_pending_dispatch(session)
+    from app.tasks.agent_turn import agent_turn_execute
+
+    result = agent_turn_execute.run("t-1", 1, "w-1", "tok-1")
+    assert result["status"] == "interrupted"
+    assert result["events"][-1] == "approval_required"
+    turn = session.execute(text("SELECT status, claim_token FROM agent_turns WHERE id = 't-1'")).mappings().one()
+    assert turn["status"] == "awaiting_approval"
+    approval = session.execute(text(
+        "SELECT a.id, a.revision, a.preview_hash, a.designated_actor_id, te.idempotency_key "
+        "FROM agent_approvals a JOIN agent_tool_executions te ON te.id = a.tool_execution_id "
+        "WHERE a.turn_id = 't-1'"
+    )).mappings().one()
+    assert approval["designated_actor_id"] == "u-1"
+    assert approval["idempotency_key"] == "call-action-1"
+
+    from app.services.actions.approval import resolve_approval
+    resolved = resolve_approval(
+        session, approval_id=approval["id"], actor_id="u-1", base_revision=approval["revision"],
+        preview_hash=approval["preview_hash"], decision="approved",
+    )
+    assert resolved["status"] == "approved"
+    assert resolved["dispatch_generation"] == 2
+
+    result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
+    assert result2["status"] == "succeeded"
+    execution = session.execute(text(
+        "SELECT status, result_hash FROM agent_tool_executions WHERE idempotency_key = 'call-action-1'"
+    )).mappings().one()
+    assert execution["status"] == "succeeded"
+    assert execution["result_hash"] is not None
+    final = session.execute(text(
+        "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
+    )).scalar_one()
+    assert execution["result_hash"] in final or "已执行" in final
+    session.close()
+
+
+def test_worker_action_proposal_reports_rejection(schema, monkeypatch, propose_action_chat_server):
+    """Same shape, but the human rejects — the model must be told, not
+    silently retried or treated as an error."""
+    session = _session(schema)
+    _seed_worker_graph(session, api_base=propose_action_chat_server, with_action=True,
+                       user_message="帮我批准这个订单")
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+    from app.services.runtime.dispatch import publish_pending_dispatch
+    publish_pending_dispatch(session)
+    from app.tasks.agent_turn import agent_turn_execute
+
+    agent_turn_execute.run("t-1", 1, "w-1", "tok-1")
+    approval = session.execute(text(
+        "SELECT id, revision, preview_hash FROM agent_approvals WHERE turn_id = 't-1'"
+    )).mappings().one()
+    from app.services.actions.approval import resolve_approval
+    resolve_approval(
+        session, approval_id=approval["id"], actor_id="u-1", base_revision=approval["revision"],
+        preview_hash=approval["preview_hash"], decision="rejected",
+    )
+    result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
+    assert result2["status"] == "succeeded"
+    execution = session.execute(text(
+        "SELECT status FROM agent_tool_executions WHERE idempotency_key = 'call-action-1'"
+    )).mappings().one()
+    assert execution["status"] == "cancelled"
     session.close()
