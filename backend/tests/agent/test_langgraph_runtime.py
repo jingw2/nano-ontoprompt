@@ -168,6 +168,24 @@ def _run(runtime, context):
 
 def test_real_runtime_calls_model_and_returns_real_answer(db):
     _seed_unit_graph(db)
+    # mirror the real invariant (request_message_id is a mandatory FK set
+    # before a Turn is ever queued): this test's own turn needs its own
+    # persisted request-message row in agent_messages, same as production.
+    # A fresh session_id is used (not s-1) because agent_turns has a unique
+    # index on session_id for active statuses, and s-1 already holds t-0.
+    db.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('s-1b', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-1', 's-1b', 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-t1', 's-1b', 't-1', 'user', 1, '库存低于安全线的订单有哪些？', CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
     seen_questions = []
 
     def caller(caller_info, messages, tools):
@@ -176,7 +194,7 @@ def test_real_runtime_calls_model_and_returns_real_answer(db):
         return {"content": f"真实回答：{last_user}", "tool_calls": []}
 
     runtime = LangGraphRuntime(db, caller=caller)
-    events = _run(runtime, _context())
+    events = _run(runtime, _context(session_id="s-1b"))
     assert [e.event_type for e in events] == [
         "turn_started", "resolve_snapshot", "assemble_context",
         "model_call", "final_response", "turn_succeeded",
@@ -640,3 +658,94 @@ def test_real_runtime_mcp_tool_offered_and_dispatched(pg_session, monkeypatch):
     assert executed.payload["outcome"] == "untrusted_read"
     final = events[-2]
     assert final.payload["message"] == "MCP 返回了 supplier A。"
+
+
+def test_start_turn_returns_interrupt_event_without_raising(pg_session, monkeypatch):
+    """A TurnInterrupted raised from inside the model loop becomes the final
+    RuntimeEvent; start_turn returns normally (it must never propagate the
+    exception — agent_turn_execute has no handler for it)."""
+    _seed_unit_graph(pg_session)
+
+    def caller(caller_info, messages, tools):
+        raise AssertionError("the model must never be called after an interrupt fires pre-loop")
+
+    def _boom(self, context, events, messages, tools):
+        from app.runtime.protocol import TurnInterrupted
+        raise TurnInterrupted("request_clarification", {"question": "which one?"})
+
+    monkeypatch.setattr("app.runtime.langgraph_runtime.LangGraphRuntime._run_model_loop", _boom)
+    context = _context(extra={"user_id": "u-1", "citations": [], "ontology_tool_selection": []})
+    runtime = LangGraphRuntime(pg_session, caller=caller)
+    events = _run(runtime, context)
+    assert events[-1].event_type == "request_clarification"
+    assert events[-1].payload == {"question": "which one?"}
+    assert not any(e.event_type in ("turn_succeeded", "turn_failed") for e in events)
+
+
+def test_build_messages_includes_this_turns_own_request_once(pg_session):
+    """Fresh-dispatch case: the Turn's own request message is a real row in
+    agent_messages by the time _build_messages_and_tools runs (mirroring
+    agent_turn_execute's real sequencing) and must appear exactly once.
+
+    Uses its own session/turn ids (not s-1/t-0 from _seed_unit_graph) so this
+    test's history isn't polluted by _seed_unit_graph's own seeded message."""
+    _seed_unit_graph(pg_session)
+    pg_session.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('s-2', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-2', 's-2', 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-1', 's-2', 't-2', 'user', 1, '第一个问题', now())"
+    ))
+    pg_session.commit()
+    context = _context(session_id="s-2", turn_id="t-2",
+                       extra={"user_id": "u-1", "citations": [], "ontology_tool_selection": []},
+                       user_message="第一个问题")
+    runtime = LangGraphRuntime(pg_session, caller=lambda *a: {"content": "ok", "tool_calls": []})
+    runtime._prepare(context)
+    assembled = runtime._assemble_context(context)
+    messages, _ = runtime._build_messages_and_tools(context, assembled)
+    user_messages = [m for m in messages if m["role"] == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0]["content"] == "第一个问题"
+
+
+def test_build_messages_includes_injected_resume_answer(pg_session):
+    """Resumed-Turn case: a second role='user' row on the SAME turn_id (as
+    answer_clarification inserts) must be visible and must NOT trigger a
+    duplicate append of the original request.
+
+    Uses its own session/turn ids (not s-1/t-0 from _seed_unit_graph) so this
+    test's history isn't polluted by _seed_unit_graph's own seeded message."""
+    _seed_unit_graph(pg_session)
+    pg_session.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('s-3', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-3', 's-3', 'awaiting_clarification', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-1', 's-3', 't-3', 'user', 1, '原始问题不清楚', now())"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-2', 's-3', 't-3', 'user', 2, '这是澄清答案', now())"
+    ))
+    pg_session.commit()
+    context = _context(session_id="s-3", turn_id="t-3",
+                       extra={"user_id": "u-1", "citations": [], "ontology_tool_selection": []},
+                       user_message="原始问题不清楚")
+    runtime = LangGraphRuntime(pg_session, caller=lambda *a: {"content": "ok", "tool_calls": []})
+    runtime._prepare(context)
+    assembled = runtime._assemble_context(context)
+    messages, _ = runtime._build_messages_and_tools(context, assembled)
+    user_messages = [m["content"] for m in messages if m["role"] == "user"]
+    assert user_messages == ["原始问题不清楚", "这是澄清答案"]

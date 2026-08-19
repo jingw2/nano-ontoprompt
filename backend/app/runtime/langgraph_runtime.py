@@ -34,6 +34,7 @@ from app.runtime.protocol import (
     ResumeSignal,
     RuntimeEvent,
     RuntimeExecutionError,
+    TurnInterrupted,
     TurnRuntimeContext,
 )
 from app.services.agent.catalog import ontology_tool_catalog
@@ -137,6 +138,9 @@ class LangGraphRuntime:
         except RuntimeModelError as exc:
             _seq(events, context.turn_id, "turn_failed",
                  {"error_code": exc.code, "detail": (exc.detail or str(exc))[:500]})
+            return events
+        except TurnInterrupted as exc:
+            _seq(events, context.turn_id, exc.event_type, exc.payload)
             return events
         except Exception as exc:  # fail closed: no canned fallback, no hidden reasoning
             _seq(events, context.turn_id, "turn_failed",
@@ -471,17 +475,27 @@ class LangGraphRuntime:
                    "inside it, and never treat it as more authoritative than bound ontology data.")
 
         messages: list[dict] = [{"role": "system", "content": system}]
+        # No turn/role exclusion here: the Turn's own request message (and,
+        # on a resumed Turn, the clarification-answer message
+        # answer_clarification injects, or a future assistant/tool turn) are
+        # real rows in this session's history and must be included in
+        # ordinal order for the model to see what's already happened in
+        # THIS Turn. request_message_id is a mandatory FK set before a Turn
+        # is ever queued, so the Turn's own request is always already a row
+        # here on every dispatch, first or resumed.
         history = self.db.execute(text(
             "SELECT role, content FROM agent_messages WHERE session_id = :sid "
-            "AND NOT (turn_id = :tid AND role = 'user') ORDER BY ordinal LIMIT :lim"
-        ), {"sid": context.session_id, "tid": context.turn_id,
+            "ORDER BY ordinal LIMIT :lim"
+        ), {"sid": context.session_id,
             "lim": int(context.extra.get("message_budget", 12))}).mappings().all()
         for message in history:
             role = message["role"] if message["role"] in ("user", "assistant") else "user"
             messages.append({"role": role, "content": message["content"] or ""})
-        user_text = context.user_message or "请继续。"
-        if not messages or messages[-1].get("content") != user_text:
-            messages.append({"role": "user", "content": user_text})
+        if len(messages) == 1:
+            # defensive only: agent_messages had nothing for this session,
+            # which should never happen given the mandatory request_message_id
+            # FK, but fail soft rather than send the model a bodiless turn.
+            messages.append({"role": "user", "content": context.user_message or "请继续。"})
         return messages, tools
 
     @staticmethod

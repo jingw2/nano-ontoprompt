@@ -573,3 +573,48 @@ def test_worker_finalization_fence_lost_rolls_back(schema, monkeypatch):
         )).scalar_one() == "claimed"
     finally:
         session.close()  # release the transaction so the fixture can drop the schema
+
+
+def test_worker_task_handles_interrupt_without_finalizing(schema, monkeypatch):
+    """A TurnInterrupted-shaped final event must not crash the task and must
+    leave the Turn's status exactly as create_clarification/create_approval
+    left it (not forced to succeeded/failed)."""
+    session = _session(schema)
+    _seed_worker_graph(session, user_message="随便问一句")
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+    from app.services.runtime.dispatch import publish_pending_dispatch
+    publish_pending_dispatch(session)
+
+    from app.runtime.protocol import RuntimeEvent
+
+    async def _fake_start(self, context):
+        # simulate create_clarification's own side effect (status flip +
+        # commit) happening before the interrupt is raised, exactly as the
+        # real runtime will do once Task 2 wires it in.  `self` here is the
+        # LangGraphRuntimeAdapter; the db session lives on the wrapped
+        # LangGraphRuntime instance (`self._runtime.db`), not on the adapter.
+        self._runtime.db.execute(text(
+            "UPDATE agent_turns SET status = 'awaiting_clarification' WHERE id = :id"
+        ), {"id": context.turn_id})
+        self._runtime.db.commit()
+        return [
+            RuntimeEvent(turn_id=context.turn_id, event_type="turn_started", sequence=1, payload={}),
+            RuntimeEvent(turn_id=context.turn_id, event_type="request_clarification", sequence=2,
+                        payload={"question": "which order?"}),
+        ]
+
+    monkeypatch.setattr("app.runtime.langgraph_adapter.LangGraphRuntimeAdapter.start", _fake_start)
+    from app.tasks.agent_turn import agent_turn_execute
+    result = agent_turn_execute.run("t-1", 1, "w-interrupt", "tok-interrupt")
+    assert result["status"] == "interrupted"
+    assert result["events"] == ["turn_started", "request_clarification"]
+    turn = session.execute(text(
+        "SELECT status, response_message_id FROM agent_turns WHERE id = 't-1'"
+    )).mappings().one()
+    assert turn["status"] == "awaiting_clarification"
+    assert turn["response_message_id"] is None  # never finalized
+    assert session.execute(text(
+        "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
+    )).scalar_one_or_none() is None  # record_assistant_message never called
+    session.close()

@@ -19,6 +19,20 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class TurnInterrupted(Exception):
+    """A Turn's model loop stopped early for a human-in-the-loop reason
+    (clarification requested, Action approval required) — NOT a failure.
+    `event_type` becomes the final RuntimeEvent's type; `payload` becomes
+    its payload. The Turn's own status transition (running -> awaiting_*)
+    has already happened, in the same DB transaction, by the time this is
+    raised — the caller must not finalize the Turn as succeeded or failed."""
+
+    def __init__(self, event_type: str, payload: dict):
+        super().__init__(event_type)
+        self.event_type = event_type
+        self.payload = payload
+
+
 @dataclass(frozen=True)
 class TurnRuntimeContext:
     """Pinned, immutable context for one Turn execution (Section 6.1)."""

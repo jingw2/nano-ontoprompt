@@ -92,6 +92,19 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             return {"turn_id": turn_id, "status": "failed", "error_code": error_code,
                     "events": [e.event_type for e in runtime_events]}
 
+        if terminal in ("request_clarification", "approval_required"):
+            # The Turn's own status transition (running -> awaiting_*) already
+            # happened inside create_clarification/create_approval's own
+            # transaction. finalize_turn_succeeded/finalize_turn_failed both
+            # CAS `WHERE status='running'` and raise TurnFinalizeError on a
+            # zero-row match — calling either here would crash this task.
+            # Persist the events (already queued above) and stop; the Turn
+            # stays parked until a human resolves it and re-enqueues via a
+            # fresh dispatch_generation.
+            db.commit()
+            return {"turn_id": turn_id, "status": "interrupted",
+                    "events": [e.event_type for e in runtime_events]}
+
         final_text = next(
             (str(e.payload.get("message", "")) for e in reversed(runtime_events)
              if e.payload.get("message")),
