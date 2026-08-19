@@ -158,6 +158,7 @@ def resolve_approval(
         # successful resolution: turn back to queued + one unique resume outbox
         new_generation = db.execute(text(
             "UPDATE agent_turns SET status = 'queued', dispatch_generation = dispatch_generation + 1, "
+            "claim_token = NULL, worker_artifact_id = NULL, lease_expires_at = NULL, "
             "updated_at = now() WHERE id = :id AND status = 'awaiting_approval' "
             "RETURNING dispatch_generation"
         ), {"id": row["turn_id"]}).scalar_one_or_none()
@@ -182,6 +183,7 @@ def resolve_approval(
     ), {"teid": row["tool_execution_id"]})
     new_generation = db.execute(text(
         "UPDATE agent_turns SET status = 'queued', dispatch_generation = dispatch_generation + 1, "
+        "claim_token = NULL, worker_artifact_id = NULL, lease_expires_at = NULL, "
         "updated_at = now() WHERE id = :id AND status = 'awaiting_approval' "
         "RETURNING dispatch_generation"
     ), {"id": row["turn_id"]}).scalar_one_or_none()

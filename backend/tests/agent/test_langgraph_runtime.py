@@ -232,8 +232,9 @@ def test_real_runtime_tool_path_via_gateway(db):
     assert types.count("model_call") == 2
     assert "tool_executed" in types
     assert types[-3] == "model_call" and types[-2] == "final_response"
-    # only the enabled query tool was offered to the model
-    assert rounds[0][1] == ["query_o_1"]
+    # only the enabled query tool (plus the always-offered clarification tool)
+    # was offered to the model
+    assert rounds[0][1] == ["query_o_1", "request_clarification"]
     # the gateway received the governed read descriptor with injected params
     assert gateway.calls[0][0] == "ontology.read_instances"
     params = gateway.calls[0][1]

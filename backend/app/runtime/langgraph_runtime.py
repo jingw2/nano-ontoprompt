@@ -438,6 +438,23 @@ class LangGraphRuntime:
                          "parameters": {"type": "object"}}),
                 },
             })
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "request_clarification",
+                "description": (
+                    "Ask the user a clarifying question when their request is ambiguous, "
+                    "underspecified, or missing information you need to proceed correctly "
+                    "or safely. This pauses the conversation until they respond — prefer "
+                    "it over guessing when a wrong guess could produce an incorrect or "
+                    "unsafe result."
+                ),
+                "parameters": self._normalize_parameters_schema(
+                    {"question": {"type": "string",
+                                  "description": "The clarifying question to ask the user"}}),
+            },
+        })
+        name_to_descriptor["request_clarification"] = {"descriptor_id": "runtime.request_clarification"}
         self._name_to_descriptor = name_to_descriptor
         self._tools = tools
 
@@ -592,6 +609,9 @@ class LangGraphRuntime:
         except json.JSONDecodeError as exc:
             raise RuntimeModelError("TOOL_ARGUMENTS_INVALID", f"tool {name} arguments are not JSON") from exc
 
+        if descriptor["descriptor_id"] == "runtime.request_clarification":
+            return self._execute_clarification_call(context, arguments)
+
         gateway_descriptor_id, parameters = self._gateway_request(descriptor, arguments)
         request = GatewayRequest(
             agent_id=context.agent_id, user_id=self._owner_user_id or "",
@@ -615,6 +635,21 @@ class LangGraphRuntime:
         })
         return {"descriptor_id": descriptor["descriptor_id"], "outcome": result.outcome,
                 "payload": result.payload}
+
+    def _execute_clarification_call(self, context: TurnRuntimeContext, arguments: dict) -> dict:
+        from app.services.runtime.clarification import ClarificationError, create_clarification
+
+        question = str(arguments.get("question") or "").strip()
+        if not question:
+            raise RuntimeModelError("TOOL_ARGUMENTS_INVALID",
+                                    "request_clarification requires a non-empty question")
+        try:
+            result = create_clarification(self.db, turn_id=context.turn_id, question=question)
+        except ClarificationError as exc:
+            raise RuntimeModelError("CLARIFICATION_REJECTED", str(exc)) from exc
+        raise TurnInterrupted("request_clarification", {
+            "clarification_id": result["id"], "question": question,
+        })
 
     def _gateway_request(self, descriptor: dict, arguments: dict) -> tuple[str, dict]:
         if descriptor.get("descriptor_id") == "external.search":

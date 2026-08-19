@@ -618,3 +618,96 @@ def test_worker_task_handles_interrupt_without_finalizing(schema, monkeypatch):
         "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
     )).scalar_one_or_none() is None  # record_assistant_message never called
     session.close()
+
+
+class ClarifyThenAnswerHandler(BaseHTTPRequestHandler):
+    """First call: always asks for clarification. Second call (once the
+    transcript contains a role='user' message after the clarification
+    question, i.e. the injected answer): gives a grounded final answer that
+    quotes the answer, proving the model actually saw it."""
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        messages = body.get("messages", [])
+        user_messages = [m["content"] for m in messages if m["role"] == "user"]
+        if len(user_messages) >= 2:
+            content = f"已收到澄清：{user_messages[-1]}"
+            tool_calls = []
+        else:
+            content = ""
+            tool_calls = [{
+                "id": "call-clarify-1", "type": "function",
+                "function": {"name": "request_clarification",
+                             "arguments": json.dumps({"question": "你说的是哪个订单？"}, ensure_ascii=False)},
+            }]
+        resp = {
+            "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def clarify_chat_server():
+    server = HTTPServer(("127.0.0.1", 0), ClarifyThenAnswerHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_worker_clarification_pauses_then_resumes_with_answer_visible(schema, monkeypatch, clarify_chat_server):
+    session = _session(schema)
+    _seed_worker_graph(session, api_base=clarify_chat_server, user_message="帮我处理一下那个订单")
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+    from app.services.runtime.dispatch import publish_pending_dispatch
+    publish_pending_dispatch(session)
+    from app.tasks.agent_turn import agent_turn_execute
+
+    # first dispatch: model asks for clarification, turn pauses
+    result = agent_turn_execute.run("t-1", 1, "w-1", "tok-1")
+    assert result["status"] == "interrupted"
+    assert result["events"][-1] == "request_clarification"
+    turn = session.execute(text(
+        "SELECT status FROM agent_turns WHERE id = 't-1'"
+    )).mappings().one()
+    assert turn["status"] == "awaiting_clarification"
+    clarification = session.execute(text(
+        "SELECT id, question, status FROM agent_clarification_requests WHERE turn_id = 't-1'"
+    )).mappings().one()
+    assert clarification["question"] == "你说的是哪个订单？"
+    assert clarification["status"] == "pending"
+
+    # human answers for real, through the unmodified service function
+    from app.services.runtime.clarification import answer_clarification
+    answered = answer_clarification(
+        session, clarification_id=clarification["id"], actor_id="u-1",
+        base_request_revision=1, answer="订单编号 PO-9527",
+    )
+    assert answered["status"] == "queued"
+    assert answered["dispatch_generation"] == 2
+
+    # resume dispatch: model must see the answer and complete
+    result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
+    assert result2["status"] == "succeeded"
+    final = session.execute(text(
+        "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
+    )).scalar_one()
+    assert "PO-9527" in final
+    turn2 = session.execute(text(
+        "SELECT status FROM agent_turns WHERE id = 't-1'"
+    )).mappings().one()
+    assert turn2["status"] == "succeeded"
+    session.close()
