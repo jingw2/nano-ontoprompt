@@ -70,6 +70,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
         )
         # the runtime executes the model + governed tools for this user
         context.extra["user_id"] = row["owner_user_id"]
+        context.extra["claim_token"] = claim_token
         runtime = LangGraphRuntime(db)
         adapter = LangGraphRuntimeAdapter(runtime=runtime)
         runtime_events = asyncio.run(adapter.start(context))

@@ -750,3 +750,86 @@ def test_build_messages_includes_injected_resume_answer(pg_session):
     messages, _ = runtime._build_messages_and_tools(context, assembled)
     user_messages = [m["content"] for m in messages if m["role"] == "user"]
     assert user_messages == ["原始问题不清楚", "这是澄清答案"]
+
+
+def test_build_messages_survives_budget_with_many_prior_messages(pg_session):
+    """Regression (Fix 1): the history query must return the NEWEST N
+    messages by ordinal, not the oldest — the old `ORDER BY ordinal LIMIT
+    :lim` (ascending) silently returned the OLDEST N rows, dropping the
+    current turn's own request whenever a session already had more than
+    message_budget (12) prior rows. Seeds 13 prior messages plus this
+    turn's own request as the newest row (ordinal 14) and asserts the LAST
+    user-role message returned is the current request — proving it
+    survives past the budget."""
+    _seed_unit_graph(pg_session)
+    pg_session.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('s-4', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-4', 's-4', 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    for i in range(1, 14):
+        role = "user" if i % 2 == 1 else "assistant"
+        pg_session.execute(text(
+            "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+            "VALUES (:id, 's-4', 't-4', :role, :ord, :content, now())"
+        ), {"id": str(uuid.uuid4()), "role": role, "ord": i, "content": f"历史消息{i}"})
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-4-own', 's-4', 't-4', 'user', 14, '这是本轮的真实请求', now())"
+    ))
+    pg_session.commit()
+    context = _context(session_id="s-4", turn_id="t-4",
+                       extra={"user_id": "u-1", "citations": [], "ontology_tool_selection": []},
+                       user_message="这是本轮的真实请求")
+    runtime = LangGraphRuntime(pg_session, caller=lambda *a: {"content": "ok", "tool_calls": []})
+    runtime._prepare(context)
+    assembled = runtime._assemble_context(context)
+    messages, _ = runtime._build_messages_and_tools(context, assembled)
+    user_messages = [m["content"] for m in messages if m["role"] == "user"]
+    assert user_messages[-1] == "这是本轮的真实请求"
+
+
+def test_build_messages_survives_budget_with_resumed_injection_pair(pg_session):
+    """Regression (Fix 1): a resumed turn's injected outcome message (a
+    second role='user' row on the same turn_id, mirroring what
+    answer_clarification/_resolve_pending_action inject) must also survive
+    the message-budget truncation even when the session already has 14
+    total messages — proving both the original request AND the injected
+    resolution are visible to the model on resume, not evicted by the
+    ascending-order bug."""
+    _seed_unit_graph(pg_session)
+    pg_session.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('s-5', 'a-1', 'u-1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES ('t-5', 's-5', 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    for i in range(1, 13):
+        role = "user" if i % 2 == 1 else "assistant"
+        pg_session.execute(text(
+            "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+            "VALUES (:id, 's-5', 't-5', :role, :ord, :content, now())"
+        ), {"id": str(uuid.uuid4()), "role": role, "ord": i, "content": f"历史消息{i}"})
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-5-req', 's-5', 't-5', 'user', 13, '原始请求', now())"
+    ))
+    pg_session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES ('m-5-inj', 's-5', 't-5', 'user', 14, '注入的解决结果', now())"
+    ))
+    pg_session.commit()
+    context = _context(session_id="s-5", turn_id="t-5",
+                       extra={"user_id": "u-1", "citations": [], "ontology_tool_selection": []},
+                       user_message="原始请求")
+    runtime = LangGraphRuntime(pg_session, caller=lambda *a: {"content": "ok", "tool_calls": []})
+    runtime._prepare(context)
+    assembled = runtime._assemble_context(context)
+    messages, _ = runtime._build_messages_and_tools(context, assembled)
+    user_messages = [m["content"] for m in messages if m["role"] == "user"]
+    assert user_messages[-2:] == ["原始请求", "注入的解决结果"]

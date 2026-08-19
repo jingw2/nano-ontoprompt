@@ -116,6 +116,7 @@ class LangGraphRuntime:
         events: list[RuntimeEvent] = []
         try:
             self._prepare(context)
+            self._resolve_pending_action(context)
             _seq(events, context.turn_id, "turn_started", {
                 "agent_id": context.agent_id,
                 "agent_version_id": context.agent_version_id,
@@ -185,6 +186,62 @@ class LangGraphRuntime:
         self._release_by_ontology = {}
         for binding in self._bindings:
             self._release_by_ontology[binding["ontology_id"]] = self._release_for(context, binding)
+
+    def _resolve_pending_action(self, context: TurnRuntimeContext) -> None:
+        """Called once per dispatch, before any messages are built or the
+        model is called. If an earlier dispatch of THIS turn paused after
+        proposing a governed Action, and the approval has since been
+        resolved, consume it now — execute it (if approved, through the
+        unmodified, fenced execute_approved_action) or note the rejection —
+        and persist a real agent_messages row describing the outcome,
+        exactly like answer_clarification already persists the human's
+        answer, so the model sees it on its next completion. At most one
+        unresolved-or-just-resolved row can exist per turn at a time: a
+        turn always pauses immediately after inserting one, and this
+        method always resolves it before the model gets another turn.
+
+        The candidate row's tool_execution status is 'proposed' while the
+        approval is still pending/approved-not-yet-executed (also true for
+        the untouched-by-any-sweep 'expired' case), but `resolve_approval`'s
+        rejected branch (and `_stale_terminalize`) already CAS it straight
+        to 'cancelled' at DECISION time, before this dispatch ever runs —
+        so both statuses must be matched here, or a rejection would never
+        be picked up and the turn would re-propose the same action forever,
+        exactly the bug this whole redesign exists to close."""
+        pending = self.db.execute(text(
+            "SELECT te.id AS tool_execution_id, a.id AS approval_id, a.status AS approval_status "
+            "FROM agent_tool_executions te JOIN agent_approvals a ON a.tool_execution_id = te.id "
+            "WHERE te.turn_id = :turn AND te.status IN ('proposed', 'cancelled') "
+            "ORDER BY te.created_at DESC LIMIT 1"
+        ), {"turn": context.turn_id}).mappings().one_or_none()
+        if pending is None:
+            return
+        approval_status = pending["approval_status"]
+        if approval_status == "approved":
+            from app.services.actions.execution import execute_approved_action
+            claim_token = context.extra.get("claim_token") or ""
+            result_hash = hashlib.sha256(pending["approval_id"].encode("utf-8")).hexdigest()
+            outcome = execute_approved_action(
+                self.db, approval_id=pending["approval_id"], worker_claim_token=claim_token,
+                effect_payload={}, result_hash=result_hash,
+            )
+            content = (
+                f"[系统] 你之前提议的操作已获批准（execution_id={outcome['execution_id']}, "
+                f"result_hash={outcome['result_hash']}）。治理记录已生成；此版本尚未对本体数据做实际写入变更。"
+            )
+        elif approval_status == "rejected":
+            content = "[系统] 你之前提议的操作被拒绝了，未执行。"
+        else:
+            content = f"[系统] 你之前提议的操作当前状态为 {approval_status}，无法继续。"
+        ordinal = self.db.execute(text(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM agent_messages WHERE session_id = :sid"
+        ), {"sid": context.session_id}).scalar_one()
+        self.db.execute(text(
+            "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+            "VALUES (:id, :sid, :turn, 'user', :ord, :content, now())"
+        ), {"id": str(uuid.uuid4()), "sid": context.session_id, "turn": context.turn_id,
+            "ord": ordinal, "content": content})
+        self.db.commit()
 
     def _resolve_caller(self, context: TurnRuntimeContext) -> dict:
         from app.services.model_callers.extraction import (
@@ -503,8 +560,10 @@ class LangGraphRuntime:
         # is ever queued, so the Turn's own request is always already a row
         # here on every dispatch, first or resumed.
         history = self.db.execute(text(
-            "SELECT role, content FROM agent_messages WHERE session_id = :sid "
-            "ORDER BY ordinal LIMIT :lim"
+            "SELECT role, content FROM ("
+            "  SELECT role, content, ordinal FROM agent_messages WHERE session_id = :sid "
+            "  ORDER BY ordinal DESC LIMIT :lim"
+            ") recent ORDER BY ordinal"
         ), {"sid": context.session_id,
             "lim": int(context.extra.get("message_budget", 12))}).mappings().all()
         for message in history:
@@ -666,92 +725,59 @@ class LangGraphRuntime:
 
     def _execute_action_call(self, context: TurnRuntimeContext, events: list[RuntimeEvent],
                              descriptor: dict, call: dict, arguments: dict) -> dict:
-        """First time this exact tool-call id is seen: propose the action
-        (preview + approval) and pause. On resume (same tool-call id, found
-        via idempotency_key): check the approval's resolution and either
-        execute it (through the unmodified, already-fenced
-        execute_approved_action) or report it rejected/unavailable — never
-        re-propose, and never re-check the model's own arguments against a
-        second preview (the FIRST preview/approval is authoritative for this
-        tool-call id, exactly like every other idempotency-keyed write in
-        this codebase)."""
+        """Every call to an action-category tool proposes a NEW governed
+        Action and immediately pauses for approval — this method never
+        resumes or re-checks a prior proposal's resolution (that happens
+        once per dispatch, before the model loop even starts, in
+        _resolve_pending_action). Resume cannot be recognized by the
+        model's tool-call id: resuming restarts the whole model loop from
+        persisted history, so the model always mints a FRESH id on its next
+        completion — an id-keyed lookup here would never match and the turn
+        would re-propose forever."""
         from app.services.actions.approval import _current_dependency_hashes, create_approval
-        from app.services.actions.execution import execute_approved_action
-        from app.services.actions.preview import preview_action
+        from app.services.actions.preview import PreviewError, preview_action
 
-        idempotency_key = call.get("id", "")
-        if not idempotency_key:
-            raise RuntimeModelError("TOOL_ARGUMENTS_INVALID", "action tool call is missing an id")
         ontology_id = descriptor["ontology_id"]
         release_id = descriptor.get("release_id")
-
-        existing = self.db.execute(text(
-            "SELECT te.id AS tool_execution_id, a.id AS approval_id, a.status AS approval_status "
-            "FROM agent_tool_executions te LEFT JOIN agent_approvals a ON a.tool_execution_id = te.id "
-            "WHERE te.idempotency_key = :key"
-        ), {"key": idempotency_key}).mappings().one_or_none()
-
-        if existing is None:
-            parameters = arguments.get("parameters") or {}
+        parameters = arguments.get("parameters") or {}
+        try:
             preview = preview_action(
                 self.db, actor_id=self._owner_user_id or "", agent_id=context.agent_id,
                 ontology_id=ontology_id, release_id=release_id,
                 descriptor_id=descriptor["descriptor_id"], parameters=parameters,
                 target_instance_id=arguments.get("target_instance_id"),
             )
-            canonical_params = json.dumps(
-                {"descriptor_id": descriptor["descriptor_id"], "parameters": parameters},
-                sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-            )
-            parameter_hash = hashlib.sha256(canonical_params.encode("utf-8")).hexdigest()
-            tool_execution_id = str(uuid.uuid4())
-            self.db.execute(text(
-                "INSERT INTO agent_tool_executions (id, turn_id, idempotency_key, status, descriptor, "
-                "parameters_hash, preview_hash, created_at, updated_at) "
-                "VALUES (:id, :turn, :key, 'proposed', CAST(:descriptor AS json), :ph, :prh, now(), now())"
-            ), {"id": tool_execution_id, "turn": context.turn_id, "key": idempotency_key,
-                "descriptor": json.dumps(descriptor["descriptor_id"]), "ph": parameter_hash,
-                "prh": preview["hash"]})
-            deps = _current_dependency_hashes(self.db, context.agent_id, ontology_id)
-            approval = create_approval(
-                self.db, turn_id=context.turn_id, tool_execution_id=tool_execution_id,
-                node_execution_id=None, designated_actor_id=self._owner_user_id or "",
-                preview_hash=preview["hash"], parameter_hash=parameter_hash,
-                schema_hash=deps["schema_hash"], release_hash=deps["release_hash"],
-                model_hash=deps["model_hash"], policy_hash="",
-            )
-            raise TurnInterrupted("approval_required", {
-                "approval_id": approval["id"], "tool_execution_id": tool_execution_id,
-                "descriptor_id": descriptor["descriptor_id"],
-            })
-
-        approval_status = existing["approval_status"]
-        if approval_status == "approved":
-            turn_row = self.db.execute(text(
-                "SELECT claim_token FROM agent_turns WHERE id = :id"
-            ), {"id": context.turn_id}).mappings().one()
-            result_hash = hashlib.sha256(existing["approval_id"].encode("utf-8")).hexdigest()
-            outcome = execute_approved_action(
-                self.db, approval_id=existing["approval_id"], worker_claim_token=turn_row["claim_token"],
-                effect_payload=arguments.get("parameters") or {}, result_hash=result_hash,
-            )
+        except PreviewError as exc:
             _seq(events, context.turn_id, "tool_executed", {
-                "descriptor_id": descriptor["descriptor_id"], "outcome": "approved_executed",
-            })
-            return {"descriptor_id": descriptor["descriptor_id"], "outcome": "approved_executed",
-                    "payload": {"execution_id": outcome["execution_id"], "result_hash": outcome["result_hash"]}}
-        if approval_status == "rejected":
-            _seq(events, context.turn_id, "tool_executed", {
-                "descriptor_id": descriptor["descriptor_id"], "outcome": "rejected",
+                "descriptor_id": descriptor["descriptor_id"], "outcome": "rejected", "detail": str(exc)[:300],
             })
             return {"descriptor_id": descriptor["descriptor_id"], "outcome": "rejected",
-                    "payload": {"message": "The proposed action was rejected by the approver."}}
-        _seq(events, context.turn_id, "tool_executed", {
-            "descriptor_id": descriptor["descriptor_id"], "outcome": "unavailable",
-            "approval_status": approval_status,
+                    "payload": {"error": str(exc)[:300]}}
+        canonical_params = json.dumps(
+            {"descriptor_id": descriptor["descriptor_id"], "parameters": parameters},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        parameter_hash = hashlib.sha256(canonical_params.encode("utf-8")).hexdigest()
+        tool_execution_id = str(uuid.uuid4())
+        self.db.execute(text(
+            "INSERT INTO agent_tool_executions (id, turn_id, idempotency_key, status, descriptor, "
+            "parameters_hash, preview_hash, created_at, updated_at) "
+            "VALUES (:id, :turn, :key, 'proposed', CAST(:descriptor AS json), :ph, :prh, now(), now())"
+        ), {"id": tool_execution_id, "turn": context.turn_id, "key": tool_execution_id,
+            "descriptor": json.dumps({"descriptor_id": descriptor["descriptor_id"]}), "ph": parameter_hash,
+            "prh": preview["hash"]})
+        deps = _current_dependency_hashes(self.db, context.agent_id, ontology_id)
+        approval = create_approval(
+            self.db, turn_id=context.turn_id, tool_execution_id=tool_execution_id,
+            node_execution_id=None, designated_actor_id=self._owner_user_id or "",
+            preview_hash=preview["hash"], parameter_hash=parameter_hash,
+            schema_hash=deps["schema_hash"], release_hash=deps["release_hash"],
+            model_hash=deps["model_hash"], policy_hash="",
+        )
+        raise TurnInterrupted("approval_required", {
+            "approval_id": approval["id"], "tool_execution_id": tool_execution_id,
+            "descriptor_id": descriptor["descriptor_id"],
         })
-        return {"descriptor_id": descriptor["descriptor_id"], "outcome": "unavailable",
-                "payload": {"error": f"approval is {approval_status}, cannot proceed"}}
 
     def _gateway_request(self, descriptor: dict, arguments: dict) -> tuple[str, dict]:
         if descriptor.get("descriptor_id") == "external.search":

@@ -735,32 +735,32 @@ def test_worker_clarification_pauses_then_resumes_with_answer_visible(schema, mo
 
 
 class ProposeActionHandler(BaseHTTPRequestHandler):
-    """First call: always proposes the bound action tool. Second call (a
-    tool result for the action call is already in the transcript): gives a
-    final grounded answer quoting the execution id, proving the model saw
-    the real execution outcome, not a canned string.  The runtime only ever
-    serializes `result["payload"]` back to the model (never the sibling
-    "outcome" field, which lives only in the persisted event), so detection
-    is by tool-message presence (mirroring `MockChatHandler`'s
-    `already_answered_tool` above), not by scanning payload content for an
-    outcome label."""
+    """First call in a dispatch (no [系统] outcome message and no prior tool
+    message in the transcript yet): always proposes the bound action tool,
+    with a FRESH tool-call id every time — matching what a real provider
+    does, and exactly what exposes the resume-recognition bug this fix
+    closes (the old test hardcoded the same id across dispatches, which
+    would have hidden the bug). Otherwise: gives a final answer that quotes
+    the last user-role message, proving the model actually saw whatever
+    _resolve_pending_action injected before this dispatch's first call."""
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         messages = body.get("messages", [])
         tools = body.get("tools", [])
         action_tool = next((t["function"]["name"] for t in tools if t["function"]["name"].startswith("action")), None)
-        already_executed = any(m.get("role") == "tool" for m in messages)
-        if action_tool and not already_executed:
+        already_resolved = any(
+            m.get("role") == "tool" or "[系统]" in (m.get("content") or "") for m in messages
+        )
+        if action_tool and not already_resolved:
             content, tool_calls = "", [{
-                "id": "call-action-1", "type": "function",
+                "id": f"call-action-{uuid.uuid4().hex[:8]}", "type": "function",
                 "function": {"name": action_tool,
                             "arguments": json.dumps({"parameters": {"approve": True}}, ensure_ascii=False)},
             }]
         else:
-            tool_msg = next((m["content"] for m in reversed(messages) if m.get("role") == "tool"), "{}")
-            execution_id = json.loads(tool_msg).get("execution_id", "")
-            content, tool_calls = f"已执行：{execution_id}", []
+            last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+            content, tool_calls = f"处理结果：{last_user}", []
         resp = {
             "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
             "choices": [{"index": 0, "finish_reason": "stop",
@@ -804,12 +804,15 @@ def test_worker_action_proposal_pauses_then_executes_on_approval(schema, monkeyp
     turn = session.execute(text("SELECT status, claim_token FROM agent_turns WHERE id = 't-1'")).mappings().one()
     assert turn["status"] == "awaiting_approval"
     approval = session.execute(text(
-        "SELECT a.id, a.revision, a.preview_hash, a.designated_actor_id, te.idempotency_key "
+        "SELECT a.id, a.revision, a.preview_hash, a.designated_actor_id, te.id AS tool_execution_id, "
+        "te.idempotency_key "
         "FROM agent_approvals a JOIN agent_tool_executions te ON te.id = a.tool_execution_id "
         "WHERE a.turn_id = 't-1'"
     )).mappings().one()
     assert approval["designated_actor_id"] == "u-1"
-    assert approval["idempotency_key"] == "call-action-1"
+    # idempotency_key is now a freshly generated UUID (tool_execution_id),
+    # not the model's tool-call id — never a hardcoded literal
+    assert approval["idempotency_key"] and approval["idempotency_key"] != "call-action-1"
 
     from app.services.actions.approval import resolve_approval
     resolved = resolve_approval(
@@ -822,14 +825,16 @@ def test_worker_action_proposal_pauses_then_executes_on_approval(schema, monkeyp
     result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
     assert result2["status"] == "succeeded"
     execution = session.execute(text(
-        "SELECT status, result_hash FROM agent_tool_executions WHERE idempotency_key = 'call-action-1'"
-    )).mappings().one()
+        "SELECT status, result_hash FROM agent_tool_executions WHERE id = :teid"
+    ), {"teid": approval["tool_execution_id"]}).mappings().one()
     assert execution["status"] == "succeeded"
     assert execution["result_hash"] is not None
     final = session.execute(text(
         "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
     )).scalar_one()
-    assert execution["result_hash"] in final or "已执行" in final
+    # the model's final answer is grounded in the real _resolve_pending_action
+    # -injected outcome message, not a canned string
+    assert "execution_id=" in final
     session.close()
 
 
@@ -847,7 +852,7 @@ def test_worker_action_proposal_reports_rejection(schema, monkeypatch, propose_a
 
     agent_turn_execute.run("t-1", 1, "w-1", "tok-1")
     approval = session.execute(text(
-        "SELECT id, revision, preview_hash FROM agent_approvals WHERE turn_id = 't-1'"
+        "SELECT id, revision, preview_hash, tool_execution_id FROM agent_approvals WHERE turn_id = 't-1'"
     )).mappings().one()
     from app.services.actions.approval import resolve_approval
     resolve_approval(
@@ -857,7 +862,13 @@ def test_worker_action_proposal_reports_rejection(schema, monkeypatch, propose_a
     result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
     assert result2["status"] == "succeeded"
     execution = session.execute(text(
-        "SELECT status FROM agent_tool_executions WHERE idempotency_key = 'call-action-1'"
-    )).mappings().one()
+        "SELECT status FROM agent_tool_executions WHERE id = :teid"
+    ), {"teid": approval["tool_execution_id"]}).mappings().one()
     assert execution["status"] == "cancelled"
+    final = session.execute(text(
+        "SELECT content FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
+    )).scalar_one()
+    # the model must actually be told the truth about the rejection, not
+    # just have DB state checked
+    assert "拒绝" in final
     session.close()
