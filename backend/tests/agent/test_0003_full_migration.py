@@ -90,6 +90,8 @@ LATER_REVISION_TABLES = {
     "skill_versions",
     "skill_signatures",
     "agent_skill_bindings",
+    "mcp_connection_schemas",
+    "mcp_oauth_tokens",
 }
 
 

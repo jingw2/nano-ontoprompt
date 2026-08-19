@@ -35,7 +35,7 @@ def session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0014_signed_skills").returncode == 0
+    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
     # migration 0003_publication_governance.py already seeds a default
     # security_domains row (id=DEFAULT_DOMAIN) unconditionally, and 0011's
     # own backfill creates its retention_epochs row — do NOT manually

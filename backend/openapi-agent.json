@@ -1636,6 +1636,54 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IssueMcpTokenRequest": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          },
+          "scope": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in_seconds"
+        ],
+        "title": "IssueMcpTokenRequest",
+        "type": "object"
+      },
       "LinkMappingCreate": {
         "properties": {
           "relation_type": {
@@ -15992,6 +16040,106 @@
           }
         ],
         "summary": "Approve Connection Version Route",
+        "tags": [
+          "tool-connections"
+        ]
+      }
+    },
+    "/api/v2/tool-connections/versions/{version_id}/mcp/pin-schema": {
+      "post": {
+        "operationId": "pin_mcp_schema_route_api_v2_tool_connections_versions__version_id__mcp_pin_schema_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pin Mcp Schema Route",
+        "tags": [
+          "tool-connections"
+        ]
+      }
+    },
+    "/api/v2/tool-connections/versions/{version_id}/mcp/token": {
+      "post": {
+        "operationId": "issue_mcp_token_route_api_v2_tool_connections_versions__version_id__mcp_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueMcpTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Mcp Token Route",
         "tags": [
           "tool-connections"
         ]
