@@ -36,6 +36,7 @@ EXTERNAL_TOOL_DESCRIPTORS = {
     "external.search": frozenset({"external_tool_call"}),
     "external.playwright": frozenset({"external_tool_call"}),
     "external.skill": frozenset({"external_tool_call"}),
+    "external.mcp": frozenset({"external_tool_call"}),
 }
 
 
@@ -139,6 +140,8 @@ class ToolGateway:
             raise ToolGatewayError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
         if version["kind"] == "playwright":
             return self._execute_playwright(request, version, correlation_id)
+        if version["kind"] == "external_mcp":
+            return self._execute_mcp(request, correlation_id)
         if version["kind"] != "search":
             raise ToolGatewayError("EXTERNAL_TOOL_KIND_UNSUPPORTED")
 
@@ -192,6 +195,77 @@ class ToolGateway:
                              payload=payload, correlation_id=correlation_id,
                              trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
                                     "grant_recheck": "passed", "binding_recheck": "passed"}])
+
+    def _execute_mcp(self, request: GatewayRequest, correlation_id: str) -> GatewayResult:
+        from app.services.encryption_service import decrypt
+        from app.services.tools.mcp_client import MCPClientError, call_tool, list_tools, tools_schema_hash
+        from app.services.untrusted_artifact import safe_markdown
+
+        version_id = request.parameters.get("tool_connection_version_id")
+        row = self._db.execute(text(
+            "SELECT tcv.endpoint, tcv.allowlists, tcv.scopes FROM tool_connection_versions tcv "
+            "WHERE tcv.id = :id"
+        ), {"id": version_id}).mappings().one_or_none()
+        if row is None:
+            raise ToolGatewayError("EXTERNAL_TOOL_VERSION_NOT_APPROVED")
+        schema_row = self._db.execute(text(
+            "SELECT tool_schema_hash, quarantined FROM mcp_connection_schemas "
+            "WHERE connection_version_id = :id"
+        ), {"id": version_id}).mappings().one_or_none()
+        if schema_row is None:
+            raise ToolGatewayError("MCP_SCHEMA_UNPINNED")
+        if schema_row["quarantined"]:
+            # already flagged — fail fast without another network call
+            raise ToolGatewayError("TOOL_SCHEMA_QUARANTINED")
+        token_row = self._db.execute(text(
+            "SELECT encrypted_access_token, scope, expires_at FROM mcp_oauth_tokens "
+            "WHERE connection_version_id = :id"
+        ), {"id": version_id}).mappings().one_or_none()
+        if token_row is None:
+            raise ToolGatewayError("MCP_TOKEN_MISSING")
+        import datetime as _dt
+        expires_at = token_row["expires_at"]
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=_dt.timezone.utc)
+        if expires_at <= _dt.datetime.now(_dt.timezone.utc):
+            raise ToolGatewayError("MCP_TOKEN_EXPIRED")
+        declared_scopes = set(row["scopes"] or [])
+        token_scopes = set(token_row["scope"] or [])
+        if not declared_scopes <= token_scopes:
+            raise ToolGatewayError("OAUTH_SCOPE_DENIED")
+        domains = [str(d) for d in ((row["allowlists"] or {}).get("domains") or [])]
+        access_token = decrypt(token_row["encrypted_access_token"])
+        try:
+            live_tools = list_tools(endpoint=row["endpoint"] or "", access_token=access_token,
+                                    allowed_domains=domains)
+        except MCPClientError as exc:
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        if tools_schema_hash(live_tools) != schema_row["tool_schema_hash"]:
+            self._db.execute(text(
+                "UPDATE mcp_connection_schemas SET quarantined = true, quarantined_at = now(), "
+                "quarantined_reason = 'SCHEMA_DRIFT_AT_DISPATCH' WHERE connection_version_id = :id"
+            ), {"id": version_id})
+            self._db.commit()
+            raise ToolGatewayError("TOOL_SCHEMA_QUARANTINED")
+        tool_name = str(request.parameters.get("tool") or "")
+        if not any(t["name"] == tool_name for t in live_tools):
+            raise ToolGatewayError("MCP_TOOL_UNKNOWN")
+        model_parameters = request.parameters.get("parameters") or {}
+        if not isinstance(model_parameters, dict):
+            raise ToolGatewayError("MCP_PARAMETERS_INVALID")
+        try:
+            call_result = call_tool(endpoint=row["endpoint"] or "", access_token=access_token,
+                                    allowed_domains=domains, tool_name=tool_name, arguments=model_parameters)
+        except MCPClientError as exc:
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        payload = {"content": safe_markdown(call_result["content"]), "is_error": call_result["is_error"]}
+        return GatewayResult(
+            descriptor_id=request.descriptor_id, outcome="untrusted_read", payload=payload,
+            correlation_id=correlation_id,
+            trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
+                    "grant_recheck": "passed", "binding_recheck": "passed",
+                    "schema_recheck": "passed", "tool": tool_name}],
+        )
 
     def _execute_skill(self, request: GatewayRequest, correlation_id: str) -> GatewayResult:
         from app.services.skills import (
