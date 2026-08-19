@@ -62,7 +62,7 @@ def pg_session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0014_signed_skills").returncode == 0
+    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     yield s
     s.close()
@@ -560,3 +560,78 @@ def test_real_runtime_skill_tool_offered_and_dispatched(pg_session, monkeypatch)
     assert captured["parameters"].get("query") == "stale-default"  # manifest defaults merged in
     final = events[-2]
     assert final.payload["message"] == "技能结果：read_suppliers 返回了华东供应商。"
+
+
+def _seed_mcp_binding(db) -> str:
+    """Seed an approved, schema-pinned, token-issued external_mcp connection
+    bound as alias `mcp1` on the unit graph's agent version."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.agent.configuration import bind_external_tool
+    from app.services.encryption_service import encrypt
+    from app.services.tool_connections import approve_connection_version, create_connection, create_connection_version, create_provider
+
+    provider = create_provider(db, actor_id="u-1", name="mcp-provider", kind="external_mcp")
+    connection = create_connection(db, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(
+        db, actor_id="u-1", connection_id=connection["id"], endpoint="https://mcp.example.com/rpc",
+        scopes=["ontology:query"], allowlists={"domains": ["mcp.example.com"]})
+    approve_connection_version(db, actor_id="u-1", version_id=version["id"])
+    bind_external_tool(db, actor_id="u-1", agent_version_id="v-1",
+                       tool_connection_version_id=version["id"], alias="mcp1")
+    db.execute(text(
+        "INSERT INTO mcp_connection_schemas (id, connection_version_id, tool_schema_hash, tools, "
+        "quarantined, pinned_by, pinned_at) VALUES (:id, :cv, 'pinned-hash', CAST(:tools AS json), "
+        "false, 'u-1', now())"
+    ), {"id": str(_uuid.uuid4()), "cv": version["id"],
+        "tools": '[{"name": "read_suppliers", "description": "d", "input_schema": {}}]'})
+    db.execute(text(
+        "INSERT INTO mcp_oauth_tokens (id, connection_version_id, encrypted_access_token, "
+        "scope, expires_at, issued_by, rotated_at) VALUES (:id, :cv, :tok, "
+        "CAST('[\"ontology:query\"]' AS json), :exp, 'u-1', now())"
+    ), {"id": str(_uuid.uuid4()), "cv": version["id"], "tok": encrypt("tok-1"),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1)})
+    db.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, status, "
+        "created_by, created_at, updated_at) "
+        "VALUES ('grant-mcp', 'a-1', 'u-1', '[\"run\"]', 1, 'active', 'u-1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
+    return version["id"]
+
+
+def test_real_runtime_mcp_tool_offered_and_dispatched(pg_session, monkeypatch):
+    _seed_unit_graph(pg_session)
+    version_id = _seed_mcp_binding(pg_session)
+    monkeypatch.setattr("app.services.tools.mcp_client.list_tools", lambda **kw: [
+        {"name": "read_suppliers", "description": "d", "input_schema": {}}])
+    monkeypatch.setattr("app.services.tools.mcp_client.tools_schema_hash", lambda tools: "pinned-hash")
+    monkeypatch.setattr("app.services.tools.mcp_client.call_tool",
+                        lambda **kw: {"content": "supplier A", "is_error": False})
+    rounds = []
+
+    def caller(caller_info, messages, tools):
+        round_index = len(rounds)
+        rounds.append((round_index, [t["function"]["name"] for t in tools]))
+        if round_index == 0:
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "mcp_mcp1",
+                "arguments_json": '{"tool": "read_suppliers", "parameters": {"query": "supplier"}}',
+            }]}
+        return {"content": "MCP 返回了 supplier A。", "tool_calls": []}
+
+    context = _context(extra={
+        "user_id": "u-1",
+        "citations": [],
+        "ontology_tool_selection": [],
+        "external_tool_bindings": [{"tool_connection_version_id": version_id, "alias": "mcp1"}],
+    })
+    runtime = LangGraphRuntime(pg_session, caller=caller)
+    events = _run(runtime, context)
+    assert "mcp_mcp1" in rounds[0][1]
+    executed = next(e for e in events if e.event_type == "tool_executed")
+    assert executed.payload["descriptor_id"] == "external.mcp"
+    assert executed.payload["outcome"] == "untrusted_read"
+    final = events[-2]
+    assert final.payload["message"] == "MCP 返回了 supplier A。"
