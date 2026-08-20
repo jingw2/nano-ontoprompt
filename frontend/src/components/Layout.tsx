@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard, Network, Cpu, Settings, LogOut,
-  Database, ChevronLeft, ChevronRight, GitBranch, Table2, Bot, ShieldCheck,
+  Database, ChevronLeft, ChevronRight, GitBranch, Table2, Bot, ShieldCheck, Inbox,
 } from 'lucide-react'
 
 interface SubItem {
@@ -44,6 +44,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     },
     { to: '/ontologies', icon: Network, label: t('nav.ontologies') },
     { to: '/agents', icon: Bot, label: t('nav.agents', '智能体') },
+    { to: '/mcp/write-requests', icon: Inbox, label: t('mcp.nav_label', 'MCP 待审批') },
     { to: '/models', icon: Cpu, label: t('nav.models') },
     { to: '/settings', icon: Settings, label: t('nav.settings') },
     ...(role === 'admin'

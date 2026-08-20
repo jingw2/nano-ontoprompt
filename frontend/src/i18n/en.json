@@ -463,6 +463,18 @@
       "unbind": "Unbind"
     }
   },
+  "mcp": {
+    "nav_label": "MCP Requests",
+    "title": "Pending MCP Write Requests",
+    "empty": "No pending requests",
+    "load_failed": "Failed to load",
+    "retry": "Retry",
+    "approve": "Approve",
+    "reject": "Reject",
+    "descriptor": "Action",
+    "ontology": "Ontology",
+    "parameters": "Parameters"
+  },
   "settings": {
     "title": "Settings",
     "rules": "Confidence Rules",

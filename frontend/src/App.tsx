@@ -30,6 +30,7 @@ import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
 import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
 import AgentReconciliationPage from '@/pages/admin/AgentReconciliationPage'
 import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
+import McpWriteRequestsPage from '@/pages/mcp/McpWriteRequestsPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -121,6 +122,7 @@ export default function App() {
           <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
           <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
           <Route path="/admin/agent-reconciliations" element={<ProtectedRoute><AdminRoute><AgentReconciliationPage /></AdminRoute></ProtectedRoute>} />
+          <Route path="/mcp/write-requests" element={<ProtectedRoute><McpWriteRequestsPage /></ProtectedRoute>} />
         </Routes>
         </SessionRestore>
       </BrowserRouter>

@@ -463,6 +463,18 @@
       "unbind": "解绑"
     }
   },
+  "mcp": {
+    "nav_label": "MCP 待审批",
+    "title": "待审批的 MCP 写入请求",
+    "empty": "暂无待审批请求",
+    "load_failed": "加载失败",
+    "retry": "重试",
+    "approve": "批准",
+    "reject": "拒绝",
+    "descriptor": "操作",
+    "ontology": "本体",
+    "parameters": "参数"
+  },
   "settings": {
     "title": "设置",
     "rules": "置信度规则",
