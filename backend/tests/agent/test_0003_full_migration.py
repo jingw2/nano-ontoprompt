@@ -96,6 +96,7 @@ LATER_REVISION_TABLES = {
     "oauth_authorization_codes",
     "oauth_refresh_families",
     "oauth_refresh_tokens",
+    "mcp_write_requests",
 }
 
 

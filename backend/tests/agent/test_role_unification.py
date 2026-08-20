@@ -101,6 +101,9 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v1/agent-approvals/{approval_id}/reject"),
         ("POST", "/api/v1/agent-clarifications/{clarification_id}/answer"),
         ("POST", "/api/v1/agent-sessions/{session_id}/application-state"),
+        ("POST", "/api/v1/mcp"),
+        ("POST", "/api/v1/mcp/write-requests/{request_id}/approve"),
+        ("POST", "/api/v1/mcp/write-requests/{request_id}/reject"),
     }
     bypasses = []
     for route in app.routes:

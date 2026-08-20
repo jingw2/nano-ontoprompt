@@ -125,6 +125,7 @@ _DESIGN_PLANE_PREFIXES = (
 _PLATFORM_PREFIXES = (
     "/api/v1/auth",
     "/api/v1/oauth",
+    "/api/v1/mcp",
     "/api/v1/users",
     "/api/v1/overview",
     "/api/v1/settings",

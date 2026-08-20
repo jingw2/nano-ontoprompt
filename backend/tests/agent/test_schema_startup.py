@@ -216,6 +216,7 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "oauth_authorization_codes",
         "oauth_refresh_families",
         "oauth_refresh_tokens",
+        "mcp_write_requests",
     } <= after
 
 
