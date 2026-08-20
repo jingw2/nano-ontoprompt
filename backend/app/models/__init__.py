@@ -71,6 +71,7 @@ from app.models.skill import (
     AgentSkillBinding,
 )
 from app.models.mcp import McpConnectionSchema, McpOauthToken
+from app.models.oauth import OAuthClient, OAuthAuthorizationCode, OAuthRefreshFamily, OAuthRefreshToken
 
 
 def load_all_models():
@@ -141,6 +142,12 @@ def load_all_models():
         McpConnectionSchema,
         McpOauthToken,
     )
+    from app.models.oauth import (  # noqa: F401
+        OAuthClient,
+        OAuthAuthorizationCode,
+        OAuthRefreshFamily,
+        OAuthRefreshToken,
+    )
 
     return Base.metadata
 
@@ -210,5 +217,9 @@ __all__ = [
     "AgentSkillBinding",
     "McpConnectionSchema",
     "McpOauthToken",
+    "OAuthClient",
+    "OAuthAuthorizationCode",
+    "OAuthRefreshFamily",
+    "OAuthRefreshToken",
     "load_all_models",
 ]
