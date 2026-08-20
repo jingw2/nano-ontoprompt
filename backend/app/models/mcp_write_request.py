@@ -17,7 +17,7 @@ class McpWriteRequest(Base):
     oauth_client_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("oauth_clients.id", ondelete="RESTRICT"), nullable=False
     )
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     ontology_id: Mapped[str] = mapped_column(
         String, ForeignKey("ontology_projects.id", ondelete="RESTRICT"), nullable=False
     )
