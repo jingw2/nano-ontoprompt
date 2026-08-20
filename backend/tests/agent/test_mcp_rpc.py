@@ -144,6 +144,37 @@ def _grant_write(Session, ontology_id, user_id, created_by):
         session.commit()
 
 
+def _seed_readable_instance(Session, ontology_id, admin_id, user_id):
+    """Seed a real entity + entity_instance + a read_instances grant, plus a
+    fresh (immutable) release whose manifest_projection lists the entity so
+    query_instances' containment check passes. Returns (instance_id,
+    entity_id, release_id)."""
+    entity_id = str(uuid.uuid4())
+    instance_id = str(uuid.uuid4())
+    release_id = str(uuid.uuid4())
+    with Session() as session:
+        session.execute(text(
+            "INSERT INTO entities (id, ontology_id, name_cn, properties, confidence, version, created_at, updated_at) "
+            "VALUES (:id, :oid, 'E', '{}', 1.0, 'v1', now(), now())"
+        ), {"id": entity_id, "oid": ontology_id})
+        session.execute(text(
+            "INSERT INTO ontology_releases (id, ontology_id, version_no, version, manifest_bytes, "
+            "manifest_projection, schema_hash, created_by, created_at) "
+            "VALUES (:id, :oid, 2, 'v2', :mb, CAST(:proj AS jsonb), digest(:mb,'sha256'), :uid, now())"
+        ), {"id": release_id, "oid": ontology_id, "mb": b"{}",
+            "proj": f'{{"entities": [{{"id": "{entity_id}"}}]}}', "uid": admin_id})
+        session.execute(text(
+            "INSERT INTO entity_instances (id, entity_id, ontology_id, row_identity, row_data, revision, created_at, updated_at) "
+            "VALUES (:id, :eid, :oid, 'row-1', :data, 1, now(), now())"
+        ), {"id": instance_id, "eid": entity_id, "oid": ontology_id, "data": '{"name": "test"}'})
+        session.execute(text(
+            "INSERT INTO ontology_data_grants (id, ontology_id, user_id, capabilities, status, created_at, revision, created_by) "
+            "VALUES (:id, :o, :u, :cap, 'active', now(), 1, :creator)"
+        ), {"id": str(uuid.uuid4()), "o": ontology_id, "u": user_id, "cap": '["read_instances"]', "creator": admin_id})
+        session.commit()
+    return instance_id, entity_id, release_id
+
+
 def test_initialize_and_tools_list_require_no_special_scope(pg_client, mcp_db):
     admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
     username = "user-" + uuid.uuid4().hex[:8]
@@ -171,9 +202,10 @@ def test_rpc_rejects_missing_or_wrong_token_type(pg_client):
 def test_read_instances_tool_call_succeeds_with_read_scope(pg_client, mcp_db):
     admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
     username = "user-" + uuid.uuid4().hex[:8]
-    _add_user(mcp_db, username)
+    user_id = _add_user(mcp_db, username)
     client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
-    ontology_id, release_id = _add_ontology_and_release(mcp_db, admin_id)
+    ontology_id, _release_id = _add_ontology_and_release(mcp_db, admin_id)
+    instance_id, _entity_id, release_id = _seed_readable_instance(mcp_db, ontology_id, admin_id, user_id)
     token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
 
     resp = pg_client.post(
@@ -185,7 +217,10 @@ def test_read_instances_tool_call_succeeds_with_read_scope(pg_client, mcp_db):
     assert resp.status_code == 200
     body = resp.json()["result"]
     assert body["isError"] is False
-    assert "items" in body["content"][0]["text"]
+    import json
+    payload = json.loads(body["content"][0]["text"])
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["instance_id"] == instance_id
 
 
 def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_db):
@@ -244,3 +279,49 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     )
     checked_payload = jsonlib.loads(checked.json()["result"]["content"][0]["text"])
     assert checked_payload["status"] == "pending"
+
+
+def test_unknown_rpc_method_returns_top_level_json_rpc_error(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
+
+    resp = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 9, "method": "tools/frobnicate", "params": {}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "result" not in body
+    assert body["error"]["code"] == -32601
+
+
+def test_unknown_tool_name_and_missing_argument_are_tool_level_errors(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read", "ontology:write"])
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read ontology:write")
+
+    unknown_tool = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 10, "method": "tools/call",
+              "params": {"name": "ontology.does_not_exist", "arguments": {}}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert unknown_tool.status_code == 200
+    assert unknown_tool.json()["result"]["isError"] is True
+    assert "TOOL_UNKNOWN" in unknown_tool.json()["result"]["content"][0]["text"]
+
+    missing_arg = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+              "params": {"name": "ontology.read_instances", "arguments": {}}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing_arg.status_code == 200
+    assert missing_arg.json()["result"]["isError"] is True
+    assert "MISSING_ARGUMENT" in missing_arg.json()["result"]["content"][0]["text"]
