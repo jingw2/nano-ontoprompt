@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.oauth import OAuthAuthorizationCode, OAuthRefreshFamily, OAuthRefreshToken
+from app.models.oauth import OAuthAuthorizationCode, OAuthClient, OAuthRefreshFamily, OAuthRefreshToken
 from app.services.auth_service import create_oauth_access_token, get_user_by_id
 
 CODE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9\-._~]{43,128}$")
@@ -82,6 +82,9 @@ def exchange_authorization_code(
     db: Session, *, code: str, client_id: str, redirect_uri: str, code_verifier: str,
 ) -> tuple[str, str, str, int]:
     """Returns (access_token, refresh_token, scope, expires_in)."""
+    client = db.execute(select(OAuthClient).where(OAuthClient.id == client_id)).scalar_one_or_none()
+    if client is None or not client.is_active:
+        raise InvalidGrantError("unknown or inactive client")
     row = db.execute(
         select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code_hash == _hash(code)).with_for_update()
     ).scalar_one_or_none()
@@ -120,6 +123,9 @@ def exchange_authorization_code(
 
 def rotate_oauth_refresh(db: Session, *, refresh_token: str, client_id: str) -> tuple[str, str, str, int]:
     """Returns (access_token, successor_refresh_token, scope, expires_in)."""
+    client = db.execute(select(OAuthClient).where(OAuthClient.id == client_id)).scalar_one_or_none()
+    if client is None or not client.is_active:
+        raise InvalidGrantError("unknown or inactive client")
     digest = _hash(refresh_token)
     token_row = db.execute(
         select(OAuthRefreshToken).where(OAuthRefreshToken.token_hash == digest).with_for_update()

@@ -28,15 +28,17 @@ def get_oauth_context(
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(credentials.credentials, expected_token_use="oauth_access")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    if payload.get("token_use") != "oauth_access":
-        raise HTTPException(status_code=401, detail="Not an OAuth access token")
-    user = get_user_by_id(db, payload["sub"])
+    user_id = payload.get("sub")
+    token_client_id = payload.get("client_id")
+    if not user_id or not token_client_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = get_user_by_id(db, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    client = oauth_clients.get_client(db, payload["client_id"])
+    client = oauth_clients.get_client(db, token_client_id)
     if client is None or not client.is_active:
         raise HTTPException(status_code=401, detail="Client revoked")
     return OAuthContext(user_id=user.id, client_id=client.id, scope=set(payload.get("scope", "").split()))

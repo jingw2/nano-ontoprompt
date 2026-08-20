@@ -2,11 +2,12 @@
 oauth-pkce-authorization-server plan's Global Constraints for why dynamic
 client registration, RFC 7591, is explicitly out of scope)."""
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models.oauth import OAuthClient
+from app.models.oauth import OAuthClient, OAuthRefreshFamily
 
 
 def create_client(
@@ -33,9 +34,15 @@ def list_clients(db: Session) -> list[OAuthClient]:
 
 def deactivate_client(db: Session, client_id: str) -> None:
     client = get_client(db, client_id)
-    if client is not None:
-        client.is_active = False
-        db.commit()
+    if client is None:
+        return
+    client.is_active = False
+    db.execute(
+        update(OAuthRefreshFamily)
+        .where(OAuthRefreshFamily.client_id == client_id, OAuthRefreshFamily.status == "active")
+        .values(status="revoked", revoked_at=datetime.now(timezone.utc))
+    )
+    db.commit()
 
 
 def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:

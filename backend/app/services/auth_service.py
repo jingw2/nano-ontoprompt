@@ -27,8 +27,14 @@ def create_oauth_access_token(user_id: str, client_id: str, scope: str) -> str:
         settings.secret_key, algorithm="HS256",
     )
 
-def decode_token(token: str) -> dict:
-    return jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+_UNCHECKED = object()
+
+
+def decode_token(token: str, expected_token_use: str | None = _UNCHECKED) -> dict:
+    payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+    if expected_token_use is not _UNCHECKED and payload.get("token_use") != expected_token_use:
+        raise JWTError("token_use claim mismatch")
+    return payload
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
     user = db.query(User).filter(User.username == username, User.is_active == True).first()

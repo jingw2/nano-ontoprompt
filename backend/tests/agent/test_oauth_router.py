@@ -263,6 +263,39 @@ def test_consent_deny_redirects_with_access_denied(pg_client, oauth_db):
     assert query["error"] == ["access_denied"]
 
 
+def test_consent_allow_preserves_query_string_on_redirect_uri(pg_client, oauth_db):
+    admin_username = "admin-" + uuid.uuid4().hex[:8]
+    _add_user(oauth_db, admin_username, role="admin")
+    admin_token = _login(pg_client, admin_username)
+    client_resp = pg_client.post(
+        "/api/v1/oauth/clients",
+        json={
+            "client_name": "X", "redirect_uris": ["https://client.example/cb?tenant=acme"],
+            "allowed_scopes": ["a"],
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    client_id = client_resp.json()["data"]["id"]
+    end_user_username = "enduser-" + uuid.uuid4().hex[:8]
+    _add_user(oauth_db, end_user_username, role="viewer")
+    end_user_token = _login(pg_client, end_user_username)
+    _, challenge = _pkce_pair()
+    resp = pg_client.post(
+        "/api/v1/oauth/consent",
+        json={
+            "client_id": client_id, "redirect_uri": "https://client.example/cb?tenant=acme",
+            "code_challenge": challenge, "code_challenge_method": "S256",
+            "scope": "a", "decision": "allow",
+        },
+        headers={"Authorization": f"Bearer {end_user_token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    redirect_uri = resp.json()["data"]["redirect_uri"]
+    query = parse_qs(urlparse(redirect_uri).query)
+    assert query["tenant"] == ["acme"]
+    assert "code" in query
+
+
 def test_token_endpoint_uses_form_encoding_not_json(pg_client, oauth_db):
     resp = pg_client.post("/api/v1/oauth/token", json={"grant_type": "authorization_code"})
     assert resp.status_code == 422  # FastAPI rejects a JSON body against Form(...) params

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import uuid
 from urllib.parse import quote
 
@@ -276,6 +277,56 @@ def test_revoke_disables_further_rotation(oauth_db):
         revoke_oauth_refresh(session, refresh_token="unknown-token", client_id=client_id)
 
 
+def test_deactivated_client_cannot_exchange_outstanding_code(oauth_db):
+    from app.services import oauth_clients
+    from app.services.oauth_flow import InvalidGrantError, exchange_authorization_code, issue_authorization_code
+
+    Session = oauth_db
+    admin_id = _add_user(Session, "admin-" + uuid.uuid4().hex[:8])
+    user_id = _add_user(Session, "user-" + uuid.uuid4().hex[:8])
+    client_id = _add_client(Session, admin_id)
+    verifier, challenge = _pkce_pair()
+    with Session() as session:
+        code = issue_authorization_code(
+            session, client_id=client_id, user_id=user_id, redirect_uri="https://client.example/cb",
+            code_challenge=challenge, code_challenge_method="S256", scope="a",
+        )
+    with Session() as session:
+        oauth_clients.deactivate_client(session, client_id)
+    with Session() as session:
+        with pytest.raises(InvalidGrantError):
+            exchange_authorization_code(
+                session, code=code, client_id=client_id, redirect_uri="https://client.example/cb",
+                code_verifier=verifier,
+            )
+
+
+def test_deactivated_client_cannot_rotate_refresh_token(oauth_db):
+    from app.services import oauth_clients
+    from app.services.oauth_flow import (
+        InvalidGrantError, exchange_authorization_code, issue_authorization_code, rotate_oauth_refresh,
+    )
+
+    Session = oauth_db
+    admin_id = _add_user(Session, "admin-" + uuid.uuid4().hex[:8])
+    user_id = _add_user(Session, "user-" + uuid.uuid4().hex[:8])
+    client_id = _add_client(Session, admin_id)
+    verifier, challenge = _pkce_pair()
+    with Session() as session:
+        code = issue_authorization_code(
+            session, client_id=client_id, user_id=user_id, redirect_uri="https://client.example/cb",
+            code_challenge=challenge, code_challenge_method="S256", scope="a",
+        )
+        _, refresh_token, _, _ = exchange_authorization_code(
+            session, code=code, client_id=client_id, redirect_uri="https://client.example/cb", code_verifier=verifier,
+        )
+    with Session() as session:
+        oauth_clients.deactivate_client(session, client_id)
+    with Session() as session:
+        with pytest.raises(InvalidGrantError):
+            rotate_oauth_refresh(session, refresh_token=refresh_token, client_id=client_id)
+
+
 # ── Cross-token-type guards ───────────────────────────────────────────────────
 
 def test_oauth_access_token_carries_token_use_claim():
@@ -341,3 +392,85 @@ def test_get_oauth_context_accepts_valid_oauth_token_and_rejects_inactive_client
         with pytest.raises(HTTPException) as excinfo:
             get_oauth_context(credentials=creds, db=session)
         assert excinfo.value.status_code == 401
+
+
+# ── Concurrency (row-locking) ─────────────────────────────────────────────────
+
+def test_concurrent_code_exchange_yields_exactly_one_success(oauth_db):
+    from app.services.oauth_flow import InvalidGrantError, exchange_authorization_code, issue_authorization_code
+
+    Session = oauth_db
+    admin_id = _add_user(Session, "admin-" + uuid.uuid4().hex[:8])
+    user_id = _add_user(Session, "user-" + uuid.uuid4().hex[:8])
+    client_id = _add_client(Session, admin_id)
+    verifier, challenge = _pkce_pair()
+    with Session() as session:
+        code = issue_authorization_code(
+            session, client_id=client_id, user_id=user_id, redirect_uri="https://client.example/cb",
+            code_challenge=challenge, code_challenge_method="S256", scope="a",
+        )
+
+    outcomes = []
+    barrier = threading.Barrier(2)
+
+    def attempt():
+        local_session = Session()
+        try:
+            barrier.wait(timeout=10)
+            exchange_authorization_code(
+                local_session, code=code, client_id=client_id,
+                redirect_uri="https://client.example/cb", code_verifier=verifier,
+            )
+            outcomes.append("success")
+        except InvalidGrantError:
+            outcomes.append("rejected")
+        finally:
+            local_session.close()
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+    assert sorted(outcomes) == ["rejected", "success"]
+
+
+def test_concurrent_refresh_rotation_yields_exactly_one_success(oauth_db):
+    from app.services.oauth_flow import (
+        InvalidGrantError, exchange_authorization_code, issue_authorization_code, rotate_oauth_refresh,
+    )
+
+    Session = oauth_db
+    admin_id = _add_user(Session, "admin-" + uuid.uuid4().hex[:8])
+    user_id = _add_user(Session, "user-" + uuid.uuid4().hex[:8])
+    client_id = _add_client(Session, admin_id)
+    verifier, challenge = _pkce_pair()
+    with Session() as session:
+        code = issue_authorization_code(
+            session, client_id=client_id, user_id=user_id, redirect_uri="https://client.example/cb",
+            code_challenge=challenge, code_challenge_method="S256", scope="a",
+        )
+        _, refresh_token, _, _ = exchange_authorization_code(
+            session, code=code, client_id=client_id, redirect_uri="https://client.example/cb", code_verifier=verifier,
+        )
+
+    outcomes = []
+    barrier = threading.Barrier(2)
+
+    def attempt():
+        local_session = Session()
+        try:
+            barrier.wait(timeout=10)
+            rotate_oauth_refresh(local_session, refresh_token=refresh_token, client_id=client_id)
+            outcomes.append("success")
+        except InvalidGrantError:
+            outcomes.append("rejected")
+        finally:
+            local_session.close()
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+    assert sorted(outcomes) == ["rejected", "success"]

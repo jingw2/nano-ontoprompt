@@ -23,9 +23,7 @@ def get_current_user(
     if not credentials:
         raise HTTPException(status_code=403, detail="Not authenticated")
     try:
-        payload = decode_token(credentials.credentials)
-        if payload.get("token_use") == "oauth_access":
-            raise HTTPException(status_code=401, detail="OAuth access tokens cannot be used for interactive sessions")
+        payload = decode_token(credentials.credentials, expected_token_use=None)
         user = get_user_by_id(db, payload["sub"])
         if not user or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid credentials")

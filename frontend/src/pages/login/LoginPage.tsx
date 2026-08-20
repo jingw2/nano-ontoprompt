@@ -25,7 +25,8 @@ export default function LoginPage() {
       // only ever navigate to a same-app relative path — never let a
       // crafted ?returnTo= value redirect off-site after login
       const returnTo = searchParams.get('returnTo')
-      navigate(returnTo && returnTo.startsWith('/') ? returnTo : '/')
+      const isSafeReturnTo = returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')
+      navigate(isSafeReturnTo ? returnTo : '/')
     } catch (e: unknown) {
       console.error('login failed:', e)
       const err = e as { isAxiosError?: boolean; response?: unknown }

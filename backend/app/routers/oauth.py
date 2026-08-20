@@ -5,7 +5,7 @@
 per this codebase's oauth-pkce-authorization-server plan's Global
 Constraints — every other endpoint here uses the usual {"data": ...} shape.
 """
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -23,6 +23,12 @@ from app.services import oauth_clients, oauth_flow
 from app.services.oauth_flow import OAuthFlowError
 
 router = APIRouter()
+
+
+def _append_query(uri: str, params: dict) -> str:
+    parts = urlsplit(uri)
+    merged = parse_qsl(parts.query, keep_blank_values=True) + list(params.items())
+    return urlunsplit(parts._replace(query=urlencode(merged)))
 
 
 def _spec_error(exc: OAuthFlowError) -> JSONResponse:
@@ -54,7 +60,7 @@ def authorize(
         params["scope"] = scope
     if state:
         params["state"] = state
-    return RedirectResponse(f"{settings.oauth_frontend_base_url}/oauth/consent?{urlencode(params)}", status_code=302)
+    return RedirectResponse(_append_query(f"{settings.oauth_frontend_base_url}/oauth/consent", params), status_code=302)
 
 
 @router.get("/oauth/clients/{client_id}")
@@ -80,7 +86,7 @@ def consent(
         params = {"error": "access_denied"}
         if body.state:
             params["state"] = body.state
-        return {"data": OAuthConsentResponse(redirect_uri=f"{body.redirect_uri}?{urlencode(params)}").model_dump()}
+        return {"data": OAuthConsentResponse(redirect_uri=_append_query(body.redirect_uri, params)).model_dump()}
     if body.decision != "allow":
         raise HTTPException(status_code=400, detail="decision must be allow or deny")
     try:
@@ -95,7 +101,7 @@ def consent(
     params = {"code": code}
     if body.state:
         params["state"] = body.state
-    return {"data": OAuthConsentResponse(redirect_uri=f"{body.redirect_uri}?{urlencode(params)}").model_dump()}
+    return {"data": OAuthConsentResponse(redirect_uri=_append_query(body.redirect_uri, params)).model_dump()}
 
 
 @router.post("/oauth/token")
@@ -142,7 +148,7 @@ def revoke(
     db: Session = Depends(get_db),
 ):
     oauth_flow.revoke_oauth_refresh(db, refresh_token=token, client_id=client_id)
-    return {"message": "ok"}
+    return {}
 
 
 @router.post("/oauth/clients", status_code=201)

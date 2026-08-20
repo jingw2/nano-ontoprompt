@@ -23,10 +23,14 @@ def test_plain_pkce_method_is_rejected():
         validate_code_challenge(challenge, "plain")
 
 
-def test_oauth_access_jwt_is_rejected_by_the_interactive_dependency_and_vice_versa():
-    """Cross-token-type confusion guard, both directions (no DB needed —
-    this only exercises signature/claim decoding, not the client/user
-    lookups Task 3's fuller DB-backed tests already cover)."""
+def test_oauth_access_jwt_carries_a_distinguishable_token_use_claim():
+    """Confirms an OAuth access JWT carries a `token_use` claim distinct from
+    an interactive token's (absent), the signal the dependency-level guards
+    rely on (no DB needed — this only exercises signature/claim decoding,
+    not the client/user lookups Task 3's fuller DB-backed tests already
+    cover). The actual dependency-level rejection in both directions is
+    covered by test_oauth_flow.py::test_get_current_user_rejects_oauth_access_token
+    and test_oauth_flow.py::test_get_oauth_context_rejects_interactive_token."""
     from jose import jwt
     from app.config import settings
     from app.services.auth_service import create_access_token, create_oauth_access_token, decode_token

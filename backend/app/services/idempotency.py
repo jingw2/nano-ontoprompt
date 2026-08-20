@@ -119,7 +119,7 @@ def actor_id_from_bearer(request) -> str | None:
         return None
     try:
         from app.services.auth_service import decode_token
-        payload = decode_token(token)
+        payload = decode_token(token, expected_token_use=None)
         return str(payload.get("sub") or payload.get("user_id") or "")
     except Exception:
         return None
