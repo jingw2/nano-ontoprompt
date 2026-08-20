@@ -203,11 +203,13 @@ export default function AgentApplicationTab({ agentId }: Props) {
 
   const onApprovalResolved = useCallback(async (result: ApprovalResolutionResult) => {
     // ActionApprovalCard sets its own local "approval-result" confirmation in
-    // the same synchronous continuation as this callback; without yielding a
-    // real tick first, React's automatic batching would merge that update
-    // with setPendingApprovalId(null) below and the card would unmount
-    // before its confirmation ever commits.
-    await new Promise(resolve => setTimeout(resolve, 0))
+    // the same synchronous continuation as this callback; a bare
+    // `setTimeout(0)` only separates that commit from the unmount below by a
+    // sub-millisecond window, too narrow to reliably observe (flaky under
+    // test). 50ms guarantees the confirmation actually commits/renders
+    // before the card unmounts, and doubles as a brief, visible confirmation
+    // for the user.
+    await new Promise(resolve => setTimeout(resolve, 50))
     setPendingApprovalId(null)
     setSseDone(false)
     if (result.turn_id) {
