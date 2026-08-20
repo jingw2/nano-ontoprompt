@@ -17,6 +17,16 @@ def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     return jwt.encode({**data, "exp": expire}, settings.secret_key, algorithm="HS256")
 
+def create_oauth_access_token(user_id: str, client_id: str, scope: str) -> str:
+    """A short-lived, stateless JWT for an OAuth client — see the
+    oauth-pkce-authorization-server plan's Global Constraints for why the
+    `token_use` claim is required in both directions."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.oauth_access_token_expire_minutes)
+    return jwt.encode(
+        {"sub": user_id, "client_id": client_id, "scope": scope, "token_use": "oauth_access", "exp": expire},
+        settings.secret_key, algorithm="HS256",
+    )
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=["HS256"])
 
