@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     first_admin_password: str = "admin123"
     uploads_dir: str = "./uploads"
     access_token_expire_minutes: int = 1440  # 24h
+    oauth_frontend_base_url: str = "http://localhost:5173"
+    oauth_authorization_code_expire_seconds: int = 300  # 5 minutes
+    oauth_access_token_expire_minutes: int = 60  # 1 hour
+    oauth_refresh_token_expire_days: int = 30
 
     # CORS - 逗号分隔的来源列表，可通过环境变量配置
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
