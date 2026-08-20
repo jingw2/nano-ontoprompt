@@ -92,6 +92,10 @@ LATER_REVISION_TABLES = {
     "agent_skill_bindings",
     "mcp_connection_schemas",
     "mcp_oauth_tokens",
+    "oauth_clients",
+    "oauth_authorization_codes",
+    "oauth_refresh_families",
+    "oauth_refresh_tokens",
 }
 
 
