@@ -127,8 +127,6 @@ describe('P4B-STREAMUI', () => {
           approval_id: 'ap-1', turn_id: 't-1', status: 'approved', dispatch_generation: 2,
           correlation_id: 'approval:approve:ap-1',
         }, message: 'ok' }, { status: 202 })),
-      http.post('*/api/v1/agent-turns/t-1/stream-ticket', () =>
-        HttpResponse.json({ data: { turn_id: 't-1', ticket: 'tk2', expires_at: 'x', stream_ticket_url: 'u' }, message: 'ok' }, { status: 201 })),
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
@@ -138,8 +136,11 @@ describe('P4B-STREAMUI', () => {
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
     expect(await screen.findByTestId('action-approval-card')).toBeTruthy()
     await userEvent.click(screen.getByTestId('approve-action'))
-    await waitFor(() => expect(screen.getByTestId('approval-result')).toBeTruthy())
+    // the card unmounts once the resumed stream delivers a genuinely new
+    // event (not a fixed timer) — the resumed turn's stream-ticket call
+    // reuses the same handler above (only one is registered now)
     await waitFor(() => expect(screen.queryByTestId('action-approval-card')).toBeNull())
+    expect(await screen.findByText('done')).toBeTruthy()
   })
 
   it('shows the stream error with retry', async () => {

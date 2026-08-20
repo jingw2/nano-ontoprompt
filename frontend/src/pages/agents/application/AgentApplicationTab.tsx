@@ -81,7 +81,27 @@ export default function AgentApplicationTab({ agentId }: Props) {
     }).catch(() => {})
   }, [agentId, selectSession])
 
-  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number) => {
+  // interrupt-event side effects (mounting the clarification box / approval
+  // card) apply to BOTH the live SSE reader loop and the polling fallback —
+  // dispatch is beat-driven, so a real turn's approval_required/
+  // request_clarification event commonly arrives only via polling (the
+  // single-shot SSE channel frequently opens and closes empty first)
+  const applyInterruptSideEffects = useCallback((event: { event: string; data: unknown }) => {
+    if (event.event === 'request_clarification') {
+      const q = event.data as { clarification_id?: string; question?: string; base_request_revision?: number }
+      setClarification({
+        id: String(q.clarification_id ?? ''),
+        question: String(q.question ?? ''),
+        baseRevision: Number(q.base_request_revision ?? 1),
+      })
+    }
+    if (event.event === 'approval_required') {
+      const a = event.data as { approval_id?: string }
+      setPendingApprovalId(String(a.approval_id ?? ''))
+    }
+  }, [])
+
+  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number, onFirstEvent?: () => void) => {
     try {
       const response = await agentStreamApi.openTurnStream(tid, ticket, afterSeq)
       if (!response.ok || !response.body) {
@@ -91,6 +111,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let firstEventSeen = false
       setStream(s => ({ ...s, phase: 'streaming' }))
       for (;;) {
         const { done, value } = await reader.read()
@@ -99,20 +120,16 @@ export default function AgentApplicationTab({ agentId }: Props) {
         const { events, rest } = parseSseChunk(buffer)
         buffer = rest
         for (const event of events) {
+          // clearing a stale pendingApprovalId from a prior turn must happen
+          // BEFORE this event's own side effects, or a fresh approval_required
+          // as the resumed turn's very first event would get wiped
+          if (!firstEventSeen) {
+            firstEventSeen = true
+            onFirstEvent?.()
+          }
+          applyInterruptSideEffects(event)
           setStream(prev => {
             const next = streamReducer(prev, event)
-            if (event.event === 'request_clarification') {
-              const q = event.data as { clarification_id?: string; question?: string; base_request_revision?: number }
-              setClarification({
-                id: String(q.clarification_id ?? ''),
-                question: String(q.question ?? ''),
-                baseRevision: Number(q.base_request_revision ?? 1),
-              })
-            }
-            if (event.event === 'approval_required') {
-              const a = event.data as { approval_id?: string }
-              setPendingApprovalId(String(a.approval_id ?? ''))
-            }
             if (event.event === 'terminal' && afterSeq !== undefined) setReconnectTick(n => n + 1)
             return next
           })
@@ -123,7 +140,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
       // owns fetching the persisted status/events until the Turn is terminal
       setSseDone(true)
     }
-  }, [])
+  }, [applyInterruptSideEffects])
 
   const sendMessage = useCallback((text: string) => {
     if (!activeSessionId) return
@@ -173,7 +190,9 @@ export default function AgentApplicationTab({ agentId }: Props) {
             let next = prev
             for (const item of page.items) {
               if (item.sequence <= prev.lastSequence) continue
-              next = streamReducer(next, { event: item.event_type, data: item.payload, sequence: item.sequence })
+              const evt = { event: item.event_type, data: item.payload, sequence: item.sequence }
+              applyInterruptSideEffects(evt)
+              next = streamReducer(next, evt)
             }
             if (page.terminal && !next.terminal) {
               next = streamReducer(next, { event: 'terminal', data: { turn_id: lastTurnId } })
@@ -187,7 +206,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
       }
     }, TURN_POLL_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [lastTurnId, activeSessionId, sseDone, stream.terminal])
+  }, [lastTurnId, activeSessionId, sseDone, stream.terminal, applyInterruptSideEffects])
 
   const answerClarification = useCallback(async (answer: string) => {
     if (!clarification) return
@@ -197,25 +216,25 @@ export default function AgentApplicationTab({ agentId }: Props) {
     if (result.turn_id) {
       setLastTurnId(result.turn_id)
       const ticket = await agentStreamApi.streamTicket(result.turn_id)
-      await openStream(result.turn_id, ticket.ticket)
+      // afterSeq: the reopened stream must not replay past events for this
+      // turn — the just-resolved event lives before lastSeqRef.current
+      await openStream(result.turn_id, ticket.ticket, lastSeqRef.current)
     }
   }, [clarification, openStream])
 
   const onApprovalResolved = useCallback(async (result: ApprovalResolutionResult) => {
-    // ActionApprovalCard sets its own local "approval-result" confirmation in
-    // the same synchronous continuation as this callback; a bare
-    // `setTimeout(0)` only separates that commit from the unmount below by a
-    // sub-millisecond window, too narrow to reliably observe (flaky under
-    // test). 50ms guarantees the confirmation actually commits/renders
-    // before the card unmounts, and doubles as a brief, visible confirmation
-    // for the user.
-    await new Promise(resolve => setTimeout(resolve, 50))
-    setPendingApprovalId(null)
     setSseDone(false)
     if (result.turn_id) {
       setLastTurnId(result.turn_id)
       const ticket = await agentStreamApi.streamTicket(result.turn_id)
-      await openStream(result.turn_id, ticket.ticket)
+      // afterSeq skips the just-resolved approval_required event so it can't
+      // replay and resurrect the card; pendingApprovalId is cleared by a real
+      // event (the resumed stream's first delivered event), not a timer —
+      // this also means a fresh approval_required as that very first event
+      // can't be wiped by a later, redundant clear (see openStream)
+      await openStream(result.turn_id, ticket.ticket, lastSeqRef.current, () => setPendingApprovalId(null))
+    } else {
+      setPendingApprovalId(null)
     }
   }, [openStream])
 
