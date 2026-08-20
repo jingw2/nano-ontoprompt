@@ -60,4 +60,11 @@ describe('P4B-STREAMUI agentStream byte parser', () => {
     expect(state.phase).toBe('error')
     expect(state.error).toBe('SEQUENCE_GAP')
   })
+
+  it('reducer transitions to the approval phase on approval_required', () => {
+    const state = streamReducer(initialStreamState, {
+      event: 'approval_required', data: { approval_id: 'ap-1' }, sequence: 1,
+    })
+    expect(state.phase).toBe('approval')
+  })
 })

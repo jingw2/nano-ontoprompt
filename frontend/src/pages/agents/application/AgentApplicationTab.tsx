@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { agentSessionsApi, type AgentMessage, type AgentSession } from '@/api/agentSessions'
 import { agentClarificationsApi } from '@/api/agentClarifications'
+import type { ApprovalResolutionResult } from '@/api/agentApprovals'
 import {
   agentStreamApi, initialStreamState, parseSseChunk, streamReducer,
   type StreamState,
@@ -25,6 +26,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [stream, setStream] = useState<StreamState>(initialStreamState)
   const [clarification, setClarification] = useState<{ id: string; question: string; baseRevision: number } | null>(null)
+  const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null)
   const [reconnectTick, setReconnectTick] = useState(0)
   // the most recent Turn: drives the persisted-event trace / ontology-access panels
   const [lastTurnId, setLastTurnId] = useState<string | null>(null)
@@ -47,6 +49,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
   const selectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId)
     setClarification(null)
+    setPendingApprovalId(null)
     setStream(initialStreamState)
     setLastTurnId(null)
     setSseDone(false)
@@ -105,6 +108,10 @@ export default function AgentApplicationTab({ agentId }: Props) {
                 question: String(q.question ?? ''),
                 baseRevision: Number(q.base_request_revision ?? 1),
               })
+            }
+            if (event.event === 'approval_required') {
+              const a = event.data as { approval_id?: string }
+              setPendingApprovalId(String(a.approval_id ?? ''))
             }
             if (event.event === 'terminal' && afterSeq !== undefined) setReconnectTick(n => n + 1)
             return next
@@ -194,6 +201,22 @@ export default function AgentApplicationTab({ agentId }: Props) {
     }
   }, [clarification, openStream])
 
+  const onApprovalResolved = useCallback(async (result: ApprovalResolutionResult) => {
+    // ActionApprovalCard sets its own local "approval-result" confirmation in
+    // the same synchronous continuation as this callback; without yielding a
+    // real tick first, React's automatic batching would merge that update
+    // with setPendingApprovalId(null) below and the card would unmount
+    // before its confirmation ever commits.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    setPendingApprovalId(null)
+    setSseDone(false)
+    if (result.turn_id) {
+      setLastTurnId(result.turn_id)
+      const ticket = await agentStreamApi.streamTicket(result.turn_id)
+      await openStream(result.turn_id, ticket.ticket)
+    }
+  }, [openStream])
+
   const retry = useCallback(() => setReconnectTick(n => n + 1), [])
 
   // reconnect after terminal: reload messages
@@ -221,7 +244,9 @@ export default function AgentApplicationTab({ agentId }: Props) {
           <SessionSidebar sessions={sessions} activeSessionId={activeSessionId}
             onSelect={selectSession} onNew={newSession} />
           <ConversationPanel messages={messages} stream={stream} clarification={clarification}
-            onSend={sendMessage} onAnswerClarification={answerClarification} onRetry={retry} />
+            pendingApprovalId={pendingApprovalId} onSend={sendMessage}
+            onAnswerClarification={answerClarification} onApprovalResolved={onApprovalResolved}
+            onRetry={retry} />
         </div>
       </div>
       {traceOpen && lastTurnId && (

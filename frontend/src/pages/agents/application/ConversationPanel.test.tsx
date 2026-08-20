@@ -7,7 +7,8 @@ import { initialStreamState, type StreamState } from '@/api/agentStream'
 
 function renderPanel(messages: AgentMessage[], stream: StreamState = initialStreamState) {
   return render(<ConversationPanel messages={messages} stream={stream} clarification={null}
-    onSend={() => {}} onAnswerClarification={() => {}} onRetry={() => {}} />)
+    pendingApprovalId={null} onSend={() => {}} onAnswerClarification={() => {}}
+    onApprovalResolved={() => {}} onRetry={() => {}} />)
 }
 
 describe('P4A-CONVERSATION', () => {

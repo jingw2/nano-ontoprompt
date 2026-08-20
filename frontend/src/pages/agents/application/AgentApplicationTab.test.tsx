@@ -6,12 +6,16 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { useAuthStore } from '@/stores/authStore'
 import AgentApplicationTab from './AgentApplicationTab'
 
 const server = setupServer()
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
-afterEach(() => server.resetHandlers())
+afterEach(() => {
+  server.resetHandlers()
+  useAuthStore.getState().logout()
+})
 afterAll(() => server.close())
 
 const SESSION = { id: 's-1', agent_id: 'a-1', owner_user_id: 'u-1', status: 'active' }
@@ -85,6 +89,57 @@ describe('P4B-STREAMUI', () => {
     await userEvent.type(screen.getByPlaceholderText(/回答/), 'the blue one')
     await userEvent.click(screen.getByRole('button', { name: '回答' }))
     await waitFor(() => expect(screen.queryByTestId('clarification-box')).toBeNull())
+  })
+
+  it('sends a message and streams events with approval required and resolved', async () => {
+    useAuthStore.getState().setAuth(
+      { id: 'u-1', username: 'u', email: 'u@t.com', role: 'editor', is_active: true, created_at: '2026-01-01T00:00:00Z' },
+      'token',
+    )
+    let streamCount = 0
+    server.use(
+      http.get('*/api/v1/agents/a-1/sessions', () =>
+        HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agent-sessions/s-1/messages', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.post('*/api/v1/agent-sessions/s-1/turns', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', session_id: 's-1', status: 'queued', dispatch_generation: 1, correlation_id: 'c' }, message: 'ok' }, { status: 202 })),
+      http.post('*/api/v1/agent-turns/t-1/stream-ticket', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', ticket: 'tk', expires_at: 'x', stream_ticket_url: 'u' }, message: 'ok' }, { status: 201 })),
+      http.get('*/api/v1/agent-turns/t-1/stream*', () => {
+        streamCount += 1
+        const body = streamCount === 1
+          ? [
+              'event: model_call\ndata: {"m":1}\n\n',
+              'event: approval_required\ndata: {"approval_id":"ap-1","tool_execution_id":"te-1","descriptor_id":"action:act-1"}\n\n',
+              'event: terminal\ndata: {}\n\n',
+            ].join('')
+          : 'event: final_response\ndata: {"message":"done"}\n\nevent: terminal\ndata: {}\n\n'
+        return new HttpResponse(body, { headers: { 'Content-Type': 'text/event-stream' } })
+      }),
+      http.get('*/api/v1/agent-approvals/ap-1', () =>
+        HttpResponse.json({ data: {
+          id: 'ap-1', turn_id: 't-1', tool_execution_id: 'te-1', designated_actor_id: 'u-1',
+          revision: 1, status: 'pending', preview_hash: 'h'.repeat(64),
+        }, message: 'ok' })),
+      http.post('*/api/v1/agent-approvals/ap-1/approve', () =>
+        HttpResponse.json({ data: {
+          approval_id: 'ap-1', turn_id: 't-1', status: 'approved', dispatch_generation: 2,
+          correlation_id: 'approval:approve:ap-1',
+        }, message: 'ok' }, { status: 202 })),
+      http.post('*/api/v1/agent-turns/t-1/stream-ticket', () =>
+        HttpResponse.json({ data: { turn_id: 't-1', ticket: 'tk2', expires_at: 'x', stream_ticket_url: 'u' }, message: 'ok' }, { status: 201 })),
+    )
+    render(<AgentApplicationTab agentId="a-1" />)
+    await screen.findByTestId('session-sidebar')
+    await userEvent.click(screen.getByText(/s-1/))
+    await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
+    await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'approve this order')
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByTestId('action-approval-card')).toBeTruthy()
+    await userEvent.click(screen.getByTestId('approve-action'))
+    await waitFor(() => expect(screen.getByTestId('approval-result')).toBeTruthy())
+    await waitFor(() => expect(screen.queryByTestId('action-approval-card')).toBeNull())
   })
 
   it('shows the stream error with retry', async () => {

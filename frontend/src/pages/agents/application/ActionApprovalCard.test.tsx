@@ -58,7 +58,7 @@ describe('P5-UI', () => {
         }, { status: 202 })
       }),
     )
-    render(<ActionApprovalCard approvalId="ap-1" />)
+    render(<ActionApprovalCard approvalId="ap-1" onApprovalResolved={() => {}} />)
     await screen.findByTestId('action-approval-card')
     expect(screen.getByTestId('approval-preview-hash').textContent).toContain('deadbeefdeadbeef')
     expect(screen.getByTestId('approval-revision').textContent).toBe('2')
@@ -75,7 +75,7 @@ describe('P5-UI', () => {
       http.get('*/api/v1/agent-approvals/ap-1', () =>
         HttpResponse.json({ data: APPROVAL, message: 'ok' })),
     )
-    render(<ActionApprovalCard approvalId="ap-1" />)
+    render(<ActionApprovalCard approvalId="ap-1" onApprovalResolved={() => {}} />)
     expect(await screen.findByTestId('approval-awaiting-actor')).toBeTruthy()
     expect(screen.queryByTestId('approve-action')).toBeNull()
     expect(screen.queryByTestId('reject-action')).toBeNull()
@@ -87,7 +87,7 @@ describe('P5-UI', () => {
       http.get('*/api/v1/agent-approvals/ap-1', () =>
         HttpResponse.json({ data: { ...APPROVAL, status: 'stale', stale_reason: 'APPROVAL_STALE' }, message: 'ok' })),
     )
-    const { unmount } = render(<ActionApprovalCard approvalId="ap-1" />)
+    const { unmount } = render(<ActionApprovalCard approvalId="ap-1" onApprovalResolved={() => {}} />)
     expect(await screen.findByTestId('approval-stale')).toBeTruthy()
     expect(screen.getByText('APPROVAL_STALE')).toBeTruthy()
     unmount()
@@ -101,7 +101,7 @@ describe('P5-UI', () => {
       http.post('*/api/v1/agent-approvals/ap-1/reject', () =>
         HttpResponse.json({ error: { code: 'APPROVAL_STALE' }, correlation_id: 'x' }, { status: 409 })),
     )
-    render(<ActionApprovalCard approvalId="ap-1" />)
+    render(<ActionApprovalCard approvalId="ap-1" onApprovalResolved={() => {}} />)
     await screen.findByTestId('action-approval-card')
     await userEvent.click(screen.getByTestId('reject-action'))
     await waitFor(() => expect(getCount).toBeGreaterThanOrEqual(2))

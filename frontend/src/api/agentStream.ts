@@ -116,7 +116,7 @@ export function parseSseChunk(buffer: string): { events: StreamEvent[]; rest: st
   return { events, rest }
 }
 
-export type StreamPhase = 'idle' | 'connecting' | 'streaming' | 'clarification' | 'terminal' | 'error'
+export type StreamPhase = 'idle' | 'connecting' | 'streaming' | 'clarification' | 'approval' | 'terminal' | 'error'
 
 export interface StreamState {
   phase: StreamPhase
@@ -149,6 +149,8 @@ export function streamReducer(state: StreamState, event: StreamEvent): StreamSta
     next.error = 'SEQUENCE_GAP'
   } else if (event.event === 'request_clarification') {
     next.phase = 'clarification'
+  } else if (event.event === 'approval_required') {
+    next.phase = 'approval'
   } else if (state.phase === 'connecting' || state.phase === 'idle') {
     next.phase = 'streaming'
   }

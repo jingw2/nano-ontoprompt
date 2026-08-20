@@ -2,18 +2,23 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentMessage } from '@/api/agentSessions'
 import type { StreamState } from '@/api/agentStream'
+import ActionApprovalCard from './ActionApprovalCard'
+import type { ApprovalResolutionResult } from '@/api/agentApprovals'
 
 interface Props {
   messages: AgentMessage[]
   stream: StreamState
   clarification: { id: string; question: string; baseRevision: number } | null
+  pendingApprovalId: string | null
   onSend: (text: string) => void
   onAnswerClarification: (answer: string) => void
+  onApprovalResolved: (result: ApprovalResolutionResult) => void
   onRetry: () => void
 }
 
 export default function ConversationPanel({
-  messages, stream, clarification, onSend, onAnswerClarification, onRetry,
+  messages, stream, clarification, pendingApprovalId, onSend, onAnswerClarification,
+  onApprovalResolved, onRetry,
 }: Props) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState('')
@@ -79,6 +84,12 @@ export default function ConversationPanel({
               {t('agent.app.answer', '回答')}
             </button>
           </div>
+        </div>
+      )}
+
+      {pendingApprovalId && (
+        <div className="border-t p-3 bg-amber-50">
+          <ActionApprovalCard approvalId={pendingApprovalId} onApprovalResolved={onApprovalResolved} />
         </div>
       )}
 

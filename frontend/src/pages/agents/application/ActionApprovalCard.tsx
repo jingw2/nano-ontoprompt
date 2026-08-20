@@ -12,7 +12,9 @@ import {
  * governed decisions (approve/reject) to the exact designated actor.  No
  * parameter editing, no local authority, no re-preview.  Stale/expired/
  * already-resolved approvals surface their state with a retry. */
-export default function ActionApprovalCard({ approvalId }: { approvalId: string }) {
+export default function ActionApprovalCard(
+  { approvalId, onApprovalResolved }: { approvalId: string; onApprovalResolved: (result: ApprovalResolutionResult) => void },
+) {
   const { t } = useTranslation()
   const actorId = useAuthStore(s => s.user?.id ?? null)
   const [approval, setApproval] = useState<ApprovalRecord | null>(null)
@@ -46,6 +48,7 @@ export default function ActionApprovalCard({ approvalId }: { approvalId: string 
         : await agentApprovalsApi.reject(approval.id, approval.revision, approval.preview_hash)
       setResult(outcome)
       setApproval(prev => (prev ? { ...prev, status: decision } : prev))
+      onApprovalResolved(outcome)
     } catch (err) {
       const code = (err as { error?: { code?: string } })?.error?.code ?? ''
       setError(code || 'APPROVAL_RESOLVE_FAILED')
