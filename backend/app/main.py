@@ -49,6 +49,7 @@ from app.routers import (
     ontology_remediations,
     security_domains,
 )
+from app.routers import oauth as oauth_router
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
 from app.routers.v2 import pipelines as pipelines_v2
@@ -186,6 +187,7 @@ app.include_router(agent_turns.router, prefix="/api/v1", tags=["agent-turns"])
 app.include_router(agent_events.router, prefix="/api/v1", tags=["agent-events"])
 app.include_router(agent_approvals.router, prefix="/api/v1", tags=["agent-approvals"])
 app.include_router(agent_clarifications.router, prefix="/api/v1", tags=["agent-clarifications"])
+app.include_router(oauth_router.router, prefix="/api/v1", tags=["oauth"])
 # agent_audit is an alias of agent_application_state.router (same object); the
 # application-state router carries both the state and audit read routes.
 app.include_router(agent_application_state.router, prefix="/api/v1", tags=["agent-application-state"])

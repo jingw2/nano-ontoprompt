@@ -64,9 +64,12 @@ def test_endpoint_allow_deny_inventory_no_bypass():
     """Every write route carries an editor-or-admin dependency, except the
     explicitly exempt public/read-only/system surfaces: auth endpoints,
     read-only graph queries (cypher/ask/search), incremental worker
-    callbacks, and the granular-capability Agent/application routes whose
+    callbacks, the granular-capability Agent/application routes whose
     Section 12 authorization is grant/session-owner/designated-actor based
-    (checked inside the route body, not via an editor-or-admin dependency)."""
+    (checked inside the route body, not via an editor-or-admin dependency),
+    and the OAuth authorize/consent/token/revoke surfaces whose RFC
+    6749/7636/7009 authorization is end-user-session or PKCE/refresh-token
+    possession based (also checked in the route body, not role-based)."""
     from app.deps import require_admin, require_editor
 
     exempt = {
@@ -81,6 +84,9 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v2/incremental/connections/{connection_id}/sync-complete"),
         ("POST", "/api/v2/incremental/pipeline-runs/{run_id}/complete"),
         ("POST", "/api/v2/incremental/reviews/{review_id}/approve-trigger"),
+        ("POST", "/api/v1/oauth/consent"),
+        ("POST", "/api/v1/oauth/token"),
+        ("POST", "/api/v1/oauth/revoke"),
         # I-BACKEND registration: granular-capability Agent/application routes
         ("POST", "/api/v1/ontologies/{ontology_id}/access-grants"),
         ("POST", "/api/v1/ontologies/{ontology_id}/access-grants/{grant_id}/revisions"),

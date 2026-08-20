@@ -124,6 +124,7 @@ _DESIGN_PLANE_PREFIXES = (
 # Platform plane: identity/administration/worker surfaces, role-based.
 _PLATFORM_PREFIXES = (
     "/api/v1/auth",
+    "/api/v1/oauth",
     "/api/v1/users",
     "/api/v1/overview",
     "/api/v1/settings",
