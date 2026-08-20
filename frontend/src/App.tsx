@@ -29,6 +29,7 @@ import AgentListPage from '@/pages/agents/list/AgentListPage'
 import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
 import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
 import AgentReconciliationPage from '@/pages/admin/AgentReconciliationPage'
+import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -86,6 +87,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/oauth/consent" element={<OAuthConsentPage />} />
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
 

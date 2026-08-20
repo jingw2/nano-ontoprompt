@@ -70,6 +70,14 @@
     "login_error": "Invalid username or password",
     "network_error": "Network error — please verify the backend service is running"
   },
+  "oauth": {
+    "consent_title": "Authorize access",
+    "consent_wants": "wants to access your account with the following permissions:",
+    "allow": "Allow",
+    "deny": "Deny",
+    "loading": "Loading...",
+    "error_invalid_request": "This authorization request is invalid or the application is not recognized."
+  },
   "ontology": {
     "title": "Ontology Management",
     "create": "Create Ontology",

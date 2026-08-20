@@ -1,5 +1,5 @@
 import { useForm } from 'react-hook-form'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { authApi } from '@/api/auth'
 import { useTranslation } from 'react-i18next'
@@ -9,6 +9,7 @@ export default function LoginPage() {
   const { register, handleSubmit } = useForm<{ username: string; password: string }>()
   const setAuth = useAuthStore(s => s.setAuth)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { t } = useTranslation()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -21,7 +22,10 @@ export default function LoginPage() {
       useAuthStore.getState().setToken(res.access_token)
       const profile = await authApi.profile()
       setAuth(profile, res.access_token)
-      navigate('/')
+      // only ever navigate to a same-app relative path — never let a
+      // crafted ?returnTo= value redirect off-site after login
+      const returnTo = searchParams.get('returnTo')
+      navigate(returnTo && returnTo.startsWith('/') ? returnTo : '/')
     } catch (e: unknown) {
       console.error('login failed:', e)
       const err = e as { isAxiosError?: boolean; response?: unknown }

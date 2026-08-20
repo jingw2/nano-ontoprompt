@@ -70,6 +70,14 @@
     "login_error": "用户名或密码错误",
     "network_error": "网络连接失败，请确认后端服务已启动"
   },
+  "oauth": {
+    "consent_title": "授权访问",
+    "consent_wants": "请求以下权限访问你的账户:",
+    "allow": "允许",
+    "deny": "拒绝",
+    "loading": "加载中...",
+    "error_invalid_request": "该授权请求无效,或应用未被识别。"
+  },
   "ontology": {
     "title": "本体管理",
     "create": "创建本体",
