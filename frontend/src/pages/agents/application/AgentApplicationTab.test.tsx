@@ -136,9 +136,9 @@ describe('P4B-STREAMUI', () => {
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
     expect(await screen.findByTestId('action-approval-card')).toBeTruthy()
     await userEvent.click(screen.getByTestId('approve-action'))
-    // the card unmounts once the resumed stream delivers a genuinely new
-    // event (not a fixed timer) — the resumed turn's stream-ticket call
-    // reuses the same handler above (only one is registered now)
+    // the card unmounts once the resumed turn's stream-ticket round-trip
+    // resolves (a real async boundary, not a fixed timer) — the same
+    // stream-ticket handler above is reused (only one is registered now)
     await waitFor(() => expect(screen.queryByTestId('action-approval-card')).toBeNull())
     expect(await screen.findByText('done')).toBeTruthy()
   })

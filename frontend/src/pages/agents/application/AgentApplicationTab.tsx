@@ -101,7 +101,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
     }
   }, [])
 
-  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number, onFirstEvent?: () => void) => {
+  const openStream = useCallback(async (tid: string, ticket: string, afterSeq?: number) => {
     try {
       const response = await agentStreamApi.openTurnStream(tid, ticket, afterSeq)
       if (!response.ok || !response.body) {
@@ -111,7 +111,6 @@ export default function AgentApplicationTab({ agentId }: Props) {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let firstEventSeen = false
       setStream(s => ({ ...s, phase: 'streaming' }))
       for (;;) {
         const { done, value } = await reader.read()
@@ -120,13 +119,6 @@ export default function AgentApplicationTab({ agentId }: Props) {
         const { events, rest } = parseSseChunk(buffer)
         buffer = rest
         for (const event of events) {
-          // clearing a stale pendingApprovalId from a prior turn must happen
-          // BEFORE this event's own side effects, or a fresh approval_required
-          // as the resumed turn's very first event would get wiped
-          if (!firstEventSeen) {
-            firstEventSeen = true
-            onFirstEvent?.()
-          }
           applyInterruptSideEffects(event)
           setStream(prev => {
             const next = streamReducer(prev, event)
@@ -227,12 +219,14 @@ export default function AgentApplicationTab({ agentId }: Props) {
     if (result.turn_id) {
       setLastTurnId(result.turn_id)
       const ticket = await agentStreamApi.streamTicket(result.turn_id)
-      // afterSeq skips the just-resolved approval_required event so it can't
-      // replay and resurrect the card; pendingApprovalId is cleared by a real
-      // event (the resumed stream's first delivered event), not a timer —
-      // this also means a fresh approval_required as that very first event
-      // can't be wiped by a later, redundant clear (see openStream)
-      await openStream(result.turn_id, ticket.ticket, lastSeqRef.current, () => setPendingApprovalId(null))
+      // clearing here — after a genuine network round-trip, not a timer —
+      // both gives the card's own confirmation render a real tick to commit
+      // first and guarantees the clear fires even if the reopened stream
+      // hits the single-shot SSE gap (opens and closes with zero events,
+      // handing off to polling); afterSeq below skips the just-resolved
+      // approval_required event so a stale replay can't resurrect the card
+      setPendingApprovalId(null)
+      await openStream(result.turn_id, ticket.ticket, lastSeqRef.current)
     } else {
       setPendingApprovalId(null)
     }
