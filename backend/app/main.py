@@ -50,6 +50,7 @@ from app.routers import (
     security_domains,
 )
 from app.routers import oauth as oauth_router
+from app.routers import mcp_write_requests as mcp_write_requests_router
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
 from app.routers.v2 import pipelines as pipelines_v2
@@ -192,6 +193,7 @@ app.include_router(oauth_router.router, prefix="/api/v1", tags=["oauth"])
 # application-state router carries both the state and audit read routes.
 app.include_router(agent_application_state.router, prefix="/api/v1", tags=["agent-application-state"])
 app.include_router(agent_reconciliations.router, prefix="/api/v1", tags=["agent-reconciliations"])
+app.include_router(mcp_write_requests_router.router, prefix="/api/v1", tags=["mcp-write-requests"])
 
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"])
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"])
