@@ -49,7 +49,11 @@ describe('OAuthConsentPage', () => {
     const originalLocation = window.location
     // @ts-expect-error -- test-only override so the assertion doesn't navigate jsdom away
     delete window.location
-    window.location = { ...originalLocation, href: originalLocation.href } as Location
+    window.location = {
+      ...originalLocation,
+      href: originalLocation.href,
+      assign: (url: string) => { (window.location as unknown as { href: string }).href = url },
+    } as Location
 
     renderConsentPage()
     expect(await screen.findByTestId('oauth-client-name')).toHaveTextContent('Test MCP Client')
@@ -74,7 +78,11 @@ describe('OAuthConsentPage', () => {
     const originalLocation = window.location
     // @ts-expect-error -- test-only override
     delete window.location
-    window.location = { ...originalLocation, href: originalLocation.href } as Location
+    window.location = {
+      ...originalLocation,
+      href: originalLocation.href,
+      assign: (url: string) => { (window.location as unknown as { href: string }).href = url },
+    } as Location
 
     renderConsentPage()
     await screen.findByTestId('oauth-client-name')

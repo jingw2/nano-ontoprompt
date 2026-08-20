@@ -39,7 +39,7 @@ export default function OAuthConsentPage() {
     setDeciding(true)
     try {
       const result = await oauthConsentApi.decide(params, decision)
-      window.location.href = result.redirect_uri
+      window.location.assign(result.redirect_uri)
     } catch {
       setError(t('oauth.error_invalid_request'))
       setDeciding(false)
