@@ -176,7 +176,10 @@ def resolve_approval(
             "correlation_id": _correlation("approve", approval_id),
             "stream_ticket": None, "stream_ticket_url": None,
         }
-    # rejected: mark execution non-runnable, turn back to queued without resume
+    # rejected: mark execution non-runnable, turn back to queued WITH a
+    # resume dispatch — the runtime's _resolve_pending_action must still
+    # get a chance to tell the model the action was rejected, exactly like
+    # the approved path resumes to tell it the action executed
     db.execute(text(
         "UPDATE agent_tool_executions SET status = 'cancelled', updated_at = now() "
         "WHERE id = :teid"
@@ -187,10 +190,17 @@ def resolve_approval(
         "updated_at = now() WHERE id = :id AND status = 'awaiting_approval' "
         "RETURNING dispatch_generation"
     ), {"id": row["turn_id"]}).scalar_one_or_none()
+    if new_generation is None:
+        db.rollback()
+        raise ApprovalError("APPROVAL_STALE")
+    db.execute(text(
+        "INSERT INTO agent_turn_dispatch_outbox (id, turn_id, dispatch_generation, operation, "
+        "state, created_at) VALUES (:id, :turn, :gen, 'resume_approval', 'pending', now())"
+    ), {"id": _new_id(), "turn": row["turn_id"], "gen": new_generation})
     db.commit()
     return {
         "approval_id": approval_id, "turn_id": row["turn_id"], "status": "rejected",
-        "dispatch_generation": new_generation or 0,
+        "dispatch_generation": new_generation,
         "correlation_id": _correlation("reject", approval_id),
         "stream_ticket": None, "stream_ticket_url": None,
     }

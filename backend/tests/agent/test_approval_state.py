@@ -193,10 +193,12 @@ def test_reject_marks_execution_non_runnable(schema):
             assert s.execute(text(
                 "SELECT status FROM agent_tool_executions WHERE id = 'te-1'"
             )).scalar_one() == "cancelled"
-            # no resume outbox on reject
+            # rejection now gets a resume dispatch too — the Turn must be
+            # re-run so the model can be told the action was rejected
+            # (mirrors test_approve_resumes_once's assertion exactly)
             assert s.execute(text(
-                "SELECT count(*) FROM agent_turn_dispatch_outbox"
-            )).scalar_one() == 0
+                "SELECT count(*) FROM agent_turn_dispatch_outbox WHERE operation = 'resume_approval'"
+            )).scalar_one() == 1
     finally:
         s.close()
 

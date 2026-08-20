@@ -859,6 +859,9 @@ def test_worker_action_proposal_reports_rejection(schema, monkeypatch, propose_a
         session, approval_id=approval["id"], actor_id="u-1", base_revision=approval["revision"],
         preview_hash=approval["preview_hash"], decision="rejected",
     )
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_turn_dispatch_outbox WHERE turn_id = 't-1' AND operation = 'resume_approval'"
+    )).scalar_one() == 1
     result2 = agent_turn_execute.run("t-1", 2, "w-2", "tok-2")
     assert result2["status"] == "succeeded"
     execution = session.execute(text(
