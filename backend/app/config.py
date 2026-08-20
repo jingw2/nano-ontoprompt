@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     oauth_authorization_code_expire_seconds: int = 300  # 5 minutes
     oauth_access_token_expire_minutes: int = 60  # 1 hour
     oauth_refresh_token_expire_days: int = 30
+    mcp_write_request_expire_hours: int = 72
 
     # CORS - 逗号分隔的来源列表，可通过环境变量配置
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
