@@ -75,27 +75,39 @@ def _serialize(row: McpWriteRequest) -> dict:
     }
 
 
-def get_write_request(db: Session, *, request_id: str, user_id: str) -> dict | None:
-    row = db.execute(
-        select(McpWriteRequest).where(McpWriteRequest.id == request_id, McpWriteRequest.user_id == user_id)
-    ).scalar_one_or_none()
+def get_write_request(db: Session, *, request_id: str, user_id: str, oauth_client_id: str | None = None) -> dict | None:
+    conditions = [McpWriteRequest.id == request_id, McpWriteRequest.user_id == user_id]
+    if oauth_client_id is not None:
+        conditions.append(McpWriteRequest.oauth_client_id == oauth_client_id)
+    row = db.execute(select(McpWriteRequest).where(*conditions)).scalar_one_or_none()
     return None if row is None else _serialize(row)
 
 
 def list_pending_for_user(db: Session, *, user_id: str) -> list[dict]:
+    now = datetime.now(timezone.utc)
     rows = db.execute(
         select(McpWriteRequest)
-        .where(McpWriteRequest.user_id == user_id, McpWriteRequest.status == "pending")
+        .where(
+            McpWriteRequest.user_id == user_id,
+            McpWriteRequest.status == "pending",
+            McpWriteRequest.expires_at > now,
+        )
         .order_by(McpWriteRequest.created_at.desc())
     ).scalars().all()
     return [_serialize(r) for r in rows]
 
 
 def _resolve(db: Session, *, request_id: str, actor_id: str, decision: str) -> dict:
+    now = datetime.now(timezone.utc)
     resolved_id = db.execute(
         update(McpWriteRequest)
-        .where(McpWriteRequest.id == request_id, McpWriteRequest.user_id == actor_id, McpWriteRequest.status == "pending")
-        .values(status=decision, resolved_at=datetime.now(timezone.utc), resolved_by=actor_id)
+        .where(
+            McpWriteRequest.id == request_id,
+            McpWriteRequest.user_id == actor_id,
+            McpWriteRequest.status == "pending",
+            McpWriteRequest.expires_at > now,
+        )
+        .values(status=decision, resolved_at=now, resolved_by=actor_id)
         .returning(McpWriteRequest.id)
     ).scalar_one_or_none()
     if resolved_id is None:
@@ -105,6 +117,15 @@ def _resolve(db: Session, *, request_id: str, actor_id: str, decision: str) -> d
     return {"id": resolved_id, "status": decision}
 
 
+# NOTE: unlike resolve_approval (actions/approval.py), this CAS does not
+# confirm a preview_hash/base_revision against what the approving human
+# actually saw, and does not recheck dependency-hash drift (model/release
+# changes between proposal and approval). That's safe today because nothing
+# ever applies a real effect from this table (see the module docstring) —
+# but BEFORE effect application is wired up here, this function must gain
+# the same preview-binding and drift-staleness guards resolve_approval has,
+# or an approval could be misapplied against a proposal the approver never
+# actually reviewed.
 def approve_write_request(db: Session, *, request_id: str, actor_id: str) -> dict:
     return _resolve(db, request_id=request_id, actor_id=actor_id, decision="approved")
 

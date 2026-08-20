@@ -205,3 +205,29 @@ def test_pending_request_reports_expired_after_expiry_without_a_sweep(mcp_db):
         session.commit()
         item = get_write_request(session, request_id=result["request_id"], user_id=owner_id)
         assert item["status"] == "expired"
+
+
+def test_expired_pending_request_cannot_be_approved_and_is_excluded_from_list(mcp_db):
+    from app.services.mcp_write_requests import (
+        McpWriteRequestError, approve_write_request, create_write_request, list_pending_for_user,
+    )
+    from app.models.mcp_write_request import McpWriteRequest
+
+    Session = mcp_db
+    admin_id = _add_user(Session, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    owner_id = _add_user(Session, "owner-" + uuid.uuid4().hex[:8])
+    client_id = _add_client(Session, admin_id)
+    ontology_id, release_id = _add_ontology_and_release(Session, admin_id)
+    _grant_write(Session, ontology_id, owner_id, admin_id)
+    with Session() as session:
+        result = create_write_request(
+            session, oauth_client_id=client_id, user_id=owner_id, ontology_id=ontology_id,
+            release_id=release_id, descriptor_id="action:x", parameters={},
+        )
+        session.query(McpWriteRequest).filter_by(id=result["request_id"]).update(
+            {"expires_at": datetime.now(timezone.utc) - timedelta(hours=1)}
+        )
+        session.commit()
+        assert list_pending_for_user(session, user_id=owner_id) == []
+        with pytest.raises(McpWriteRequestError):
+            approve_write_request(session, request_id=result["request_id"], actor_id=owner_id)

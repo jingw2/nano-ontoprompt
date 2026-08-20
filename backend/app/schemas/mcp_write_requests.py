@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -11,5 +13,5 @@ class McpWriteRequestOut(BaseModel):
     preview_hash: str
     preview_canonical: str
     status: str
-    created_at: object
-    resolved_at: object | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None

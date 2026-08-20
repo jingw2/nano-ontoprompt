@@ -191,7 +191,7 @@ def test_initialize_and_tools_list_require_no_special_scope(pg_client, mcp_db):
                              headers={"Authorization": f"Bearer {token}"})
     assert listed.status_code == 200
     tool_names = {t["name"] for t in listed.json()["result"]["tools"]}
-    assert tool_names == {"ontology.read_instances", "ontology.traverse_relations", "ontology.propose_write", "ontology.check_write_status"}
+    assert tool_names == {"ontology_read_instances", "ontology_traverse_relations", "ontology_propose_write", "ontology_check_write_status"}
 
 
 def test_rpc_rejects_missing_or_wrong_token_type(pg_client):
@@ -211,7 +211,7 @@ def test_read_instances_tool_call_succeeds_with_read_scope(pg_client, mcp_db):
     resp = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-              "params": {"name": "ontology.read_instances", "arguments": {"ontology_id": ontology_id, "release_id": release_id}}},
+              "params": {"name": "ontology_read_instances", "arguments": {"ontology_id": ontology_id, "release_id": release_id}}},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
@@ -235,7 +235,7 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     denied = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 4, "method": "tools/call",
-              "params": {"name": "ontology.propose_write",
+              "params": {"name": "ontology_propose_write",
                          "arguments": {"ontology_id": ontology_id, "release_id": release_id, "descriptor_id": "action:x", "parameters": {}}}},
         headers={"Authorization": f"Bearer {read_token}"},
     )
@@ -249,7 +249,7 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     ungranted = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 5, "method": "tools/call",
-              "params": {"name": "ontology.propose_write",
+              "params": {"name": "ontology_propose_write",
                          "arguments": {"ontology_id": ontology_id, "release_id": release_id, "descriptor_id": "action:x", "parameters": {}}}},
         headers={"Authorization": f"Bearer {write_token}"},
     )
@@ -261,7 +261,7 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     proposed = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 6, "method": "tools/call",
-              "params": {"name": "ontology.propose_write",
+              "params": {"name": "ontology_propose_write",
                          "arguments": {"ontology_id": ontology_id, "release_id": release_id, "descriptor_id": "action:x", "parameters": {}}}},
         headers={"Authorization": f"Bearer {write_token}"},
     )
@@ -274,7 +274,7 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     checked = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-              "params": {"name": "ontology.check_write_status", "arguments": {"request_id": request_id}}},
+              "params": {"name": "ontology_check_write_status", "arguments": {"request_id": request_id}}},
         headers={"Authorization": f"Bearer {write_token}"},
     )
     checked_payload = jsonlib.loads(checked.json()["result"]["content"][0]["text"])
@@ -309,7 +309,7 @@ def test_unknown_tool_name_and_missing_argument_are_tool_level_errors(pg_client,
     unknown_tool = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 10, "method": "tools/call",
-              "params": {"name": "ontology.does_not_exist", "arguments": {}}},
+              "params": {"name": "ontology_does_not_exist", "arguments": {}}},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert unknown_tool.status_code == 200
@@ -319,9 +319,83 @@ def test_unknown_tool_name_and_missing_argument_are_tool_level_errors(pg_client,
     missing_arg = pg_client.post(
         "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-              "params": {"name": "ontology.read_instances", "arguments": {}}},
+              "params": {"name": "ontology_read_instances", "arguments": {}}},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert missing_arg.status_code == 200
     assert missing_arg.json()["result"]["isError"] is True
     assert "MISSING_ARGUMENT" in missing_arg.json()["result"]["content"][0]["text"]
+
+
+def test_notification_without_id_gets_no_reply_body(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
+
+    resp = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 202
+    assert resp.content == b""
+
+
+def test_non_object_params_returns_protocol_error(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
+
+    resp = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 12, "method": "tools/list", "params": [1, 2]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert "result" not in resp.json()
+    assert resp.json()["error"]["code"] == -32602
+
+
+def test_non_object_arguments_returns_protocol_error(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
+
+    resp = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 13, "method": "tools/call",
+              "params": {"name": "ontology_read_instances", "arguments": "x"}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert "result" not in resp.json()
+    assert resp.json()["error"]["code"] == -32602
+
+
+def test_read_scope_without_data_grant_returns_empty_not_denied(pg_client, mcp_db):
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    client_id = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    ontology_id, release_id = _add_ontology_and_release(mcp_db, admin_id)
+    # deliberately no ontology_data_grants row for this user
+    token = _mint_oauth_token(pg_client, client_id, username, "ontology:read")
+
+    resp = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 14, "method": "tools/call",
+              "params": {"name": "ontology_read_instances",
+                         "arguments": {"ontology_id": ontology_id, "release_id": release_id}}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()["result"]
+    assert body["isError"] is False
+    import json as jsonlib
+    assert jsonlib.loads(body["content"][0]["text"])["items"] == []

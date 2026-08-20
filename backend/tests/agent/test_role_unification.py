@@ -69,7 +69,11 @@ def test_endpoint_allow_deny_inventory_no_bypass():
     (checked inside the route body, not via an editor-or-admin dependency),
     and the OAuth authorize/consent/token/revoke surfaces whose RFC
     6749/7636/7009 authorization is end-user-session or PKCE/refresh-token
-    possession based (also checked in the route body, not role-based)."""
+    possession based (also checked in the route body, not role-based).
+    Note: ("POST", "/api/v1/mcp") is a multiplexed JSON-RPC endpoint, so any
+    future tool added to call_tool inherits this exemption and is
+    responsible for its own authorization (scope/grant checks) rather than
+    relying on this test to catch a missing one."""
     from app.deps import require_admin, require_editor
 
     exempt = {

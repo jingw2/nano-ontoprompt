@@ -14,7 +14,7 @@ from app.services.ontology_query import query_instances, query_relations
 
 TOOLS = [
     {
-        "name": "ontology.read_instances",
+        "name": "ontology_read_instances",
         "description": "Read entity instances from a published ontology release.",
         "inputSchema": {
             "type": "object",
@@ -29,7 +29,7 @@ TOOLS = [
         },
     },
     {
-        "name": "ontology.traverse_relations",
+        "name": "ontology_traverse_relations",
         "description": "Traverse relations from an entity instance in a published ontology release.",
         "inputSchema": {
             "type": "object",
@@ -43,7 +43,7 @@ TOOLS = [
         },
     },
     {
-        "name": "ontology.propose_write",
+        "name": "ontology_propose_write",
         "description": "Propose a write action for human approval. Never applies immediately, even once approved.",
         "inputSchema": {
             "type": "object",
@@ -58,7 +58,7 @@ TOOLS = [
         },
     },
     {
-        "name": "ontology.check_write_status",
+        "name": "ontology_check_write_status",
         "description": "Check the status (pending/approved/rejected/expired) of a previously proposed write.",
         "inputSchema": {
             "type": "object",
@@ -79,6 +79,15 @@ class McpToolError(Exception):
         super().__init__(message)
 
 
+def _clamp_limit(arguments: dict, *, default: int = 20, maximum: int = 200) -> int:
+    raw = arguments.get("limit", default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise McpToolError("INVALID_ARGUMENT", "limit must be an integer")
+    return max(1, min(value, maximum))
+
+
 def list_tools() -> list[dict]:
     return TOOLS
 
@@ -89,28 +98,28 @@ def _require_scope(ctx: OAuthContext, scope: str) -> None:
 
 
 def call_tool(db, ctx: OAuthContext, name: str, arguments: dict) -> dict:
-    if name == "ontology.read_instances":
+    if name == "ontology_read_instances":
         _require_scope(ctx, _READ_SCOPE)
         try:
             items = query_instances(
                 db, ontology_id=arguments["ontology_id"], release_id=arguments["release_id"],
                 entity_id=arguments.get("entity_id"), query=arguments.get("query"),
-                user_id=ctx.user_id, limit=arguments.get("limit", 20),
+                user_id=ctx.user_id, limit=_clamp_limit(arguments),
             )
         except KeyError as exc:
             raise McpToolError("MISSING_ARGUMENT", str(exc))
         return {"items": items}
-    if name == "ontology.traverse_relations":
+    if name == "ontology_traverse_relations":
         _require_scope(ctx, _READ_SCOPE)
         try:
             items = query_relations(
                 db, ontology_id=arguments["ontology_id"], release_id=arguments["release_id"],
-                instance_id=arguments["instance_id"], user_id=ctx.user_id, limit=arguments.get("limit", 20),
+                instance_id=arguments["instance_id"], user_id=ctx.user_id, limit=_clamp_limit(arguments),
             )
         except KeyError as exc:
             raise McpToolError("MISSING_ARGUMENT", str(exc))
         return {"items": items}
-    if name == "ontology.propose_write":
+    if name == "ontology_propose_write":
         _require_scope(ctx, _WRITE_SCOPE)
         try:
             return mcp_write_requests.create_write_request(
@@ -123,13 +132,15 @@ def call_tool(db, ctx: OAuthContext, name: str, arguments: dict) -> dict:
             raise McpToolError("MISSING_ARGUMENT", str(exc))
         except McpWriteRequestError as exc:
             raise McpToolError(str(exc), f"write proposal rejected: {exc}")
-    if name == "ontology.check_write_status":
+    if name == "ontology_check_write_status":
         _require_scope(ctx, _WRITE_SCOPE)
         try:
             request_id = arguments["request_id"]
         except KeyError as exc:
             raise McpToolError("MISSING_ARGUMENT", str(exc))
-        item = mcp_write_requests.get_write_request(db, request_id=request_id, user_id=ctx.user_id)
+        item = mcp_write_requests.get_write_request(
+            db, request_id=request_id, user_id=ctx.user_id, oauth_client_id=ctx.client_id,
+        )
         if item is None:
             raise McpToolError("NOT_FOUND", "unknown write request")
         return {"status": item["status"], "resolved_at": str(item["resolved_at"]) if item["resolved_at"] else None}

@@ -6,7 +6,7 @@ with no server-side session state, matching this server's stateless design.
 """
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
@@ -34,8 +34,12 @@ def mcp_rpc(
     ctx: OAuthContext = Depends(get_oauth_context),
 ):
     request_id = body.get("id")
+    if request_id is None:
+        return Response(status_code=202)
     method = body.get("method")
     params = body.get("params") or {}
+    if not isinstance(params, dict):
+        return _error(request_id, -32602, "params must be an object")
     if method == "initialize":
         return _result(request_id, {
             "protocolVersion": MCP_PROTOCOL_VERSION,
@@ -47,6 +51,8 @@ def mcp_rpc(
     if method == "tools/call":
         name = params.get("name")
         arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return _error(request_id, -32602, "arguments must be an object")
         try:
             output = mcp_tools.call_tool(db, ctx, name, arguments)
         except McpToolError as exc:
@@ -54,6 +60,8 @@ def mcp_rpc(
                 "content": [{"type": "text", "text": f"{exc.code}: {exc.message}"}],
                 "isError": True,
             })
+        except Exception:
+            return _error(request_id, -32603, "internal error")
         return _result(request_id, {
             "content": [{"type": "text", "text": json.dumps(output, default=str)}],
             "isError": False,

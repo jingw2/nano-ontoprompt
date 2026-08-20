@@ -8,6 +8,11 @@ the result and a pending/approved/rejected status. No effect-application
 step exists anywhere in this design, matching execute_approved_action's
 existing documented no-op for the Agent-Turn path.
 
+Deliberately omits resolve_approval's preview_hash/base_revision CAS
+binding and dependency-drift staleness check — safe only as long as no
+effect-application step exists on this table; add those guards first if
+one ever does.
+
 Revision ID: 0017_mcp_write_requests
 Revises: 0016_oauth_pkce
 Create Date: 2026-08-20
