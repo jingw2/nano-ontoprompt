@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
 import ToolConnectionsPage from './ToolConnectionsPage'
+import type { ToolConnection, ToolConnectionVersion } from '@/api/toolConnections'
 
 const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
@@ -62,8 +63,8 @@ describe('ToolConnectionsPage', () => {
   })
 
   it('creates a version, approves it via the confirmation dialog, then activates it', async () => {
-    const connection = { id: 'c-1', provider_id: 'p-1', status: 'active', active_version_id: null }
-    let versions = [
+    const connection: ToolConnection = { id: 'c-1', provider_id: 'p-1', status: 'active', active_version_id: null }
+    let versions: ToolConnectionVersion[] = [
       { id: 'v-1', connection_id: 'c-1', version_no: 1, endpoint: 'https://search.example.com', audience: null,
         scopes: ['search:read'], credential_reference: null, allowlists: {}, approval_status: 'pending' as const,
         health_status: 'unknown' as const, created_by: 'u-1', created_at: '2026-01-01T00:00:00Z' },
