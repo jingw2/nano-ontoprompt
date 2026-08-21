@@ -42,4 +42,17 @@ describe('OntologyToolSelector', () => {
     expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(true)
     expect((screen.getByText('解绑') as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('suppresses the "no ontologies" message when the caller has its own fetch error', () => {
+    render(<OntologyToolSelector ontologies={[]} bindings={[]} toolsByOntology={{}} canEdit
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()}
+      error="AGENTS_TOOLS_CATALOG_FAILED" />)
+    expect(screen.queryByText('没有可绑定的已发布本体')).toBeNull()
+  })
+
+  it('shows the "no ontologies" message when the list is empty and there is no error', () => {
+    render(<OntologyToolSelector ontologies={[]} bindings={[]} toolsByOntology={{}} canEdit
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} />)
+    expect(screen.getByText('没有可绑定的已发布本体')).toBeTruthy()
+  })
 })

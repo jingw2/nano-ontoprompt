@@ -22,10 +22,13 @@ interface Props {
   onUnbind: (ontologyId: string) => void
   onToggleCategory: (ontologyId: string, category: ToolCategory, on: boolean) => void
   onToggleTool: (ontologyId: string, descriptorId: string, on: boolean) => void
+  /** When the caller has its own ontology-fetch error, suppress the "no ontologies" empty
+   * state so the two messages don't render at once (caller still renders its own error text). */
+  error?: string
 }
 
 export default function OntologyToolSelector({
-  ontologies, bindings, toolsByOntology, canEdit, onBind, onUnbind, onToggleCategory, onToggleTool,
+  ontologies, bindings, toolsByOntology, canEdit, onBind, onUnbind, onToggleCategory, onToggleTool, error,
 }: Props) {
   const { t } = useTranslation()
   // one Agent binds at most one Ontology: once bound, the picker is disabled —
@@ -50,7 +53,7 @@ export default function OntologyToolSelector({
           </select>
           <span className="text-xs text-gray-400">{t('agent.tools.picker_note', '每个 Agent 仅能绑定一个已发布本体；绑定后默认启用全部工具类别，如需更换请先解绑')}</span>
         </div>
-        {ontologies.length === 0 && (
+        {ontologies.length === 0 && !error && (
           <p className="text-sm text-gray-400">{t('agent.tools.no_ontologies', '没有可绑定的已发布本体')}</p>
         )}
       </div>

@@ -116,7 +116,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         {/* OntologyToolSelector renders the published-ontology dropdown (data-testid="ontology-picker") and bound-ontology panels */}
         <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
           canEdit={canEdit} onBind={bindOntology} onUnbind={unbindOntology}
-          onToggleCategory={toggleCategory} onToggleTool={toggleTool} />
+          onToggleCategory={toggleCategory} onToggleTool={toggleTool} error={error} />
       </div>
 
       {validation && (
