@@ -298,11 +298,10 @@ describe('P2C-TOOLS', () => {
       }),
     )
     renderTab()
-    // 'search' (the alias) is a case-insensitive substring of the wrapping
-    // "Web Search · search" row too, so findByText would match both nodes;
-    // wait on getAllByText instead to avoid a false "multiple elements" throw.
-    await waitFor(() => expect(screen.getAllByText('search', { exact: false }).length).toBeGreaterThan(0))
-    await userEvent.click(screen.getByText('解绑'))
+    // The "解绑" button only renders once kindBindings is non-empty, i.e.
+    // once the bindings fetch has actually resolved with the search alias
+    // row; findByText's built-in retry genuinely waits on that.
+    await userEvent.click(await screen.findByText('解绑'))
     await waitFor(() => expect(unbound).toBe(true))
   })
 
