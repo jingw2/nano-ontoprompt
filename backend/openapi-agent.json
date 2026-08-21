@@ -16894,6 +16894,51 @@
         ]
       }
     },
+    "/api/v2/tool-connections/{connection_id}/versions": {
+      "get": {
+        "operationId": "list_connection_versions_route_api_v2_tool_connections__connection_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Connection Versions Route",
+        "tags": [
+          "tool-connections"
+        ]
+      }
+    },
     "/api/v2/tool-providers": {
       "get": {
         "operationId": "list_providers_route_api_v2_tool_providers_get",
