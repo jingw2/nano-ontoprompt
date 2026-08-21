@@ -444,3 +444,20 @@ def unbind_skill(db: Session, *, actor_id: str, agent_version_id: str, alias: st
     _audit(db, actor_id=actor_id, agent_id=_agent_id_for_version(db, agent_version_id),
           operation="unbind_skill", payload={"alias": alias})
     db.commit()
+
+
+def list_external_tool_bindings(db: Session, *, agent_version_id: str) -> list[dict]:
+    """Current external-tool bindings for one Agent version, joined with the
+    connection/provider metadata the UI needs to render them (no listing
+    function existed before this — bind/unbind were write-only)."""
+    rows = db.execute(text(
+        "SELECT aetb.id, aetb.alias, aetb.tool_connection_version_id, tcv.connection_id, "
+        "tcv.version_no, tp.name AS provider_name, tp.kind AS provider_kind, "
+        "tcv.approval_status, tcv.health_status "
+        "FROM agent_external_tool_bindings aetb "
+        "JOIN tool_connection_versions tcv ON tcv.id = aetb.tool_connection_version_id "
+        "JOIN tool_connections tc ON tc.id = tcv.connection_id "
+        "JOIN tool_providers tp ON tp.id = tc.provider_id "
+        "WHERE aetb.agent_version_id = :id ORDER BY aetb.alias"
+    ), {"id": agent_version_id}).mappings().all()
+    return [dict(r) for r in rows]

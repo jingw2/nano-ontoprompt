@@ -145,6 +145,7 @@
       "ActionRunRequest": {
         "properties": {
           "parameters": {
+            "additionalProperties": true,
             "default": {},
             "title": "Parameters",
             "type": "object"
@@ -459,6 +460,7 @@
             "title": "Description"
           },
           "memory_settings": {
+            "additionalProperties": true,
             "default": {},
             "title": "Memory Settings",
             "type": "object"
@@ -535,6 +537,7 @@
             "title": "Description"
           },
           "memory_settings": {
+            "additionalProperties": true,
             "default": {},
             "title": "Memory Settings",
             "type": "object"
@@ -648,6 +651,7 @@
         "properties": {
           "edits": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Edits",
@@ -783,7 +787,7 @@
       "Body_upload_dataset_api_v2_datasets_upload_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -797,7 +801,7 @@
       "Body_upload_file_api_v1_ontologies__ontology_id__files_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -828,6 +832,7 @@
       "ConnectionCreate": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "title": "Config",
             "type": "object"
           },
@@ -904,6 +909,7 @@
             "type": "string"
           },
           "json_schema": {
+            "additionalProperties": true,
             "title": "Json Schema",
             "type": "object"
           }
@@ -933,6 +939,7 @@
           "allowlists": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1076,6 +1083,7 @@
           "row_policy": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1137,6 +1145,7 @@
             "type": "string"
           },
           "field_mapping": {
+            "additionalProperties": true,
             "title": "Field Mapping",
             "type": "object"
           },
@@ -1155,6 +1164,7 @@
             "anyOf": [
               {
                 "items": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -1275,6 +1285,7 @@
             "type": "integer"
           },
           "json_schema": {
+            "additionalProperties": true,
             "title": "Json Schema",
             "type": "object"
           }
@@ -1319,6 +1330,7 @@
       "CreateSkillVersionRequest": {
         "properties": {
           "manifest": {
+            "additionalProperties": true,
             "title": "Manifest",
             "type": "object"
           },
@@ -1416,6 +1428,7 @@
       "CypherRequest": {
         "properties": {
           "params": {
+            "additionalProperties": true,
             "default": {},
             "title": "Params",
             "type": "object"
@@ -1516,6 +1529,7 @@
             "title": "Name En"
           },
           "properties": {
+            "additionalProperties": true,
             "default": {},
             "title": "Properties",
             "type": "object"
@@ -1620,6 +1634,7 @@
           "properties": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1941,11 +1956,13 @@
       "LogicTestRequest": {
         "properties": {
           "parameters": {
+            "additionalProperties": true,
             "default": {},
             "title": "Parameters",
             "type": "object"
           },
           "row": {
+            "additionalProperties": true,
             "default": {},
             "title": "Row",
             "type": "object"
@@ -2019,6 +2036,7 @@
             "type": "string"
           },
           "options": {
+            "additionalProperties": true,
             "default": {},
             "title": "Options",
             "type": "object"
@@ -2098,6 +2116,7 @@
           "options": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2277,6 +2296,7 @@
           "options": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2296,6 +2316,7 @@
             "type": "string"
           },
           "schema": {
+            "additionalProperties": true,
             "default": {},
             "title": "Schema",
             "type": "object"
@@ -2395,6 +2416,7 @@
         "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.",
         "properties": {
           "allowlists": {
+            "additionalProperties": true,
             "default": {},
             "title": "Allowlists",
             "type": "object"
@@ -2582,6 +2604,7 @@
             "type": "integer"
           },
           "patch": {
+            "additionalProperties": true,
             "default": {},
             "title": "Patch",
             "type": "object"
@@ -2599,6 +2622,7 @@
           "definition": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2646,6 +2670,7 @@
           "spec": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2689,6 +2714,7 @@
           "definition": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2754,6 +2780,7 @@
           "spec": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2808,6 +2835,7 @@
           "definition": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2874,6 +2902,7 @@
           "spec": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2904,6 +2933,7 @@
             "type": "string"
           },
           "params": {
+            "additionalProperties": true,
             "default": {},
             "title": "Params",
             "type": "object"
@@ -2911,6 +2941,7 @@
           "sample_data": {
             "default": [],
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Sample Data",
@@ -3139,6 +3170,7 @@
             "type": "integer"
           },
           "explicit_contract_fields": {
+            "additionalProperties": true,
             "title": "Explicit Contract Fields",
             "type": "object"
           }
@@ -3179,6 +3211,7 @@
             "type": "array"
           },
           "options": {
+            "additionalProperties": true,
             "default": {},
             "title": "Options",
             "type": "object"
@@ -3205,6 +3238,7 @@
             "type": "integer"
           },
           "explicit_schema_metadata": {
+            "additionalProperties": true,
             "title": "Explicit Schema Metadata",
             "type": "object"
           },
@@ -3334,6 +3368,7 @@
           "row_policy": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3547,6 +3582,7 @@
           "sample_rows": {
             "default": [],
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Sample Rows",
@@ -3563,6 +3599,7 @@
       "TestConfigBody": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "default": {},
             "title": "Config",
             "type": "object"
@@ -3676,6 +3713,7 @@
           "errors": {
             "default": [],
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Errors",
@@ -3688,6 +3726,7 @@
           "warnings": {
             "default": [],
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Warnings",
@@ -3702,6 +3741,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -3746,6 +3792,7 @@
             "type": "boolean"
           },
           "expression": {
+            "additionalProperties": true,
             "default": {},
             "title": "Expression",
             "type": "object"
@@ -5462,6 +5509,30 @@
         ]
       }
     },
+    "/api/v1/agents/catalog/external-tools": {
+      "get": {
+        "operationId": "catalog_external_tools_api_v1_agents_catalog_external_tools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Catalog External Tools",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
     "/api/v1/agents/catalog/models": {
       "get": {
         "operationId": "catalog_models_api_v1_agents_catalog_models_get",
@@ -6427,6 +6498,58 @@
       }
     },
     "/api/v1/agents/{agent_id}/versions/{version_id}/external-tools": {
+      "get": {
+        "operationId": "list_external_tools_route_api_v1_agents__agent_id__versions__version_id__external_tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List External Tools Route",
+        "tags": [
+          "agents"
+        ]
+      },
       "post": {
         "operationId": "bind_external_tool_route_api_v1_agents__agent_id__versions__version_id__external_tools_post",
         "parameters": [
@@ -7037,6 +7160,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -9733,6 +9857,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -15095,6 +15220,7 @@
             "application/json": {
               "schema": {
                 "items": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "title": "Data",
@@ -15488,6 +15614,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response List Pipelines Api V2 Pipelines Get",

@@ -167,3 +167,22 @@ def validate_binding_tools(db: Session, ontology_id: str, selected_tools: list[s
         return True
     available = {t["descriptor_id"] for t in ontology_tool_catalog(db, ontology_id)["tools"]}
     return set(selected_tools) <= available
+
+
+def agent_external_tool_catalog(db: Session) -> list[dict]:
+    """Search/Playwright/External-MCP connections an Agent may bind to: the
+    active version of each active connection, already admin-approved via
+    P7-UI — matches bind_external_tool's own approval check
+    (configuration.py:379-385) so nothing shown here can fail to bind."""
+    rows = db.execute(text(
+        "SELECT tcv.id AS tool_connection_version_id, tcv.connection_id, tcv.version_no, "
+        "tp.id AS provider_id, tp.name AS provider_name, tp.kind AS provider_kind, "
+        "tcv.health_status "
+        "FROM tool_connections tc "
+        "JOIN tool_connection_versions tcv ON tcv.id = tc.active_version_id "
+        "JOIN tool_providers tp ON tp.id = tc.provider_id "
+        "WHERE tc.status = 'active' AND tcv.approval_status = 'approved' "
+        "AND tp.kind IN ('search', 'playwright', 'external_mcp') "
+        "ORDER BY tp.name, tc.id"
+    )).mappings().all()
+    return [dict(r) for r in rows]

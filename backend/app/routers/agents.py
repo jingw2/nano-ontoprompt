@@ -48,6 +48,7 @@ from app.services.agent.access_grants import (
 from app.services.agent.catalog import (
     agent_catalog_models,
     agent_catalog_ontologies,
+    agent_external_tool_catalog,
     validate_agent_tools,
     validate_binding_tools,
 )
@@ -59,6 +60,7 @@ from app.services.agent.configuration import (
     bind_skill,
     create_agent,
     get_version,
+    list_external_tool_bindings,
     restore_version,
     save_basic_version,
     unbind_external_tool,
@@ -321,6 +323,11 @@ def catalog_models(db: Session = Depends(get_db), current_user: User = Depends(r
     return {"data": {"items": agent_catalog_models(db, {"discover"}), "next_cursor": None, "has_more": False}}
 
 
+@router.get("/catalog/external-tools")
+def catalog_external_tools(db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    return {"data": {"items": agent_external_tool_catalog(db)}}
+
+
 @router.post("/{agent_id}/tool-validation")
 def validate_agent_tool_bindings(
     agent_id: str, body: ToolValidationRequest, db: Session = Depends(get_db),
@@ -507,6 +514,14 @@ def unbind_skill_route(agent_id: str, version_id: str, alias: str,
     except AgentConfigError as exc:
         raise HTTPException(422, detail=str(exc))
     return {"data": {"released": True}}
+
+
+@router.get("/{agent_id}/versions/{version_id}/external-tools")
+def list_external_tools_route(agent_id: str, version_id: str, db: Session = Depends(get_db),
+                              current_user: User = Depends(get_current_user)):
+    _require_agent_grant(db, current_user.id, agent_id, "view_config")
+    _require_agent_version_owned(db, agent_id, version_id)
+    return {"data": {"items": list_external_tool_bindings(db, agent_version_id=version_id)}}
 
 
 @router.get("/{agent_id}/access-grants")
