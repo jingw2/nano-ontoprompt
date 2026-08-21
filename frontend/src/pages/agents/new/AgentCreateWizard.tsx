@@ -55,6 +55,7 @@ export default function AgentCreateWizard() {
 
   const submit = useCallback(async (event: React.FormEvent) => {
     event.preventDefault()
+    if (createdAgentId) return
     const model = models.find(m => m.id === modelId)
     if (!name.trim() || !model) return
     setSaving(true)
@@ -85,12 +86,13 @@ export default function AgentCreateWizard() {
       } else {
         navigate(`/agents/${result.agent_id}`)
       }
-    } catch {
-      setError(t('agent.create.failed', '创建失败'))
+    } catch (err) {
+      const code = (err as { error?: { code?: string } })?.error?.code
+      setError(code ? `${t('agent.create.failed', '创建失败')} (${code})` : t('agent.create.failed', '创建失败'))
     } finally {
       setSaving(false)
     }
-  }, [name, description, modelId, models, systemPrompt, bindings, pendingExternalTools, navigate, t])
+  }, [name, description, modelId, models, systemPrompt, bindings, pendingExternalTools, navigate, t, createdAgentId])
 
   return (
     <div className="max-w-2xl">
@@ -144,7 +146,7 @@ export default function AgentCreateWizard() {
           </div>
         )}
         <div className="flex gap-3">
-          <button type="submit" disabled={saving || !name.trim() || !modelId}
+          <button type="submit" disabled={saving || !name.trim() || !modelId || createdAgentId !== null}
             className="bg-black text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-40">
             {saving ? t('agent.create.saving', '创建中…') : t('agent.create.submit', '创建')}
           </button>

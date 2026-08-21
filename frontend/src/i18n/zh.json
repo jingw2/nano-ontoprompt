@@ -302,7 +302,9 @@
       "saving": "创建中…",
       "select_model": "选择模型…",
       "submit": "创建",
-      "title": "新建智能体"
+      "title": "新建智能体",
+      "partial_tool_bind_failure": "Agent 已创建，但以下外部工具绑定失败：",
+      "go_to_detail": "前往详情页处理"
     },
     "detail": {
       "back": "返回智能体",
@@ -460,7 +462,10 @@
       "category_tools_note": "勾选的类别默认全部启用；取消勾选后该类别下的工具不会在本 Turn 中执行",
       "select_ontology": "选择要绑定的已发布本体…",
       "picker_note": "每个 Agent 仅能绑定一个已发布本体；绑定后默认启用全部工具类别，如需更换请先解绑",
-      "unbind": "解绑"
+      "unbind": "解绑",
+      "no_external_connections": "暂无可绑定的已激活连接，请先在工具连接管理中配置并激活",
+      "bind_failed": "绑定失败（别名可能已被占用，或所选连接已失效）",
+      "unbind_failed": "解绑失败"
     }
   },
   "mcp": {

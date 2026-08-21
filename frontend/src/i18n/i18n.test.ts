@@ -29,6 +29,11 @@ const REQUIRED_AGENT_KEYS = [
   'agent.recon.evidence',
   'agent.tools.external',
   'agent.tools.available_later',
+  'agent.tools.no_external_connections',
+  'agent.tools.bind_failed',
+  'agent.tools.unbind_failed',
+  'agent.create.partial_tool_bind_failure',
+  'agent.create.go_to_detail',
 ]
 
 function hasPath(obj: Record<string, unknown>, dotted: string): boolean {

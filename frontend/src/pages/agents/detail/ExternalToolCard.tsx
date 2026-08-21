@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { agentExternalToolsApi, type ExternalToolCatalogItem } from '@/api/agentExternalTools'
+import { slugifyAlias } from './aliasUtils'
 
 export interface BoundExternalTool {
   alias: string
@@ -24,19 +25,6 @@ const KIND_LABELS: Record<string, { label: string; fallback: string }> = {
 }
 
 const LIVE_KINDS = ['search', 'playwright', 'external_mcp'] as const
-
-/** Default alias from a provider name, de-duplicated against currently
- * bound/pending aliases; still editable by the user before binding. */
-export function slugifyAlias(providerName: string, existing: string[]): string {
-  const base = providerName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'tool'
-  let candidate = base
-  let n = 2
-  while (existing.includes(candidate)) {
-    candidate = `${base}-${n}`.slice(0, 55)
-    n += 1
-  }
-  return candidate
-}
 
 export default function ExternalToolCard({ bindings, canEdit, onBind, onUnbind, bindError }: Props) {
   const { t } = useTranslation()
@@ -85,6 +73,12 @@ export default function ExternalToolCard({ bindings, canEdit, onBind, onUnbind, 
                   disabled={!canEdit}
                   value={draftFor(item)}
                   onChange={e => setAliasDrafts(prev => ({ ...prev, [item.tool_connection_version_id]: e.target.value }))}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      onBind(item, draftFor(item))
+                    }
+                  }}
                   className="border rounded px-2 py-1 text-xs font-mono w-32"
                 />
                 <button type="button" disabled={!canEdit}

@@ -1,6 +1,6 @@
 import '@/i18n'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
@@ -110,7 +110,7 @@ describe('P2C-DETAIL create wizard', () => {
   })
 
   it('binds pending external tools after create and navigates on full success', async () => {
-    let bindCalls: string[] = []
+    const bindCalls: string[] = []
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
         HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
@@ -167,5 +167,69 @@ describe('P2C-DETAIL create wizard', () => {
     expect(screen.queryByText('DETAIL:a-new')).toBeNull()
     await userEvent.click(screen.getByText('前往详情页处理'))
     expect(screen.getByText('DETAIL:a-new')).toBeTruthy()
+  })
+
+  it('disables the submit button and refuses a second create after a partial bind failure', async () => {
+    let createCalls = 0
+    server.use(
+      http.get('*/api/v1/agents/catalog/models', () =>
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { tool_connection_version_id: 'tcv-1', connection_id: 'c-1', version_no: 1,
+            provider_id: 'p-1', provider_name: 'Web Search', provider_kind: 'search', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+      http.post('*/api/v1/agents', () => {
+        createCalls += 1
+        return HttpResponse.json({ data: { agent_id: 'a-new', version_id: 'v-1', version_no: 1, config_hash: 'c' + '0'.repeat(63) }, message: 'ok' }, { status: 201 })
+      }),
+      http.post('*/api/v1/agents/a-new/versions/v-1/external-tools', () =>
+        HttpResponse.json({ error: { code: 'EXTERNAL_TOOL_VERSION_NOT_APPROVED' } }, { status: 422 })),
+    )
+    await renderWizard()
+    await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
+    await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
+    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    const submitButton = screen.getByRole('button', { name: '创建' }) as HTMLButtonElement
+    await userEvent.click(submitButton)
+    await waitFor(() => expect(screen.getByText('前往详情页处理')).toBeTruthy())
+    expect(createCalls).toBe(1)
+    expect(submitButton.disabled).toBe(true)
+    // simulate a retry gesture bypassing the disabled attribute (e.g. Enter in a field)
+    fireEvent.submit(screen.getByTestId('agent-create-wizard'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(createCalls).toBe(1)
+  })
+
+  it('binding an alias with Enter does not submit the outer create form', async () => {
+    let createCalls = 0
+    server.use(
+      http.get('*/api/v1/agents/catalog/models', () =>
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { tool_connection_version_id: 'tcv-1', connection_id: 'c-1', version_no: 1,
+            provider_id: 'p-1', provider_name: 'Web Search', provider_kind: 'search', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+      http.post('*/api/v1/agents', () => {
+        createCalls += 1
+        return HttpResponse.json({ data: { agent_id: 'a-new', version_id: 'v-1', version_no: 1, config_hash: 'c' + '0'.repeat(63) }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    await renderWizard()
+    await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
+    await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
+    await waitFor(() => expect(screen.getByTestId('alias-input-tcv-1')).toBeTruthy())
+    const aliasInput = screen.getByTestId('alias-input-tcv-1')
+    await userEvent.type(aliasInput, '{Enter}')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(createCalls).toBe(0)
   })
 })
