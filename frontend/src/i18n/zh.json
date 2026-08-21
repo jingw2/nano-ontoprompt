@@ -475,6 +475,23 @@
     "ontology": "本体",
     "parameters": "参数"
   },
+  "toolConnections": {
+    "nav_label": "工具连接",
+    "title": "外部工具连接",
+    "create_provider": "新建 Provider",
+    "provider_name": "名称",
+    "provider_kind": "类型",
+    "empty_providers": "暂无 Provider",
+    "connections": "连接",
+    "create_connection": "新建连接",
+    "empty_connections": "暂无连接",
+    "active_version": "当前生效版本",
+    "none": "无",
+    "cancel": "取消",
+    "save": "保存",
+    "load_failed": "加载失败",
+    "retry": "重试"
+  },
   "settings": {
     "title": "设置",
     "rules": "置信度规则",

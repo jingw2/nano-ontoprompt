@@ -475,6 +475,23 @@
     "ontology": "Ontology",
     "parameters": "Parameters"
   },
+  "toolConnections": {
+    "nav_label": "Tool Connections",
+    "title": "External Tool Connections",
+    "create_provider": "New Provider",
+    "provider_name": "Name",
+    "provider_kind": "Kind",
+    "empty_providers": "No providers yet",
+    "connections": "Connections",
+    "create_connection": "New Connection",
+    "empty_connections": "No connections yet",
+    "active_version": "Active version",
+    "none": "none",
+    "cancel": "Cancel",
+    "save": "Save",
+    "load_failed": "Failed to load",
+    "retry": "Retry"
+  },
   "settings": {
     "title": "Settings",
     "rules": "Confidence Rules",

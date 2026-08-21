@@ -29,6 +29,7 @@ import AgentListPage from '@/pages/agents/list/AgentListPage'
 import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
 import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
 import AgentReconciliationPage from '@/pages/admin/AgentReconciliationPage'
+import ToolConnectionsPage from '@/pages/admin/ToolConnectionsPage'
 import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
 import McpWriteRequestsPage from '@/pages/mcp/McpWriteRequestsPage'
 
@@ -122,6 +123,7 @@ export default function App() {
           <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
           <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
           <Route path="/admin/agent-reconciliations" element={<ProtectedRoute><AdminRoute><AgentReconciliationPage /></AdminRoute></ProtectedRoute>} />
+          <Route path="/admin/tool-connections" element={<ProtectedRoute><AdminRoute><ToolConnectionsPage /></AdminRoute></ProtectedRoute>} />
           <Route path="/mcp/write-requests" element={<ProtectedRoute><McpWriteRequestsPage /></ProtectedRoute>} />
         </Routes>
         </SessionRestore>
