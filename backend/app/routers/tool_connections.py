@@ -19,6 +19,7 @@ from app.services.tool_connections import (
     create_connection_version,
     create_provider,
     issue_mcp_token,
+    list_connection_versions,
     list_connections,
     list_providers,
     pin_mcp_schema,
@@ -54,6 +55,12 @@ def create_provider_route(body: CreateProviderRequest, db: Session = Depends(get
 def list_connections_route(provider_id: str | None = None, db: Session = Depends(get_db),
                            _: User = Depends(require_admin)):
     return {"data": {"items": list_connections(db, provider_id=provider_id)}}
+
+
+@router.get("/tool-connections/{connection_id}/versions")
+def list_connection_versions_route(connection_id: str, db: Session = Depends(get_db),
+                                   _: User = Depends(require_admin)):
+    return {"data": {"items": list_connection_versions(db, connection_id=connection_id)}}
 
 
 @router.post("/tool-connections", status_code=201)

@@ -221,3 +221,23 @@ def test_test_endpoint_playwright_allowlist_defect_unhealthy(session, monkeypatc
     result = test_connection_version(session, version_id=version["id"])
     assert result["status"] == "unhealthy"
     assert "DOMAIN_NOT_ALLOWED" in result["detail"]
+
+
+def test_list_connection_versions_returns_all_versions_newest_first(session):
+    from app.services.tool_connections import (
+        create_connection, create_connection_version, create_provider, list_connection_versions,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    v1 = create_connection_version(session, actor_id="u-1", connection_id=connection["id"], endpoint="https://a")
+    v2 = create_connection_version(session, actor_id="u-1", connection_id=connection["id"], endpoint="https://b")
+    versions = list_connection_versions(session, connection_id=connection["id"])
+    assert [v["id"] for v in versions] == [v2["id"], v1["id"]]
+    assert versions[0]["endpoint"] == "https://b"
+    assert versions[0]["approval_status"] == "pending"
+    assert versions[0]["health_status"] == "unknown"
+
+
+def test_list_connection_versions_empty_for_unknown_connection(session):
+    from app.services.tool_connections import list_connection_versions
+    assert list_connection_versions(session, connection_id="nonexistent") == []
