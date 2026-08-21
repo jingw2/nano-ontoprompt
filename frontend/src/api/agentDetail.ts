@@ -99,6 +99,7 @@ export const agentDetailApi = {
     default_model_name: string
     system_prompt?: string | null
     memory_settings?: Record<string, unknown>
+    ontology_bindings?: OntologyBinding[]
   }) =>
     apiClient.post<CreateAgentResult>('/agents', body, { headers: { 'Idempotency-Key': newAgentIdempotencyKey() } }),
   saveVersion: (agentId: string, body: BasicPatch) =>
