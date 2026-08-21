@@ -305,7 +305,7 @@ def list_connections(db: Session, provider_id: str | None = None) -> list[dict]:
 
 def list_connection_versions(db: Session, *, connection_id: str) -> list[dict]:
     rows = db.execute(text(
-        "SELECT id, connection_id, version_no, endpoint, audience, scopes, credential_reference, "
+        "SELECT id, connection_id, version_no, endpoint, audience, scopes, "
         "allowlists, approval_status, health_status, created_by, created_at "
         "FROM tool_connection_versions WHERE connection_id = :id ORDER BY version_no DESC"
     ), {"id": connection_id}).mappings().all()

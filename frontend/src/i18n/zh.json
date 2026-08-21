@@ -505,6 +505,7 @@
     "health_healthy": "健康",
     "health_unhealthy": "异常",
     "health_unknown": "未测试",
+    "no_health_probe": "该 Provider 类型暂无在线健康检测",
     "test": "测试",
     "approve": "审批",
     "activate": "启用",

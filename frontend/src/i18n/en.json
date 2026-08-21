@@ -505,6 +505,7 @@
     "health_healthy": "Healthy",
     "health_unhealthy": "Unhealthy",
     "health_unknown": "Not tested",
+    "no_health_probe": "This provider kind has no live health probe",
     "test": "Test",
     "approve": "Approve",
     "activate": "Activate",

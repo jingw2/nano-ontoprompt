@@ -21,7 +21,6 @@ export interface ToolConnectionVersion {
   endpoint: string | null
   audience: string | null
   scopes: string[]
-  credential_reference: string | null
   allowlists: Record<string, unknown>
   approval_status: 'pending' | 'approved' | 'rejected'
   health_status: 'healthy' | 'unhealthy' | 'unknown'

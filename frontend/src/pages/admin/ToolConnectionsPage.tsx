@@ -178,6 +178,11 @@ interface VersionFormValues {
   domains_str?: string
 }
 
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const e = err as { detail?: string; message?: string }
+  return e?.detail || e?.message || fallback
+}
+
 function ConnectionRow({ connection, providerKind }: { connection: ToolConnection; providerKind: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -185,6 +190,8 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
   const [showCreateVersion, setShowCreateVersion] = useState(false)
   const [approvingVersion, setApprovingVersion] = useState<ToolConnectionVersion | null>(null)
   const [testResult, setTestResult] = useState<Record<string, { status: string; detail: string }>>({})
+  const [pinResult, setPinResult] = useState<Record<string, string>>({})
+  const [error, setError] = useState('')
   const { register, handleSubmit, reset } = useForm<VersionFormValues>()
 
   const { data: versions, isLoading } = useQuery({
@@ -205,34 +212,42 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
         : undefined,
     }),
     onSuccess: () => {
+      setError('')
       qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
       setShowCreateVersion(false)
       reset()
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const testMut = useMutation({
     mutationFn: (versionId: string) => toolConnectionsApi.testVersion(versionId),
     onSuccess: (res, versionId) => {
+      setError('')
       setTestResult(prev => ({ ...prev, [versionId]: res }))
       qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const approveMut = useMutation({
     mutationFn: (versionId: string) => toolConnectionsApi.approveVersion(versionId),
     onSuccess: () => {
+      setError('')
       qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
       setApprovingVersion(null)
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const activateMut = useMutation({
     mutationFn: (versionId: string) => toolConnectionsApi.activateVersion(connection.id, versionId),
     onSuccess: () => {
+      setError('')
       qc.invalidateQueries({ queryKey: ['tool-connections'] })
       qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const [tokenForm, setTokenForm] = useState<Record<string, boolean>>({})
@@ -240,11 +255,22 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
     access_token: string; expires_in_seconds: string; scope_str: string
   }>()
 
+  const openTokenForm = (versionId: string) => {
+    resetToken()
+    setTokenForm({ [versionId]: true })
+  }
+  const closeTokenForm = () => {
+    setTokenForm({})
+    resetToken()
+  }
+
   const pinSchemaMut = useMutation({
     mutationFn: (versionId: string) => toolConnectionsApi.pinMcpSchema(versionId),
     onSuccess: (res, versionId) => {
-      setTestResult(prev => ({ ...prev, [versionId]: { status: 'healthy', detail: t('toolConnections.pin_schema_result', { count: res.tool_count }) } }))
+      setError('')
+      setPinResult(prev => ({ ...prev, [versionId]: t('toolConnections.pin_schema_result', { count: res.tool_count }) }))
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const issueTokenMut = useMutation({
@@ -254,10 +280,11 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
         expires_in_seconds: Number(data.expires_in_seconds),
         scope: data.scope_str.split('\n').map(s => s.trim()).filter(Boolean),
       }),
-    onSuccess: (_res, { versionId }) => {
-      setTokenForm(prev => ({ ...prev, [versionId]: false }))
-      resetToken()
+    onSuccess: () => {
+      setError('')
+      closeTokenForm()
     },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const canTest = (LIVE_PROVIDER_KINDS as readonly string[]).includes(providerKind)
@@ -273,6 +300,7 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
 
       {expanded && (
         <div className="mt-2 border-t pt-2" data-testid={`connection-detail-${connection.id}`}>
+          {error && <p className="text-red-600 mb-2" role="alert" data-testid={`connection-error-${connection.id}`}>{error}</p>}
           <div className="flex items-center justify-between mb-2">
             <h5 className="font-medium">{t('toolConnections.versions')}</h5>
             <button type="button" onClick={() => setShowCreateVersion(v => !v)}
@@ -281,12 +309,16 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
             </button>
           </div>
 
+          {!canTest && (
+            <p className="text-gray-400 mb-2" data-testid={`no-health-probe-${connection.id}`}>{t('toolConnections.no_health_probe')}</p>
+          )}
+
           {showCreateVersion && (
             <form onSubmit={handleSubmit(d => createVersionMut.mutate(d))} className="space-y-2 mb-3 p-2 bg-gray-50 rounded">
               <input {...register('endpoint')} placeholder={t('toolConnections.endpoint')} className="w-full border rounded px-2 py-1" data-testid="version-endpoint-input" />
               <input {...register('audience')} placeholder={t('toolConnections.audience')} className="w-full border rounded px-2 py-1" />
               <textarea {...register('scopes_str')} placeholder={t('toolConnections.scopes')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
-              <input {...register('credential_reference')} placeholder={t('toolConnections.credential_reference')} className="w-full border rounded px-2 py-1" />
+              <input {...register('credential_reference')} type="password" placeholder={t('toolConnections.credential_reference')} className="w-full border rounded px-2 py-1" />
               <textarea {...register('domains_str')} placeholder={t('toolConnections.allowlist_domains')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
               <button type="submit" disabled={createVersionMut.isPending} className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid="submit-create-version">
                 {t('toolConnections.save')}
@@ -341,7 +373,7 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
                             className="px-2 py-0.5 border rounded hover:bg-gray-50 disabled:opacity-50" data-testid={`pin-schema-${v.id}`}>
                             {t('toolConnections.pin_mcp_schema')}
                           </button>
-                          <button type="button" onClick={() => setTokenForm(prev => ({ ...prev, [v.id]: !prev[v.id] }))}
+                          <button type="button" onClick={() => (tokenForm[v.id] ? closeTokenForm() : openTokenForm(v.id))}
                             className="px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`issue-token-toggle-${v.id}`}>
                             {t('toolConnections.issue_mcp_token')}
                           </button>
@@ -353,6 +385,9 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
                     <p className={`mt-1 ${testResult[v.id].status === 'healthy' ? 'text-green-600' : 'text-amber-600'}`} data-testid={`test-result-${v.id}`}>
                       {testResult[v.id].detail}
                     </p>
+                  )}
+                  {pinResult[v.id] && (
+                    <p className="mt-1 text-gray-500" data-testid={`pin-result-${v.id}`}>{pinResult[v.id]}</p>
                   )}
                   {tokenForm[v.id] && (
                     <form onSubmit={handleTokenSubmit(data => issueTokenMut.mutate({ versionId: v.id, data }))}
@@ -425,6 +460,7 @@ function SkillsSection() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [showCreatePackage, setShowCreatePackage] = useState(false)
+  const [packageError, setPackageError] = useState('')
   const { register, handleSubmit, reset } = useForm<{ name: string }>()
 
   const { data: packages, isLoading } = useQuery({
@@ -435,10 +471,12 @@ function SkillsSection() {
   const createPackageMut = useMutation({
     mutationFn: (data: { name: string }) => skillsApi.createPackage(data.name),
     onSuccess: () => {
+      setPackageError('')
       qc.invalidateQueries({ queryKey: ['skill-packages'] })
       setShowCreatePackage(false)
       reset()
     },
+    onError: (err: unknown) => setPackageError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   return (
@@ -450,6 +488,7 @@ function SkillsSection() {
           <Plus size={13} /> {t('toolConnections.create_skill_package')}
         </button>
       </div>
+      {packageError && <p className="text-red-600 text-sm mb-2" role="alert" data-testid="skills-section-error">{packageError}</p>}
       {showCreatePackage && (
         <form onSubmit={handleSubmit(d => createPackageMut.mutate(d))} className="flex gap-2 mb-3">
           <input {...register('name', { required: true })} placeholder={t('toolConnections.skill_package_name')}
@@ -478,6 +517,7 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
   const [expanded, setExpanded] = useState(false)
   const [showCreateVersion, setShowCreateVersion] = useState(false)
   const [approvingVersion, setApprovingVersion] = useState<SkillVersion | null>(null)
+  const [versionError, setVersionError] = useState('')
   const { register, handleSubmit, reset } = useForm<{ manifest_json: string; signatures_json: string }>()
 
   const { data: versions, isLoading } = useQuery({
@@ -490,18 +530,22 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
     mutationFn: (data: { manifest_json: string; signatures_json: string }) =>
       skillsApi.createVersion(packageId, JSON.parse(data.manifest_json), JSON.parse(data.signatures_json)),
     onSuccess: () => {
+      setVersionError('')
       qc.invalidateQueries({ queryKey: ['skill-versions', packageId] })
       setShowCreateVersion(false)
       reset()
     },
+    onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   const approveMut = useMutation({
     mutationFn: (versionId: string) => skillsApi.approveVersion(versionId),
     onSuccess: () => {
+      setVersionError('')
       qc.invalidateQueries({ queryKey: ['skill-versions', packageId] })
       setApprovingVersion(null)
     },
+    onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
   return (
@@ -511,6 +555,7 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
       </button>
       {expanded && (
         <div className="mt-3 border-t pt-3 text-xs" data-testid={`skill-package-detail-${packageId}`}>
+          {versionError && <p className="text-red-600 mb-2" role="alert" data-testid={`skill-version-error-${packageId}`}>{versionError}</p>}
           <div className="flex items-center justify-between mb-2">
             <h5 className="font-medium">{t('toolConnections.skill_versions')}</h5>
             <button type="button" onClick={() => setShowCreateVersion(v => !v)}
