@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import {
   toolConnectionsApi, PROVIDER_KINDS, LIVE_PROVIDER_KINDS, type ToolProvider, type ToolConnection, type ToolConnectionVersion,
 } from '@/api/toolConnections'
+import { skillsApi, type SkillVersion } from '@/api/skills'
 import { Plus, Loader2, X } from 'lucide-react'
 
 interface ProviderFormValues {
@@ -78,6 +79,10 @@ export default function ToolConnectionsPage() {
           ))}
         </div>
       )}
+
+      <div className="mt-8 border-t pt-6">
+        <SkillsSection />
+      </div>
 
       {showCreateProvider && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowCreateProvider(false)}>
@@ -230,6 +235,31 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
     },
   })
 
+  const [tokenForm, setTokenForm] = useState<Record<string, boolean>>({})
+  const { register: registerToken, handleSubmit: handleTokenSubmit, reset: resetToken } = useForm<{
+    access_token: string; expires_in_seconds: string; scope_str: string
+  }>()
+
+  const pinSchemaMut = useMutation({
+    mutationFn: (versionId: string) => toolConnectionsApi.pinMcpSchema(versionId),
+    onSuccess: (res, versionId) => {
+      setTestResult(prev => ({ ...prev, [versionId]: { status: 'healthy', detail: t('toolConnections.pin_schema_result', { count: res.tool_count }) } }))
+    },
+  })
+
+  const issueTokenMut = useMutation({
+    mutationFn: ({ versionId, data }: { versionId: string; data: { access_token: string; expires_in_seconds: string; scope_str: string } }) =>
+      toolConnectionsApi.issueMcpToken(versionId, {
+        access_token: data.access_token,
+        expires_in_seconds: Number(data.expires_in_seconds),
+        scope: data.scope_str.split('\n').map(s => s.trim()).filter(Boolean),
+      }),
+    onSuccess: (_res, { versionId }) => {
+      setTokenForm(prev => ({ ...prev, [versionId]: false }))
+      resetToken()
+    },
+  })
+
   const canTest = (LIVE_PROVIDER_KINDS as readonly string[]).includes(providerKind)
 
   return (
@@ -305,12 +335,39 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
                           {t('toolConnections.activate')}
                         </button>
                       )}
+                      {providerKind === 'external_mcp' && v.approval_status === 'approved' && (
+                        <>
+                          <button type="button" onClick={() => pinSchemaMut.mutate(v.id)} disabled={pinSchemaMut.isPending}
+                            className="px-2 py-0.5 border rounded hover:bg-gray-50 disabled:opacity-50" data-testid={`pin-schema-${v.id}`}>
+                            {t('toolConnections.pin_mcp_schema')}
+                          </button>
+                          <button type="button" onClick={() => setTokenForm(prev => ({ ...prev, [v.id]: !prev[v.id] }))}
+                            className="px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`issue-token-toggle-${v.id}`}>
+                            {t('toolConnections.issue_mcp_token')}
+                          </button>
+                        </>
+                      )}
                     </span>
                   </div>
                   {testResult[v.id] && (
                     <p className={`mt-1 ${testResult[v.id].status === 'healthy' ? 'text-green-600' : 'text-amber-600'}`} data-testid={`test-result-${v.id}`}>
                       {testResult[v.id].detail}
                     </p>
+                  )}
+                  {tokenForm[v.id] && (
+                    <form onSubmit={handleTokenSubmit(data => issueTokenMut.mutate({ versionId: v.id, data }))}
+                      className="mt-2 space-y-1.5 p-2 bg-gray-50 rounded" data-testid={`issue-token-form-${v.id}`}>
+                      <input {...registerToken('access_token', { required: true })} type="password"
+                        placeholder={t('toolConnections.mcp_token_placeholder')} className="w-full border rounded px-2 py-1" data-testid={`mcp-token-input-${v.id}`} />
+                      <input {...registerToken('expires_in_seconds', { required: true })} type="number"
+                        placeholder={t('toolConnections.mcp_token_ttl_placeholder')} className="w-full border rounded px-2 py-1" />
+                      <textarea {...registerToken('scope_str')} rows={2}
+                        placeholder={t('toolConnections.mcp_scope_placeholder')} className="w-full border rounded px-2 py-1 font-mono" />
+                      <button type="submit" disabled={issueTokenMut.isPending}
+                        className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid={`submit-issue-token-${v.id}`}>
+                        {t('toolConnections.save')}
+                      </button>
+                    </form>
                   )}
                 </li>
               ))}
@@ -360,6 +417,160 @@ function VersionApprovalDialog({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function SkillsSection() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [showCreatePackage, setShowCreatePackage] = useState(false)
+  const { register, handleSubmit, reset } = useForm<{ name: string }>()
+
+  const { data: packages, isLoading } = useQuery({
+    queryKey: ['skill-packages'],
+    queryFn: () => skillsApi.listPackages().then(res => res.items),
+  })
+
+  const createPackageMut = useMutation({
+    mutationFn: (data: { name: string }) => skillsApi.createPackage(data.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skill-packages'] })
+      setShowCreatePackage(false)
+      reset()
+    },
+  })
+
+  return (
+    <div data-testid="skills-section">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-semibold">{t('toolConnections.skills_title')}</h3>
+        <button type="button" onClick={() => setShowCreatePackage(v => !v)}
+          className="flex items-center gap-2 border px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50" data-testid="create-skill-package-button">
+          <Plus size={13} /> {t('toolConnections.create_skill_package')}
+        </button>
+      </div>
+      {showCreatePackage && (
+        <form onSubmit={handleSubmit(d => createPackageMut.mutate(d))} className="flex gap-2 mb-3">
+          <input {...register('name', { required: true })} placeholder={t('toolConnections.skill_package_name')}
+            className="border rounded-lg px-3 py-1.5 text-sm flex-1" data-testid="skill-package-name-input" />
+          <button type="submit" disabled={createPackageMut.isPending} className="px-4 py-1.5 bg-black text-white rounded-lg text-sm disabled:opacity-50" data-testid="submit-create-skill-package">
+            {t('toolConnections.save')}
+          </button>
+        </form>
+      )}
+      {isLoading ? (
+        <p className="text-gray-400 text-sm">{t('common.loading', '加载中…')}</p>
+      ) : packages && packages.length === 0 ? (
+        <p className="text-sm text-gray-400" data-testid="skill-packages-empty">{t('toolConnections.empty_skill_packages')}</p>
+      ) : (
+        <div className="grid gap-3">
+          {(packages ?? []).map(pkg => <SkillPackageCard key={pkg.id} packageId={pkg.id} packageName={pkg.name} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SkillPackageCard({ packageId, packageName }: { packageId: string; packageName: string }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [expanded, setExpanded] = useState(false)
+  const [showCreateVersion, setShowCreateVersion] = useState(false)
+  const [approvingVersion, setApprovingVersion] = useState<SkillVersion | null>(null)
+  const { register, handleSubmit, reset } = useForm<{ manifest_json: string; signatures_json: string }>()
+
+  const { data: versions, isLoading } = useQuery({
+    queryKey: ['skill-versions', packageId],
+    queryFn: () => skillsApi.listVersions(packageId).then(res => res.items),
+    enabled: expanded,
+  })
+
+  const createVersionMut = useMutation({
+    mutationFn: (data: { manifest_json: string; signatures_json: string }) =>
+      skillsApi.createVersion(packageId, JSON.parse(data.manifest_json), JSON.parse(data.signatures_json)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skill-versions', packageId] })
+      setShowCreateVersion(false)
+      reset()
+    },
+  })
+
+  const approveMut = useMutation({
+    mutationFn: (versionId: string) => skillsApi.approveVersion(versionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skill-versions', packageId] })
+      setApprovingVersion(null)
+    },
+  })
+
+  return (
+    <div className="bg-white border rounded-lg p-4" data-testid={`skill-package-card-${packageId}`}>
+      <button type="button" onClick={() => setExpanded(e => !e)} className="w-full text-left text-sm font-semibold">
+        {packageName}
+      </button>
+      {expanded && (
+        <div className="mt-3 border-t pt-3 text-xs" data-testid={`skill-package-detail-${packageId}`}>
+          <div className="flex items-center justify-between mb-2">
+            <h5 className="font-medium">{t('toolConnections.skill_versions')}</h5>
+            <button type="button" onClick={() => setShowCreateVersion(v => !v)}
+              className="flex items-center gap-1 px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`create-skill-version-${packageId}`}>
+              <Plus size={11} /> {t('toolConnections.create_skill_version')}
+            </button>
+          </div>
+          {showCreateVersion && (
+            <form onSubmit={handleSubmit(d => createVersionMut.mutate(d))} className="space-y-2 mb-3 p-2 bg-gray-50 rounded">
+              <textarea {...register('manifest_json', { required: true })} rows={4}
+                placeholder={t('toolConnections.skill_manifest')} className="w-full border rounded px-2 py-1 font-mono" data-testid="skill-manifest-input" />
+              <textarea {...register('signatures_json', { required: true })} rows={3}
+                placeholder={t('toolConnections.skill_signatures')} className="w-full border rounded px-2 py-1 font-mono" data-testid="skill-signatures-input" />
+              <button type="submit" disabled={createVersionMut.isPending} className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid="submit-create-skill-version">
+                {t('toolConnections.save')}
+              </button>
+            </form>
+          )}
+          {isLoading ? (
+            <p className="text-gray-400">{t('common.loading', '加载中…')}</p>
+          ) : versions && versions.length === 0 ? (
+            <p className="text-gray-400" data-testid={`skill-versions-empty-${packageId}`}>{t('toolConnections.empty_skill_versions')}</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {(versions ?? []).map(v => (
+                <li key={v.id} className="border rounded p-1.5 flex items-center justify-between" data-testid={`skill-version-row-${v.id}`}>
+                  <span>
+                    v{v.version_no} ·{' '}
+                    <span className={v.approval_status === 'approved' ? 'text-green-600' : v.approval_status === 'rejected' ? 'text-red-600' : 'text-amber-600'}>
+                      {t(`toolConnections.approval_${v.approval_status}`)}
+                    </span>
+                  </span>
+                  {v.approval_status === 'pending' && (
+                    <button type="button" onClick={() => setApprovingVersion(v)}
+                      className="px-2 py-0.5 border rounded hover:bg-gray-50 text-blue-600" data-testid={`approve-skill-version-${v.id}`}>
+                      {t('toolConnections.approve')}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {approvingVersion && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setApprovingVersion(null)}>
+          <div className="bg-white rounded-lg shadow-lg p-6 w-[480px]" onClick={e => e.stopPropagation()} data-testid="approve-skill-version-dialog">
+            <h3 className="font-semibold mb-2">{t('toolConnections.approve_confirm_title')}</h3>
+            <p className="text-sm text-gray-500 mb-3">{t('toolConnections.skill_approve_confirm_body')}</p>
+            <p className="text-xs font-mono bg-gray-50 rounded p-2 mb-4 break-all">{approvingVersion.canonical_hash}</p>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setApprovingVersion(null)} className="px-4 py-2 border rounded-lg text-sm">{t('toolConnections.cancel')}</button>
+              <button type="button" onClick={() => approveMut.mutate(approvingVersion.id)} disabled={approveMut.isPending}
+                className="px-4 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-50" data-testid="confirm-approve-skill-version">
+                {t('toolConnections.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -6,8 +6,11 @@ import { setupServer } from 'msw/node'
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
 import ToolConnectionsPage from './ToolConnectionsPage'
 import type { ToolConnection, ToolConnectionVersion } from '@/api/toolConnections'
+import type { SkillVersion } from '@/api/skills'
 
-const server = setupServer()
+const server = setupServer(
+  http.get('*/api/v2/skills/packages', () => HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+)
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
@@ -94,5 +97,30 @@ describe('ToolConnectionsPage', () => {
 
     await userEvent.click(screen.getByTestId('activate-version-v-1'))
     await waitFor(() => expect(screen.queryByTestId('activate-version-v-1')).toBeNull())
+  })
+
+  it('lists a skill package, creates a version from pasted manifest/signatures, and approves it', async () => {
+    const pkg = { id: 'sk-1', name: 'PDF Extractor', status: 'active' }
+    let versions: SkillVersion[] = [
+      { id: 'sv-1', package_id: 'sk-1', version_no: 1, approval_status: 'pending' as const, canonical_hash: 'deadbeef', manifest: {} },
+    ]
+    server.use(
+      http.get('*/api/v2/tool-providers', () => HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+      http.get('*/api/v2/skills/packages', () => HttpResponse.json({ data: { items: [pkg] }, message: 'ok' })),
+      http.get('*/api/v2/skills/versions', () => HttpResponse.json({ data: { items: versions }, message: 'ok' })),
+      http.post('*/api/v2/skills/versions/sv-1/approve', () => {
+        versions = versions.map(v => v.id === 'sv-1' ? { ...v, approval_status: 'approved' as const } : v)
+        return HttpResponse.json({ data: { id: 'sv-1', approval_status: 'approved' }, message: 'ok' })
+      }),
+    )
+    renderPage()
+    expect(await screen.findByTestId('skill-package-card-sk-1')).toBeTruthy()
+    await userEvent.click(screen.getByTestId('skill-package-card-sk-1').querySelector('button')!)
+    expect(await screen.findByTestId('skill-version-row-sv-1')).toBeTruthy()
+
+    await userEvent.click(screen.getByTestId('approve-skill-version-sv-1'))
+    expect(await screen.findByTestId('approve-skill-version-dialog')).toBeTruthy()
+    await userEvent.click(screen.getByTestId('confirm-approve-skill-version'))
+    await waitFor(() => expect(screen.queryByTestId('approve-skill-version-sv-1')).toBeNull())
   })
 })
