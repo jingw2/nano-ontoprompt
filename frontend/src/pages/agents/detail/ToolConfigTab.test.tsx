@@ -1,5 +1,5 @@
 import '@/i18n'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -14,6 +14,15 @@ const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
+
+beforeEach(() => {
+  server.use(
+    http.get('*/api/v1/agents/catalog/external-tools', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    http.get('*/api/v1/agents/a-1/versions/v-1/external-tools', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+  )
+})
 
 // default validation handler: every test may bind an ontology (re-registered
 // after each resetHandlers)
@@ -246,17 +255,66 @@ describe('P2C-TOOLS', () => {
     unmount()
   })
 
-  it('shows external tool cards as unavailable and issues zero P7 requests', async () => {
+  it('lists a bindable catalog entry and binds it', async () => {
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { tool_connection_version_id: 'tcv-1', connection_id: 'c-1', version_no: 1,
+            provider_id: 'p-1', provider_name: 'Web Search', provider_kind: 'search', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+    )
+    let bindBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions/v-1/external-tools', async ({ request }) => {
+        bindBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { id: 'aetb-1', alias: bindBody.alias, tool_connection_version_id: 'tcv-1' }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    await waitFor(() => expect(bindBody).not.toBeNull())
+    expect(bindBody).toMatchObject({ tool_connection_version_id: 'tcv-1' })
+  })
+
+  it('unbinds a currently bound external tool', async () => {
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/versions/v-1/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { id: 'aetb-1', alias: 'search', tool_connection_version_id: 'tcv-1', connection_id: 'c-1',
+            version_no: 1, provider_name: 'Web Search', provider_kind: 'search',
+            approval_status: 'approved', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+    )
+    let unbound = false
+    server.use(
+      http.delete('*/api/v1/agents/a-1/versions/v-1/external-tools/search', () => {
+        unbound = true
+        return HttpResponse.json({ data: { released: true }, message: 'ok' })
+      }),
+    )
+    renderTab()
+    // 'search' (the alias) is a case-insensitive substring of the wrapping
+    // "Web Search · search" row too, so findByText would match both nodes;
+    // wait on getAllByText instead to avoid a false "multiple elements" throw.
+    await waitFor(() => expect(screen.getAllByText('search', { exact: false }).length).toBeGreaterThan(0))
+    await userEvent.click(screen.getByText('解绑'))
+    await waitFor(() => expect(unbound).toBe(true))
+  })
+
+  it('keeps the Signed Skills card as a static, unavailable placeholder', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
     )
     renderTab()
     await waitFor(() => expect(screen.getByTestId('external-tool-cards')).toBeTruthy())
-    const cards = screen.getAllByTestId('external-tool-card')
-    expect(cards.length).toBeGreaterThanOrEqual(3)
-    expect(screen.getAllByText('后续提供').length).toBeGreaterThanOrEqual(3)
-    // onUnhandledRequest: 'error' above would fail the test on any P7 call
+    expect(screen.getAllByTestId('external-tool-card').length).toBe(1)
+    expect(screen.getByText('后续提供')).toBeTruthy()
   })
 
   it('shows the capability intersection drawer', async () => {

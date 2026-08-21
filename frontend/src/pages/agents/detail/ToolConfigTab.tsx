@@ -6,7 +6,8 @@ import {
   type ToolValidationResult,
 } from '@/api/agentTools'
 import { agentDetailApi, type AgentVersion } from '@/api/agentDetail'
-import ExternalToolCard from './ExternalToolCard'
+import { agentExternalToolsApi, type ExternalToolCatalogItem } from '@/api/agentExternalTools'
+import ExternalToolCard, { type BoundExternalTool } from './ExternalToolCard'
 import CapabilityDrawer from './CapabilityDrawer'
 import { useOntologyToolSelection } from '@/pages/agents/shared/useOntologyToolSelection'
 import OntologyToolSelector from '@/pages/agents/shared/OntologyToolSelector'
@@ -29,6 +30,40 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
   const [validation, setValidation] = useState<ToolValidationResult | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [externalBindings, setExternalBindings] = useState<BoundExternalTool[]>([])
+  const [externalError, setExternalError] = useState('')
+
+  const loadExternalBindings = useCallback(() => {
+    if (!activeVersion) return
+    agentExternalToolsApi.listBindings(agentId, activeVersion.id)
+      .then(res => setExternalBindings(Array.isArray(res.items) ? res.items : []))
+      .catch(() => setExternalError('AGENTS_EXTERNAL_BINDINGS_LOAD_FAILED'))
+  }, [agentId, activeVersion])
+
+  useEffect(() => { loadExternalBindings() }, [loadExternalBindings])
+
+  const bindExternal = useCallback(async (item: ExternalToolCatalogItem, alias: string) => {
+    if (!activeVersion) return
+    setExternalError('')
+    try {
+      await agentExternalToolsApi.bind(agentId, activeVersion.id,
+        { tool_connection_version_id: item.tool_connection_version_id, alias })
+      loadExternalBindings()
+    } catch {
+      setExternalError(t('agent.tools.bind_failed', '绑定失败（别名可能已被占用，或所选连接已失效）'))
+    }
+  }, [agentId, activeVersion, loadExternalBindings, t])
+
+  const unbindExternal = useCallback(async (alias: string) => {
+    if (!activeVersion) return
+    setExternalError('')
+    try {
+      await agentExternalToolsApi.unbind(agentId, activeVersion.id, alias)
+      loadExternalBindings()
+    } catch {
+      setExternalError(t('agent.tools.unbind_failed', '解绑失败'))
+    }
+  }, [agentId, activeVersion, loadExternalBindings, t])
 
   useEffect(() => {
     let cancelled = false
@@ -144,7 +179,8 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
 
       <div>
         <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.external', '外部工具')}</h3>
-        <ExternalToolCard />
+        <ExternalToolCard bindings={externalBindings} canEdit={canEdit}
+          onBind={bindExternal} onUnbind={unbindExternal} bindError={externalError} />
       </div>
 
       <p className="text-xs text-gray-400">

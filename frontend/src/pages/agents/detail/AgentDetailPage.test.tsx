@@ -63,6 +63,10 @@ function detailHandlers() {
           ], next_cursor: null, has_more: false,
         }, message: 'ok',
       })),
+    http.get('*/api/v1/agents/catalog/external-tools', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    http.get('*/api/v1/agents/a-1/versions/v-1/external-tools', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
   )
 }
 
