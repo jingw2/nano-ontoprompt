@@ -121,6 +121,23 @@ class AgentMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class AgentMemorySummary(Base):
+    __tablename__ = "agent_memory_summaries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_sessions.id", ondelete="RESTRICT"), nullable=False,
+        unique=True, index=True,
+    )
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    covers_from_ordinal: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    covers_to_ordinal: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_message_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_model_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary_token_count: Mapped[int] = mapped_column(nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class AgentTurnDispatchOutbox(Base):
     __tablename__ = "agent_turn_dispatch_outbox"
     __table_args__ = (
