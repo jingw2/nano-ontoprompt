@@ -48,7 +48,8 @@ def session():
     ))
     s.execute(text(
         "INSERT INTO model_config_versions (id, model_config_id, version_no, provider, options, behavior_hash, model_contract, created_at) "
-        "VALUES ('mcv-1', 'mc-1', 1, 'openai', '{}'::json, :hash, '[]'::json, now())"
+        "VALUES ('mcv-1', 'mc-1', 1, 'openai', '{}'::json, :hash, "
+        "'[{\"provider_model_revision\": \"test-model\"}]'::json, now())"
     ), {"hash": "0" * 64})
     s.execute(text("UPDATE model_configs SET active_version_id = 'mcv-1' WHERE id = 'mc-1'"))
     app_schema_version_id = s.execute(text(
@@ -263,3 +264,84 @@ def test_assemble_bounded_messages_orders_history_newest_to_oldest_when_trimmed(
     # only the newest 2 pairs' worth of history should survive, in original (oldest-first) order
     assert "msg29" in contents[-2] or "msg29" in contents[-1]
     assert "msg0" not in contents
+
+
+def _seed_messages(session, session_id: str, count: int):
+    for i in range(count):
+        session.execute(text(
+            "INSERT INTO agent_messages (id, session_id, role, ordinal, content, created_at) "
+            "VALUES (:id, :sid, :role, :ord, :content, now())"
+        ), {"id": f"msg-{session_id}-{i}", "sid": session_id,
+            "role": "user" if i % 2 == 0 else "assistant",
+            "ord": i, "content": f"message {i}"})
+    session.commit()
+
+
+def test_maybe_regenerate_summary_skips_below_threshold(session, monkeypatch):
+    from app.services.memory import summary as summary_module
+    _seed_messages(session, "sess-1", 10)  # below default threshold of 24
+    called = []
+    monkeypatch.setattr(summary_module, "_call_summarizer", lambda *a, **k: called.append(1))
+    changed = summary_module.maybe_regenerate_summary(session, session_id="sess-1")
+    assert changed is False
+    assert called == []
+
+
+def test_maybe_regenerate_summary_calls_model_above_threshold(session, monkeypatch):
+    from app.services.memory import summary as summary_module
+    _seed_messages(session, "sess-1", 30)
+    monkeypatch.setattr(summary_module, "_call_summarizer", lambda *a, **k: {
+        "confirmed_facts": ["the user is investigating order 42"],
+        "decisions": [], "unresolved_questions": [], "source_ordinals": [0, 29],
+    })
+    changed = summary_module.maybe_regenerate_summary(session, session_id="sess-1")
+    assert changed is True
+    row = session.execute(text(
+        "SELECT summary_text, covers_from_ordinal, covers_to_ordinal FROM agent_memory_summaries "
+        "WHERE session_id = 'sess-1'"
+    )).mappings().one()
+    assert "order 42" in row["summary_text"]
+    assert row["covers_to_ordinal"] == 29
+
+
+def test_maybe_regenerate_summary_retains_prior_on_ungrounded_output(session, monkeypatch):
+    from app.services.memory import summary as summary_module
+    # 50 seeded, existing summary covers up to ordinal 15 -> 34 unsummarized
+    # (ordinals 16-49), comfortably above the default threshold of 24, so
+    # this test actually reaches the groundedness check rather than
+    # returning early on the threshold check (a real earlier draft of this
+    # test used only 30 messages, which left just 14 unsummarized — below
+    # threshold — and passed for the wrong reason without ever calling the
+    # summarizer at all; keep the count high enough that it doesn't regress
+    # back to that false-positive shape)
+    _seed_messages(session, "sess-1", 50)
+    session.execute(text(
+        "INSERT INTO agent_memory_summaries "
+        "(id, session_id, summary_text, covers_from_ordinal, covers_to_ordinal, "
+        "source_message_hash, summary_model_name, summary_token_count, updated_at) "
+        "VALUES ('sum-old', 'sess-1', 'the prior good summary', 0, 15, "
+        "'h' || repeat('0', 63), 'gpt-4o', 10, now())"
+    ))
+    session.commit()
+    # missing required schema fields -> ungrounded, must retain prior
+    monkeypatch.setattr(summary_module, "_call_summarizer", lambda *a, **k: {"garbage": True})
+    changed = summary_module.maybe_regenerate_summary(session, session_id="sess-1")
+    assert changed is False
+    row = session.execute(text(
+        "SELECT summary_text FROM agent_memory_summaries WHERE session_id = 'sess-1'"
+    )).mappings().one()
+    assert row["summary_text"] == "the prior good summary"
+
+
+def test_maybe_regenerate_summary_noop_when_short_term_disabled(session, monkeypatch):
+    from app.services.memory import summary as summary_module
+    session.execute(text(
+        "UPDATE agent_versions SET memory_settings = '{\"short_term_enabled\": false}'::json WHERE id = 'av-1'"
+    ))
+    session.commit()
+    _seed_messages(session, "sess-1", 30)
+    called = []
+    monkeypatch.setattr(summary_module, "_call_summarizer", lambda *a, **k: called.append(1))
+    changed = summary_module.maybe_regenerate_summary(session, session_id="sess-1")
+    assert changed is False
+    assert called == []
