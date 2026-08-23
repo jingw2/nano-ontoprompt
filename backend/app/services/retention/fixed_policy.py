@@ -1,6 +1,6 @@
 """Memory-free fixed-policy retention (P3A-RETENTION, Section 7).
 
-The ten idempotent steps purge core Agent data using a fenced purge job
+The idempotent steps purge core Agent data using a fenced purge job
 (lease/cursor/generation) and a purge marker that the checkpoint saver's
 `adelete_thread` requires.  Each step is independently durable: a crash
 mid-step resumes from the cursor; a step never runs a known effect twice.
@@ -36,7 +36,7 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
-TEN_STEPS = (
+PURGE_STEPS = (
     "redact_payloads",
     "delete_expired_stream_tickets",
     "delete_resolved_clarifications",
@@ -45,6 +45,7 @@ TEN_STEPS = (
     "delete_checkpoint_rows",
     "delete_delivered_outbox",
     "delete_messages_turn_marker",
+    "delete_memory_summaries",
     "clear_session_pointer",
     "graph_index_cleanup",
 )
@@ -91,7 +92,7 @@ def _marker(db: Session, turn_id: str, job_id: str, *, policy_version_id: str | 
 
 def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 50,
                     job_id: str | None = None, claim_token: str | None = None) -> dict:
-    """Execute the ten idempotent steps for a claimed batch of terminal Turns,
+    """Execute the idempotent steps for a claimed batch of terminal Turns,
     using each class's currently active retention duration (never below its
     table minimum — see app/services/retention/policy.py:TABLE_MINIMUMS).
     A hold on a turn or its session protects that turn's redaction/deletion
@@ -224,7 +225,17 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
         removed += 1
     ledger["delete_messages_turn_marker"] = removed
 
-    # 9. clear session pointer + delete sessions with no turns/messages
+    # delete short-term memory summaries for sessions about to become
+    # eligible for deletion below — session_id is RESTRICT, so this MUST
+    # run before the session-delete query or that query's own FK check fails
+    ledger["delete_memory_summaries"] = db.execute(text(
+        "DELETE FROM agent_memory_summaries WHERE session_id IN ("
+        "  SELECT id FROM agent_sessions WHERE status = 'closed' AND NOT EXISTS "
+        "  (SELECT 1 FROM agent_messages m WHERE m.session_id = agent_sessions.id)"
+        ")"
+    )).rowcount or 0
+
+    # 10. clear session pointer + delete sessions with no turns/messages
     ledger["clear_session_pointer"] = db.execute(text(
         "UPDATE agent_sessions SET active_turn_id = NULL, updated_at = :now "
         "WHERE active_turn_id IS NOT NULL AND NOT EXISTS "
@@ -235,7 +246,7 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
         "(SELECT 1 FROM agent_messages m WHERE m.session_id = agent_sessions.id)"
     )).rowcount or 0
 
-    # 10. graph-index cleanup: consume outbox rows for purged ontology
+    # 11. graph-index cleanup: consume outbox rows for purged ontology
     ledger["graph_index_cleanup"] = db.execute(text(
         "DELETE FROM agent_index_outbox WHERE state = 'applied' AND created_at < :cutoff"
     ), {"cutoff": cutoff("graph_index.delete")}).rowcount or 0

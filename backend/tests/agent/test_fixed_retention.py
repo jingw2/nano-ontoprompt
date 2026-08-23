@@ -32,7 +32,7 @@ def test_p3a_retention_red_contract():
             failures.append(f"missing {path}")
     svc = BACKEND_DIR / "app" / "services" / "retention" / "fixed_policy.py"
     if svc.exists():
-        for symbol in ("run_fixed_purge", "claim_purge_job", "TEN_STEPS"):
+        for symbol in ("run_fixed_purge", "claim_purge_job", "PURGE_STEPS"):
             if symbol not in svc.read_text():
                 failures.append(f"fixed_policy.py missing {symbol}")
     if failures:
@@ -62,7 +62,7 @@ def schema():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
+    assert _alembic(schema, "upgrade", "0018_agent_memory_short_term").returncode == 0
     yield schema
     with engine.begin() as connection:
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -143,6 +143,13 @@ def test_fixed_purge_ten_steps_and_marker(schema):
     session = _session(schema)
     _seed_turn(session)
     session.execute(text(
+        "INSERT INTO agent_memory_summaries "
+        "(id, session_id, summary_text, covers_from_ordinal, covers_to_ordinal, "
+        "source_message_hash, summary_model_name, summary_token_count, updated_at) "
+        "VALUES ('sum-1', 's-1', 'a prior summary', 0, 0, "
+        "'h' || repeat('0', 63), 'gpt-4o', 10, now())"
+    ))
+    session.execute(text(
         "INSERT INTO security_domains (id, key, status, created_at) VALUES (:id,'default','active',now()) ON CONFLICT DO NOTHING"
     ), {"id": DEFAULT_DOMAIN})
     session.execute(text(
@@ -150,11 +157,12 @@ def test_fixed_purge_ten_steps_and_marker(schema):
         "VALUES ('j-1', :dom, 'turn', now(), 500, 0)"
     ), {"dom": DEFAULT_DOMAIN})
     session.commit()
-    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge, TEN_STEPS
+    from app.services.retention.fixed_policy import claim_purge_job, run_fixed_purge, PURGE_STEPS
     claim = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="turn")
     result = run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN,
                              job_id=claim["id"], claim_token=claim["claim_token"])
-    assert set(result["ledger"]) == set(TEN_STEPS)
+    assert set(result["ledger"]) == set(PURGE_STEPS)
+    assert result["ledger"]["delete_memory_summaries"] == 1
     # terminal turn + its messages purged; marker was created then cleaned
     assert session.execute(text("SELECT count(*) FROM agent_turns")).scalar_one() == 0
     assert session.execute(text("SELECT count(*) FROM agent_messages")).scalar_one() == 0
@@ -165,6 +173,10 @@ def test_fixed_purge_ten_steps_and_marker(schema):
     assert session.execute(text("SELECT count(*) FROM agent_clarification_requests")).scalar_one() == 0
     # applied index outbox cleaned
     assert session.execute(text("SELECT count(*) FROM agent_index_outbox")).scalar_one() == 0
+    # the summary is gone, and the now-empty closed session was deleted too
+    # (the DELETE ran instead of failing on its own FK check)
+    assert session.execute(text("SELECT count(*) FROM agent_memory_summaries")).scalar_one() == 0
+    assert session.execute(text("SELECT 1 FROM agent_sessions WHERE id = 's-1'")).scalar_one_or_none() is None
     session.close()
 
 
