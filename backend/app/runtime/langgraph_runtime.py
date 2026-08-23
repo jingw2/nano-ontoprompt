@@ -576,10 +576,12 @@ class LangGraphRuntime:
         history_rows = [{"role": m["role"] if m["role"] in ("user", "assistant") else "user",
                          "content": m["content"] or ""} for m in history]
 
-        # application_state is passed to assemble_bounded_messages as its own
-        # parameter below — kept out of this blob to avoid double-counting
-        # (and double-charging) its tokens against the budget.
-        ontology_context = json.dumps({
+        # merged into application_state below (not passed as a pre-serialized
+        # retrieval_required string) so assemble_bounded_messages JSON-encodes
+        # it exactly once — a second json.dumps pass here would double-encode
+        # it (an escaped-JSON-string-inside-JSON) and undercount its real
+        # token cost against the budget.
+        ontology_context = {
             "ontologies": [
                 {"ontology_id": o["ontology_id"], "entities": o.get("entities", []),
                  "relations": o.get("relations", []), "logic_rules": o.get("logic_rules", []),
@@ -587,12 +589,12 @@ class LangGraphRuntime:
                 for o in assembled["ontologies"]
             ],
             "available_tools": [t["function"]["name"] for t in tools],
-        }, ensure_ascii=False)
+        }
 
         messages = assemble_bounded_messages(
             system_prompt=system, tool_schemas=tools,
-            application_state=assembled["application_state"], retrieval_required=[ontology_context],
-            retrieval_optional=[], summary_text=summary_text, recalled_memories=[],
+            application_state={**assembled["application_state"], **ontology_context},
+            retrieval_required=[], retrieval_optional=[], summary_text=summary_text, recalled_memories=[],
             history_rows=history_rows, pending_interrupt=None,
             user_message=context.user_message or "请继续。", model_name=context.model_name or "gpt-4o",
             budgets=memory_settings,

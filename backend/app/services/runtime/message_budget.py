@@ -99,7 +99,8 @@ def assemble_bounded_messages(
     if included_recall:
         context_blob["recalled_memories"] = included_recall
 
-    system = system_prompt + "\n\n## OntoPrompt context\n" + json.dumps(context_blob, ensure_ascii=False)
+    system = (system_prompt + "\n\n## OntoPrompt context (grounded; do not invent facts outside it)\n"
+               + json.dumps(context_blob, ensure_ascii=False))
     messages: list[dict] = [{"role": "system", "content": system}]
     if pending_interrupt:
         messages.append({"role": "user", "content": pending_interrupt})

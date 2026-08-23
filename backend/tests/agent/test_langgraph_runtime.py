@@ -297,6 +297,31 @@ def test_real_runtime_model_error_terminalizes_failed(db):
     assert all("Answer for" not in str(e.payload) for e in events)
 
 
+def test_real_runtime_context_budget_exceeded_fails_closed(db, monkeypatch):
+    """Regression (P6B-1 Task 4): ContextBudgetExceeded raised from
+    _build_messages_and_tools must surface at the start_turn level as a
+    turn_failed event with error_code CONTEXT_BUDGET_EXCEEDED — not fall
+    through to the generic RUNTIME_EXECUTION_FAILED except-Exception branch,
+    and the model must never be called."""
+    _seed_unit_graph(db)
+
+    def caller(caller_info, messages, tools):
+        raise AssertionError("the model must never be called when the context budget is exceeded")
+
+    def _boom(self, context, assembled):
+        from app.services.runtime.message_budget import ContextBudgetExceeded
+        raise ContextBudgetExceeded("CONTEXT_BUDGET_EXCEEDED: required material needs 99999 tokens, only 100 available")
+
+    monkeypatch.setattr(
+        "app.runtime.langgraph_runtime.LangGraphRuntime._build_messages_and_tools", _boom)
+    runtime = LangGraphRuntime(db, caller=caller)
+    events = _run(runtime, _context())
+    assert [e.event_type for e in events] == [
+        "turn_started", "resolve_snapshot", "assemble_context", "turn_failed",
+    ]
+    assert events[-1].payload["error_code"] == "CONTEXT_BUDGET_EXCEEDED"
+
+
 def test_real_runtime_uses_pinned_system_prompt_and_context(db):
     _seed_unit_graph(db, system_prompt="你是供应链助手，必须用中文回答。")
     seen = {}
