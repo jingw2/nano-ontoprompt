@@ -10,29 +10,82 @@ interface Props {
   onDirtyChange: (dirty: boolean) => void
 }
 
+// Must match backend/app/services/agent/memory_settings.py exactly.
+const DEFAULTS = {
+  short_term_enabled: true,
+  long_term_enabled: false,
+  message_pairs: 12,
+  summary_threshold: 24,
+  summary_token_budget: 1200,
+  recall_token_budget: 800,
+  recall_count: 8,
+}
+
+const RANGES = {
+  message_pairs: [2, 20] as const,
+  summary_threshold: [8, 40] as const,
+  summary_token_budget: [256, 2048] as const,
+  recall_token_budget: [128, 1200] as const,
+  recall_count: [1, 12] as const,
+}
+
+function boolOrDefault(v: unknown, d: boolean): boolean {
+  return typeof v === 'boolean' ? v : d
+}
+
+function numOrDefault(v: unknown, d: number): number {
+  return typeof v === 'number' ? v : d
+}
+
+function clamp(value: number, [lo, hi]: readonly [number, number]): number {
+  if (Number.isNaN(value)) return lo
+  return Math.min(Math.max(value, lo), hi)
+}
+
 export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSaved, onDirtyChange }: Props) {
   const { t } = useTranslation()
-  const [shortTermEnabled, setShortTermEnabled] = useState(false)
-  const [longTermEnabled, setLongTermEnabled] = useState(false)
-  const [budget, setBudget] = useState('')
+  const [shortTermEnabled, setShortTermEnabled] = useState(DEFAULTS.short_term_enabled)
+  const [longTermEnabled, setLongTermEnabled] = useState(DEFAULTS.long_term_enabled)
+  const [messagePairs, setMessagePairs] = useState(String(DEFAULTS.message_pairs))
+  const [summaryThreshold, setSummaryThreshold] = useState(String(DEFAULTS.summary_threshold))
+  const [summaryTokenBudget, setSummaryTokenBudget] = useState(String(DEFAULTS.summary_token_budget))
+  const [recallTokenBudget, setRecallTokenBudget] = useState(String(DEFAULTS.recall_token_budget))
+  const [recallCount, setRecallCount] = useState(String(DEFAULTS.recall_count))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const initial = (activeVersion?.memory_settings ?? {}) as Record<string, unknown>
 
+  const initShortTermEnabled = boolOrDefault(initial.short_term_enabled, DEFAULTS.short_term_enabled)
+  const initLongTermEnabled = boolOrDefault(initial.long_term_enabled, DEFAULTS.long_term_enabled)
+  const initMessagePairs = String(numOrDefault(initial.message_pairs, DEFAULTS.message_pairs))
+  const initSummaryThreshold = String(numOrDefault(initial.summary_threshold, DEFAULTS.summary_threshold))
+  const initSummaryTokenBudget = String(numOrDefault(initial.summary_token_budget, DEFAULTS.summary_token_budget))
+  const initRecallTokenBudget = String(numOrDefault(initial.recall_token_budget, DEFAULTS.recall_token_budget))
+  const initRecallCount = String(numOrDefault(initial.recall_count, DEFAULTS.recall_count))
+
   useEffect(() => {
     void Promise.resolve().then(() => {
-      setShortTermEnabled(initial.short_term_enabled === true)
-      setLongTermEnabled(initial.long_term_enabled === true)
-      setBudget(typeof initial.budget === 'number' ? String(initial.budget) : '')
+      setShortTermEnabled(initShortTermEnabled)
+      setLongTermEnabled(initLongTermEnabled)
+      setMessagePairs(initMessagePairs)
+      setSummaryThreshold(initSummaryThreshold)
+      setSummaryTokenBudget(initSummaryTokenBudget)
+      setRecallTokenBudget(initRecallTokenBudget)
+      setRecallCount(initRecallCount)
       setError('')
     })
     onDirtyChange(false)
-  }, [activeVersion, onDirtyChange]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVersion, onDirtyChange])
 
-  const dirty = shortTermEnabled !== (initial.short_term_enabled === true)
-    || longTermEnabled !== (initial.long_term_enabled === true)
-    || budget !== (typeof initial.budget === 'number' ? String(initial.budget) : '')
+  const dirty = shortTermEnabled !== initShortTermEnabled
+    || longTermEnabled !== initLongTermEnabled
+    || messagePairs !== initMessagePairs
+    || summaryThreshold !== initSummaryThreshold
+    || summaryTokenBudget !== initSummaryTokenBudget
+    || recallTokenBudget !== initRecallTokenBudget
+    || recallCount !== initRecallCount
 
   useEffect(() => {
     onDirtyChange(dirty)
@@ -46,8 +99,12 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
       const memory_settings: Record<string, unknown> = {
         short_term_enabled: shortTermEnabled,
         long_term_enabled: longTermEnabled,
+        message_pairs: clamp(Number(messagePairs), RANGES.message_pairs),
+        summary_threshold: clamp(Number(summaryThreshold), RANGES.summary_threshold),
+        summary_token_budget: clamp(Number(summaryTokenBudget), RANGES.summary_token_budget),
+        recall_token_budget: clamp(Number(recallTokenBudget), RANGES.recall_token_budget),
+        recall_count: clamp(Number(recallCount), RANGES.recall_count),
       }
-      if (budget !== '') memory_settings.budget = Number(budget)
       const result = await agentDetailApi.saveVersion(agentId, {
         base_version_no: activeVersion.version_no,
         name: activeVersion.name,
@@ -67,7 +124,8 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
     } finally {
       setSaving(false)
     }
-  }, [agentId, activeVersion, shortTermEnabled, longTermEnabled, budget, onSaved, t])
+  }, [agentId, activeVersion, shortTermEnabled, longTermEnabled, messagePairs, summaryThreshold,
+    summaryTokenBudget, recallTokenBudget, recallCount, onSaved, t])
 
   if (!activeVersion) {
     return <div className="p-6 text-gray-400">{t('common.loading', '加载中...')}</div>
@@ -86,6 +144,40 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         <p className="text-xs text-gray-500 pl-7">{t('agent.memory.short_term_desc', '保留当前会话内的上下文（最近对话轮次），用于保持对话连贯性。仅在本会话内有效。')}</p>
       </div>
 
+      <div className="border rounded-lg p-3 space-y-3">
+        <p className="text-xs font-medium text-gray-600">{t('agent.memory.short_term_group', '短期记忆参数')}</p>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-message-pairs">
+            {t('agent.memory.message_pairs', '保留对话轮次')}
+          </label>
+          <input id="memory-message-pairs" type="number" min={RANGES.message_pairs[0]} max={RANGES.message_pairs[1]}
+            value={messagePairs} disabled={!canEdit}
+            onChange={e => setMessagePairs(e.target.value)}
+            className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+          <p className="text-xs text-gray-500 mt-1">{t('agent.memory.message_pairs_desc', '短期记忆中保留的最近对话轮次数量（2-20）。')}</p>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-summary-threshold">
+            {t('agent.memory.summary_threshold', '摘要触发阈值')}
+          </label>
+          <input id="memory-summary-threshold" type="number" min={RANGES.summary_threshold[0]} max={RANGES.summary_threshold[1]}
+            value={summaryThreshold} disabled={!canEdit}
+            onChange={e => setSummaryThreshold(e.target.value)}
+            className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+          <p className="text-xs text-gray-500 mt-1">{t('agent.memory.summary_threshold_desc', '对话轮次超过该阈值时自动生成摘要（8-40）。')}</p>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-summary-token-budget">
+            {t('agent.memory.summary_token_budget', '摘要 Token 预算')}
+          </label>
+          <input id="memory-summary-token-budget" type="number" min={RANGES.summary_token_budget[0]} max={RANGES.summary_token_budget[1]}
+            value={summaryTokenBudget} disabled={!canEdit}
+            onChange={e => setSummaryTokenBudget(e.target.value)}
+            className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+          <p className="text-xs text-gray-500 mt-1">{t('agent.memory.summary_token_budget_desc', '生成摘要时可使用的最大 Token 数（256-2048）。')}</p>
+        </div>
+      </div>
+
       <div className="border rounded-lg p-3 space-y-1">
         <label className="flex items-center gap-3 text-sm">
           <input type="checkbox" checked={longTermEnabled} disabled={!canEdit}
@@ -95,14 +187,32 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         <p className="text-xs text-gray-500 pl-7">{t('agent.memory.long_term_desc', '跨会话保留重要事实与结论，写入长期存储（向量索引），供后续会话检索复用。')}</p>
       </div>
 
-      <div>
-        <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-budget">
-          {t('agent.memory.budget', '记忆预算（条数）')}
-        </label>
-        <input id="memory-budget" type="number" min={0} value={budget} disabled={!canEdit}
-          onChange={e => setBudget(e.target.value)}
-          className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
-        <p className="text-xs text-gray-500 mt-1">{t('agent.memory.budget_desc', '记忆条目数量上限：超出后按重要性自动裁剪最旧的条目，控制上下文预算（token）占用。')}</p>
+      <div className="border rounded-lg p-3 space-y-3 bg-gray-50 opacity-70">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-gray-600">{t('agent.memory.long_term_group', '长期记忆参数')}</p>
+          <span className="px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-600">{t('agent.memory.available_later', '暂未生效')}</span>
+        </div>
+        <p className="text-xs text-gray-500">{t('agent.memory.long_term_inert_note', '以下参数已保存，但要等长期记忆功能在后续版本上线后才会生效。')}</p>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-recall-token-budget">
+            {t('agent.memory.recall_token_budget', '召回 Token 预算')}
+          </label>
+          <input id="memory-recall-token-budget" type="number" min={RANGES.recall_token_budget[0]} max={RANGES.recall_token_budget[1]}
+            value={recallTokenBudget} disabled={!canEdit}
+            onChange={e => setRecallTokenBudget(e.target.value)}
+            className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+          <p className="text-xs text-gray-500 mt-1">{t('agent.memory.recall_token_budget_desc', '长期记忆召回时可使用的最大 Token 数（128-1200）。')}</p>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-recall-count">
+            {t('agent.memory.recall_count', '召回条数')}
+          </label>
+          <input id="memory-recall-count" type="number" min={RANGES.recall_count[0]} max={RANGES.recall_count[1]}
+            value={recallCount} disabled={!canEdit}
+            onChange={e => setRecallCount(e.target.value)}
+            className="w-48 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+          <p className="text-xs text-gray-500 mt-1">{t('agent.memory.recall_count_desc', '长期记忆单次召回的最大条目数（1-12）。')}</p>
+        </div>
       </div>
 
       <div className="border border-gray-200 rounded-lg p-3 text-xs text-gray-500 space-y-1">

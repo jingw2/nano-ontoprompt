@@ -363,7 +363,6 @@
       "version": "Version"
     },
     "memory": {
-      "budget": "Memory budget (entries)",
       "change_note": "Memory settings update",
       "conflict": "A newer version was detected — refresh and retry",
       "inspection_unavailable": "Memory inspection becomes available once the Memory feature is enabled",
@@ -375,9 +374,22 @@
       "title": "Memory Settings",
       "short_term_desc": "Retains the current session's context (recent turns) to keep the conversation coherent. Scoped to this session and cleared when it ends.",
       "long_term_desc": "Persists important facts and conclusions across sessions into long-term storage (vector index) for retrieval in later sessions.",
-      "budget_desc": "Maximum memory entries; older entries are pruned by importance beyond this limit to control the context (token) budget.",
       "consent_note": "Memory writes require the Agent's write permission; when enabled the model may read the corresponding memory while reasoning.",
-      "retention_note": "Short-term memory lives for the session; long-term memory is archived automatically by budget and retention policy — it never grows unbounded."
+      "retention_note": "Short-term memory lives for the session; long-term memory is archived automatically by budget and retention policy — it never grows unbounded.",
+      "short_term_group": "Short-term memory parameters",
+      "message_pairs": "Message pairs to retain",
+      "message_pairs_desc": "Number of recent conversation turns kept in short-term memory (2-20).",
+      "summary_threshold": "Summary trigger threshold",
+      "summary_threshold_desc": "A summary is generated automatically once turns exceed this threshold (8-40).",
+      "summary_token_budget": "Summary token budget",
+      "summary_token_budget_desc": "Maximum tokens usable when generating a summary (256-2048).",
+      "long_term_group": "Long-term memory parameters",
+      "available_later": "Not yet in effect",
+      "long_term_inert_note": "These parameters are saved now, but only take effect once long-term memory ships in a future release.",
+      "recall_token_budget": "Recall token budget",
+      "recall_token_budget_desc": "Maximum tokens usable when recalling long-term memory (128-1200).",
+      "recall_count": "Recall count",
+      "recall_count_desc": "Maximum number of entries returned per long-term memory recall (1-12)."
     },
     "prompt": {
       "append": "Append",
