@@ -40,6 +40,7 @@ const REQUIRED_AGENT_KEYS = [
   'agent.memory.recall_token_budget',
   'agent.memory.recall_count',
   'agent.memory.long_term_inert_note',
+  'agent.memory.available_later',
   'agent.create.partial_tool_bind_failure',
   'agent.create.go_to_detail',
 ]
