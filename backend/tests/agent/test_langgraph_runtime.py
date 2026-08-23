@@ -858,3 +858,58 @@ def test_build_messages_survives_budget_with_resumed_injection_pair(pg_session):
     messages, _ = runtime._build_messages_and_tools(context, assembled)
     user_messages = [m["content"] for m in messages if m["role"] == "user"]
     assert user_messages[-2:] == ["原始请求", "注入的解决结果"]
+
+
+def test_real_runtime_summary_included_when_short_term_enabled(db):
+    """Regression (final review Finding 5): the summary read path — a real
+    agent_memory_summaries row, gated by memory_settings.short_term_enabled,
+    assembled through assemble_bounded_messages — must actually reach the
+    model on a real Turn, not just the pure assemble_bounded_messages /
+    maybe_regenerate_summary unit paths exercised elsewhere."""
+    _seed_unit_graph(db)
+    db.execute(text(
+        "INSERT INTO agent_memory_summaries "
+        "(id, session_id, summary_text, covers_from_ordinal, covers_to_ordinal, "
+        "source_message_hash, summary_model_name, summary_token_count, updated_at) "
+        "VALUES ('sum-1', 's-1', :text, 1, 1, :hash, 'mock-chat', 20, CURRENT_TIMESTAMP)"
+    ), {"text": "Confirmed facts: 用户此前已确认订单42的安全线为500", "hash": "s" * 64})
+    db.commit()
+    captured = {}
+
+    def caller(caller_info, messages, tools):
+        captured["messages"] = messages
+        return {"content": "ok", "tool_calls": []}
+
+    runtime = LangGraphRuntime(db, caller=caller)
+    events = _run(runtime, _context())
+    assert events[-1].event_type == "turn_succeeded"
+    system_message = next(m["content"] for m in captured["messages"] if m["role"] == "system")
+    assert "用户此前已确认订单42的安全线为500" in system_message
+
+
+def test_real_runtime_summary_excluded_when_short_term_disabled(db):
+    """Regression (final review Finding 5): with short_term_enabled=false on
+    the Agent version, an existing agent_memory_summaries row must never
+    reach the model."""
+    _seed_unit_graph(db)
+    db.execute(text(
+        "UPDATE agent_versions SET memory_settings = '{\"short_term_enabled\": false}' WHERE id = 'v-1'"
+    ))
+    db.execute(text(
+        "INSERT INTO agent_memory_summaries "
+        "(id, session_id, summary_text, covers_from_ordinal, covers_to_ordinal, "
+        "source_message_hash, summary_model_name, summary_token_count, updated_at) "
+        "VALUES ('sum-2', 's-1', :text, 1, 1, :hash, 'mock-chat', 20, CURRENT_TIMESTAMP)"
+    ), {"text": "Confirmed facts: 用户此前已确认订单42的安全线为500", "hash": "t" * 64})
+    db.commit()
+    captured = {}
+
+    def caller(caller_info, messages, tools):
+        captured["messages"] = messages
+        return {"content": "ok", "tool_calls": []}
+
+    runtime = LangGraphRuntime(db, caller=caller)
+    events = _run(runtime, _context())
+    assert events[-1].event_type == "turn_succeeded"
+    system_message = next(m["content"] for m in captured["messages"] if m["role"] == "system")
+    assert "用户此前已确认订单42的安全线为500" not in system_message

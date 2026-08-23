@@ -12,13 +12,15 @@ on its own success/failure paths.
 from __future__ import annotations
 
 import hashlib
-import json
+import logging
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.services.agent.memory_settings import validate_memory_settings
+from app.services.agent.memory_settings import DEFAULTS, MemorySettingsError, validate_memory_settings
 from app.services.runtime.tokenizer import count_tokens
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_SUMMARY_FIELDS = ("confirmed_facts", "decisions", "unresolved_questions", "source_ordinals")
 
@@ -27,7 +29,7 @@ def _call_summarizer(*, provider: str, api_key: str, api_base: str | None, model
                      transcript: str) -> dict:
     """Real model call — isolated in its own function so tests can monkeypatch
     it without a network/credential dependency."""
-    from app.services.llm_service import chat_completion
+    from app.services.llm_service import _parse_response, chat_completion
     prompt = (
         "Summarize this conversation transcript into exactly this JSON schema: "
         '{"confirmed_facts": [string], "decisions": [string], '
@@ -37,7 +39,7 @@ def _call_summarizer(*, provider: str, api_key: str, api_base: str | None, model
     )
     response = chat_completion(provider, api_key, api_base, model,
                                [{"role": "user", "content": prompt}], timeout=60)
-    return json.loads(response["content"])
+    return _parse_response(response["content"])
 
 
 def _grounded(candidate: dict) -> bool:
@@ -55,7 +57,18 @@ def maybe_regenerate_summary(db: Session, *, session_id: str) -> bool:
     ), {"sid": session_id}).mappings().one_or_none()
     if row is None:
         return False
-    settings = validate_memory_settings(row["memory_settings"] or {})
+    try:
+        settings = validate_memory_settings(row["memory_settings"] or {})
+    except MemorySettingsError as exc:
+        # Read-path strictness buys nothing here either (see the matching
+        # fallback in langgraph_runtime._build_messages_and_tools): an Agent
+        # version saved before this validator existed must not permanently
+        # break its sweep — fall back to defaults instead of raising.
+        logger.warning(
+            "invalid memory_settings for session_id=%s, falling back to defaults: %s",
+            session_id, exc,
+        )
+        settings = dict(DEFAULTS)
     if not settings["short_term_enabled"]:
         return False
 
@@ -81,11 +94,19 @@ def maybe_regenerate_summary(db: Session, *, session_id: str) -> bool:
     if not _grounded(candidate):
         return False
 
-    summary_text = json.dumps({
-        "confirmed_facts": candidate["confirmed_facts"],
-        "decisions": candidate["decisions"],
-        "unresolved_questions": candidate["unresolved_questions"],
-    }, ensure_ascii=False)
+    # Plain prose, not JSON: message_budget.py embeds this string as
+    # context_blob["conversation_summary"] and JSON-encodes the surrounding
+    # blob exactly once. A json.dumps(...) here would double-encode it (an
+    # escaped-JSON-string-inside-JSON) — the same defect already fixed once
+    # for the ontology/tools context in langgraph_runtime.py.
+    lines = []
+    if candidate["confirmed_facts"]:
+        lines.append("Confirmed facts: " + "; ".join(candidate["confirmed_facts"]))
+    if candidate["decisions"]:
+        lines.append("Decisions: " + "; ".join(candidate["decisions"]))
+    if candidate["unresolved_questions"]:
+        lines.append("Unresolved questions: " + "; ".join(candidate["unresolved_questions"]))
+    summary_text = "\n".join(lines) if lines else "(no notable facts in this segment)"
     covers_from = unsummarized[0]["ordinal"] if since_ordinal < 0 else since_ordinal + 1
     covers_to = unsummarized[-1]["ordinal"]
     source_hash = hashlib.sha256(transcript.encode()).hexdigest()
