@@ -184,3 +184,82 @@ def test_count_tokens_non_openai_model_falls_back_to_cl100k():
 def test_count_tokens_empty_string_is_zero():
     from app.services.runtime.tokenizer import count_tokens
     assert count_tokens("", "gpt-4o") == 0
+
+
+def test_assemble_bounded_messages_fits_everything_when_small():
+    from app.services.runtime.message_budget import assemble_bounded_messages
+    result = assemble_bounded_messages(
+        system_prompt="You are helpful.", tool_schemas=[], application_state={},
+        retrieval_required=[], retrieval_optional=[], summary_text=None,
+        recalled_memories=[], history_rows=[{"role": "user", "content": "hi"}],
+        pending_interrupt=None, user_message="hi", model_name="gpt-4o",
+        budgets={"message_pairs": 12, "summary_token_budget": 1200,
+                 "recall_token_budget": 800, "recall_count": 8},
+    )
+    assert result[0]["role"] == "system"
+    assert result[-1] == {"role": "user", "content": "hi"}
+
+
+def test_assemble_bounded_messages_includes_summary_when_present():
+    from app.services.runtime.message_budget import assemble_bounded_messages
+    result = assemble_bounded_messages(
+        system_prompt="You are helpful.", tool_schemas=[], application_state={},
+        retrieval_required=[], retrieval_optional=[], summary_text="prior: discussed X",
+        recalled_memories=[], history_rows=[], pending_interrupt=None,
+        user_message="continue", model_name="gpt-4o",
+        budgets={"message_pairs": 12, "summary_token_budget": 1200,
+                 "recall_token_budget": 800, "recall_count": 8},
+    )
+    assert any("prior: discussed X" in (m.get("content") or "") for m in result)
+
+
+def test_assemble_bounded_messages_drops_optional_retrieval_before_failing():
+    from app.services.runtime.message_budget import assemble_bounded_messages
+    # a huge optional-retrieval item alone must not blow the budget when
+    # required material still fits comfortably
+    huge_optional = "x " * 5000
+    # NOTE: 2000, not 200 — RESPONSE_RESERVE_TOKENS is 1024, so a
+    # total_budget_tokens below that would blow the system/response-reserve
+    # check before the required-vs-optional logic under test ever runs.
+    result = assemble_bounded_messages(
+        system_prompt="sys", tool_schemas=[], application_state={},
+        retrieval_required=[], retrieval_optional=[huge_optional], summary_text=None,
+        recalled_memories=[], history_rows=[], pending_interrupt=None,
+        user_message="hi", model_name="gpt-4o",
+        budgets={"message_pairs": 12, "summary_token_budget": 1200,
+                 "recall_token_budget": 800, "recall_count": 8},
+        total_budget_tokens=2000,
+    )
+    assert not any(huge_optional in (m.get("content") or "") for m in result)
+
+
+def test_assemble_bounded_messages_fails_closed_when_required_material_too_large():
+    from app.services.runtime.message_budget import ContextBudgetExceeded, assemble_bounded_messages
+    huge_required = "x " * 5000
+    with pytest.raises(ContextBudgetExceeded):
+        assemble_bounded_messages(
+            system_prompt="sys", tool_schemas=[], application_state={},
+            retrieval_required=[huge_required], retrieval_optional=[], summary_text=None,
+            recalled_memories=[], history_rows=[], pending_interrupt=None,
+            user_message="hi", model_name="gpt-4o",
+            budgets={"message_pairs": 12, "summary_token_budget": 1200,
+                     "recall_token_budget": 800, "recall_count": 8},
+            total_budget_tokens=200,
+        )
+
+
+def test_assemble_bounded_messages_orders_history_newest_to_oldest_when_trimmed():
+    from app.services.runtime.message_budget import assemble_bounded_messages
+    history = [{"role": "user", "content": f"msg{i}"} for i in range(30)]
+    result = assemble_bounded_messages(
+        system_prompt="sys", tool_schemas=[], application_state={},
+        retrieval_required=[], retrieval_optional=[], summary_text=None,
+        recalled_memories=[], history_rows=history, pending_interrupt=None,
+        user_message="latest", model_name="gpt-4o",
+        budgets={"message_pairs": 2, "summary_token_budget": 1200,
+                 "recall_token_budget": 800, "recall_count": 8},
+    )
+    contents = [m["content"] for m in result if m["role"] == "user"]
+    # only the newest 2 pairs' worth of history should survive, in original (oldest-first) order
+    assert "msg29" in contents[-2] or "msg29" in contents[-1]
+    assert "msg0" not in contents

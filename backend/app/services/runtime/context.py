@@ -39,6 +39,7 @@ class PinnedContext:
     ontology_tool_selection: tuple[dict, ...] = ()  # per-binding enabled tools
     budgets: dict[str, int] = field(default_factory=lambda: {
         "messages": DEFAULT_MESSAGE_BUDGET, "context": DEFAULT_CONTEXT_BUDGET,
+        "summary": 1200, "recall": 800,
     })
     citations: tuple[dict, ...] = ()
 
