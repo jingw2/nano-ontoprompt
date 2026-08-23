@@ -168,3 +168,19 @@ def test_memory_settings_rejects_wrong_type():
     from app.services.agent.memory_settings import MemorySettingsError, validate_memory_settings
     with pytest.raises(MemorySettingsError):
         validate_memory_settings({"message_pairs": "twelve"})
+
+
+def test_count_tokens_openai_model_uses_exact_encoding():
+    from app.services.runtime.tokenizer import count_tokens
+    # "hello world" is 2 tokens under cl100k_base / o200k_base for gpt-4 family
+    assert count_tokens("hello world", "gpt-4o") == 2
+
+
+def test_count_tokens_non_openai_model_falls_back_to_cl100k():
+    from app.services.runtime.tokenizer import count_tokens
+    assert count_tokens("hello world", "claude-3-5-sonnet-20241022") == 2
+
+
+def test_count_tokens_empty_string_is_zero():
+    from app.services.runtime.tokenizer import count_tokens
+    assert count_tokens("", "gpt-4o") == 0
