@@ -334,7 +334,7 @@ def test_real_runtime_uses_pinned_system_prompt_and_context(db):
     events = _run(runtime, _context())
     assert seen["system"].startswith("你是供应链助手，必须用中文回答。")
     # the assembled context block rides the system prompt (grounded, bounded)
-    assert "available_tools" in seen["system"]
+    assert "_agent_available_tools" in seen["system"]
     assert "application_state" in seen["system"]
     assert events[-2].payload["message"] == "好的。"
 

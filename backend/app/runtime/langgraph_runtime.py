@@ -581,14 +581,17 @@ class LangGraphRuntime:
         # it exactly once — a second json.dumps pass here would double-encode
         # it (an escaped-JSON-string-inside-JSON) and undercount its real
         # token cost against the budget.
+        # Keys are underscore-prefixed (unconventional for admin-defined
+        # application_state_schema property names) so this merge can't be
+        # silently overwritten by a same-named application_state field.
         ontology_context = {
-            "ontologies": [
+            "_agent_ontologies": [
                 {"ontology_id": o["ontology_id"], "entities": o.get("entities", []),
                  "relations": o.get("relations", []), "logic_rules": o.get("logic_rules", []),
                  "actions": o.get("actions", [])}
                 for o in assembled["ontologies"]
             ],
-            "available_tools": [t["function"]["name"] for t in tools],
+            "_agent_available_tools": [t["function"]["name"] for t in tools],
         }
 
         messages = assemble_bounded_messages(
