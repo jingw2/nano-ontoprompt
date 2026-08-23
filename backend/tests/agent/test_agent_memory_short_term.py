@@ -118,3 +118,53 @@ def test_summaries_session_fk_is_restrict_not_cascade(session):
         session.execute(text("DELETE FROM agent_sessions WHERE id = 'sess-1'"))
         session.commit()
     session.rollback()
+
+
+def test_memory_settings_fills_defaults_on_empty_input():
+    from app.services.agent.memory_settings import validate_memory_settings
+    settings = validate_memory_settings({})
+    assert settings == {
+        "short_term_enabled": True,
+        "long_term_enabled": False,
+        "message_pairs": 12,
+        "summary_threshold": 24,
+        "summary_token_budget": 1200,
+        "recall_token_budget": 800,
+        "recall_count": 8,
+    }
+
+
+def test_memory_settings_accepts_values_within_range():
+    from app.services.agent.memory_settings import validate_memory_settings
+    settings = validate_memory_settings({
+        "short_term_enabled": False, "long_term_enabled": True,
+        "message_pairs": 20, "summary_threshold": 40,
+        "summary_token_budget": 2048, "recall_token_budget": 1200, "recall_count": 12,
+    })
+    assert settings["message_pairs"] == 20
+    assert settings["long_term_enabled"] is True
+
+
+@pytest.mark.parametrize("key,bad_value", [
+    ("message_pairs", 1), ("message_pairs", 21),
+    ("summary_threshold", 7), ("summary_threshold", 41),
+    ("summary_token_budget", 255), ("summary_token_budget", 2049),
+    ("recall_token_budget", 127), ("recall_token_budget", 1201),
+    ("recall_count", 0), ("recall_count", 13),
+])
+def test_memory_settings_rejects_out_of_range(key, bad_value):
+    from app.services.agent.memory_settings import MemorySettingsError, validate_memory_settings
+    with pytest.raises(MemorySettingsError):
+        validate_memory_settings({key: bad_value})
+
+
+def test_memory_settings_rejects_unknown_key():
+    from app.services.agent.memory_settings import MemorySettingsError, validate_memory_settings
+    with pytest.raises(MemorySettingsError):
+        validate_memory_settings({"unknown_key": 1})
+
+
+def test_memory_settings_rejects_wrong_type():
+    from app.services.agent.memory_settings import MemorySettingsError, validate_memory_settings
+    with pytest.raises(MemorySettingsError):
+        validate_memory_settings({"message_pairs": "twelve"})

@@ -113,7 +113,7 @@ def test_create_agent_one_transaction_with_owner_grant(ctx):
     result = create_agent(
         session, actor_id=actor_id, name="Support Agent", description="handles support tickets",
         default_model_config_version_id=model_version, default_model_name="gpt-4o",
-        system_prompt="You are a support agent.", memory_settings={"summary": 1200},
+        system_prompt="You are a support agent.", memory_settings={"summary_token_budget": 1200},
         application_state_schema_version_id=app_schema,
     )
     assert result["version_no"] == 1
@@ -142,7 +142,7 @@ def test_save_basic_version_n1_cas_hash_and_old_unchanged(ctx):
     v2 = save_basic_version(
         session, actor_id=actor_id, agent_id=created["agent_id"], base_version_no=1,
         name="A v2", description="d2", default_model_config_version_id=model_version,
-        default_model_name="gpt-4o", system_prompt="p2", memory_settings={"summary": 2000},
+        default_model_name="gpt-4o", system_prompt="p2", memory_settings={"summary_token_budget": 2000},
         application_state_schema_version_id=app_schema, change_note="tuned prompt",
     )
     assert v2["version_no"] == 2

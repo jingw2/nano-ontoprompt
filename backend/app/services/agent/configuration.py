@@ -19,6 +19,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.services.agent.memory_settings import MemorySettingsError, validate_memory_settings
+
 AGENT_CAPABILITIES = ("discover", "run", "view_config", "edit", "view_audit")
 
 
@@ -130,6 +132,10 @@ def create_agent(
     ontology_bindings: list[dict] | None = None,
 ) -> dict:
     """One transaction: Agent + AgentVersion v1 + owner grant + audit."""
+    try:
+        memory_settings = validate_memory_settings(memory_settings or {})
+    except MemorySettingsError as exc:
+        raise AgentConfigError(str(exc)) from exc
     _verify_model_version(db, default_model_config_version_id, default_model_name)
     bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent_id = _new_id()
@@ -240,6 +246,10 @@ def save_basic_version(
     `ontology_bindings` (when given) REPLACES the ontology-binding child rows of
     the new version with the complete requested set (each row carries the bound
     ontology plus the enabled tool selection/categories)."""
+    try:
+        memory_settings = validate_memory_settings(memory_settings or {})
+    except MemorySettingsError as exc:
+        raise AgentConfigError(str(exc)) from exc
     _verify_model_version(db, default_model_config_version_id, default_model_name)
     bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent = db.execute(text(
