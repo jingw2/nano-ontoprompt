@@ -345,3 +345,29 @@ def test_maybe_regenerate_summary_noop_when_short_term_disabled(session, monkeyp
     changed = summary_module.maybe_regenerate_summary(session, session_id="sess-1")
     assert changed is False
     assert called == []
+
+
+def test_sweep_processes_eligible_sessions_and_isolates_per_session_errors(session, monkeypatch):
+    from app.services.memory import summary as summary_module
+    session.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES ('sess-2', 'ag-1', 'u-1', 'active', now(), now())"
+    ))
+    session.commit()
+    _seed_messages(session, "sess-1", 30)
+    _seed_messages(session, "sess-2", 30)
+
+    calls = []
+
+    def fake_regen(db, *, session_id):
+        calls.append(session_id)
+        if session_id == "sess-1":
+            raise RuntimeError("simulated model failure")
+        return True
+
+    monkeypatch.setattr(summary_module, "maybe_regenerate_summary", fake_regen)
+    from app.tasks.agent_memory import sweep_memory_summaries
+    result = sweep_memory_summaries(db=session)
+    assert sorted(calls) == ["sess-1", "sess-2"]
+    assert result["errors"] == 1
+    assert result["regenerated"] == 1

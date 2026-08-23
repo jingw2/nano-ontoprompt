@@ -25,6 +25,7 @@ celery_app = Celery("ontoprompt",
                         "app.tasks.agent_index",
                         "app.tasks.agent_turn",
                         "app.tasks.agent_retention",
+                        "app.tasks.agent_memory",
                         # v2 pipeline / mapping / connection sync tasks
                         "app.tasks.v2.pipeline_run",
                         "app.tasks.v2.mapping_apply",
@@ -47,5 +48,9 @@ celery_app.conf.beat_schedule = {
     "agent-dispatch-publish": {
         "task": "agent.dispatch_publish",
         "schedule": 2.0,
+    },
+    "agent-memory-summary-sweep": {
+        "task": "agent.memory_summary_sweep",
+        "schedule": 60.0,
     },
 }
