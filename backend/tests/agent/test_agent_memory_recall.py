@@ -330,3 +330,92 @@ def test_sweep_claim_query_holds_locks_on_all_batch_rows_until_commit(session):
         session.commit()
     finally:
         second_session.close()
+
+
+def test_fetch_sql_candidates_excludes_non_active_and_expired(session):
+    from datetime import datetime, timedelta, timezone
+    _insert_memory(session, memory_id="mem-active", status="active")
+    _insert_memory(session, memory_id="mem-pending", status="pending_confirmation",
+                   subject_key="self", predicate="user.preference")
+    _insert_memory(session, memory_id="mem-deleted", status="deleted",
+                   subject_key="self", predicate="user.goal")
+    session.execute(text(
+        "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, subject_key, "
+        "predicate, canonical_value, canonical_value_hash, display_text, confidence, sensitivity, "
+        "consent_basis, source_spans, status, expires_at, created_at, updated_at) "
+        "VALUES ('mem-expired', :d, :a, :u, 'semantic', 'self', 'user.fact', '\"x\"'::jsonb, "
+        "'hash-exp', 'expired fact', 0.9, 'low', 'explicit_statement', '[0]'::jsonb, 'active', "
+        ":expiry, now(), now())"
+    ), {"d": DEFAULT_DOMAIN, "a": "ag-1", "u": "u-1",
+        "expiry": datetime.now(timezone.utc) - timedelta(days=1)})
+    session.commit()
+
+    from app.services.memory.recall import _fetch_sql_candidates
+    candidates = _fetch_sql_candidates(session, security_domain_id=DEFAULT_DOMAIN,
+                                       agent_id="ag-1", user_id="u-1")
+    ids = {c["id"] for c in candidates}
+    assert ids == {"mem-active"}
+
+
+def test_fetch_sql_candidates_scoped_to_exact_domain_agent_user(session):
+    session.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES ('ag-2','private','active','u-1',now(),now())"
+    ))
+    session.commit()
+    _insert_memory(session, memory_id="mem-1", agent_id="ag-1")
+    _insert_memory(session, memory_id="mem-2", agent_id="ag-2", subject_key="self",
+                   predicate="user.preference")
+    session.commit()
+
+    from app.services.memory.recall import _fetch_sql_candidates
+    candidates = _fetch_sql_candidates(session, security_domain_id=DEFAULT_DOMAIN,
+                                       agent_id="ag-1", user_id="u-1")
+    assert {c["id"] for c in candidates} == {"mem-1"}
+
+
+def test_lexical_channel_normalizes_single_match_to_one(session):
+    _insert_memory(session, memory_id="mem-1", display_text="User's favorite color is blue")
+    session.commit()
+
+    from app.services.memory.recall import _lexical_channel
+    scores = _lexical_channel(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                              user_id="u-1", query_text="blue", limit=10)
+    assert scores == {"mem-1": 1.0}
+
+
+def test_lexical_channel_normalizes_equal_positive_ranks_to_one(session):
+    _insert_memory(session, memory_id="mem-1", display_text="apple apple",
+                   subject_key="self", predicate="user.fact")
+    _insert_memory(session, memory_id="mem-2", display_text="apple apple",
+                   subject_key="other", predicate="user.fact")
+    session.commit()
+
+    from app.services.memory.recall import _lexical_channel
+    scores = _lexical_channel(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                              user_id="u-1", query_text="apple", limit=10)
+    assert scores == {"mem-1": 1.0, "mem-2": 1.0}
+
+
+def test_lexical_channel_min_max_normalizes_distinct_positive_ranks(session):
+    _insert_memory(session, memory_id="mem-strong", display_text="dog dog dog dog dog",
+                   subject_key="self", predicate="user.fact")
+    _insert_memory(session, memory_id="mem-weak", display_text="dog cat bird fish tree",
+                   subject_key="other", predicate="user.fact")
+    session.commit()
+
+    from app.services.memory.recall import _lexical_channel
+    scores = _lexical_channel(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                              user_id="u-1", query_text="dog", limit=10)
+    assert scores["mem-strong"] == 1.0
+    assert scores["mem-weak"] == 0.0  # the minimum among two distinct positive ranks
+
+
+def test_lexical_channel_excludes_non_matching_candidates_entirely(session):
+    _insert_memory(session, memory_id="mem-1", display_text="completely unrelated text")
+    session.commit()
+
+    from app.services.memory.recall import _lexical_channel
+    scores = _lexical_channel(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                              user_id="u-1", query_text="zzz_no_match_zzz", limit=10)
+    assert scores == {}
