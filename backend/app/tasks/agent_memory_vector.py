@@ -5,9 +5,15 @@ consent-revocation paths. Claims rows via SELECT ... FOR UPDATE SKIP LOCKED
 (mirrors app/services/indexes/release_aware.py::consume_outbox — the
 concurrency-safe pattern P6B-2a's own extraction sweep did NOT use, flagged
 as a residual risk in that plan's final review; this consumer closes that
-gap for its own outbox rather than repeating it). Per-row error isolation:
-a failed row's state is rolled back to 'pending' for retry on the next
-sweep, and one row's failure never blocks its siblings in the same batch.
+gap for its own outbox rather than repeating it). The whole batch is
+processed under a single transaction committed once at the end — Postgres
+releases every lock a transaction holds on commit, so committing per-row
+would drop the SKIP LOCKED claim on the batch's not-yet-processed rows and
+let a concurrent sweep re-claim them. Per-row error isolation is instead
+done with a SAVEPOINT per row: a failed row's writes are rolled back to
+the savepoint (its outbox state stays 'pending' for retry on the next
+sweep) without touching its siblings' already-applied writes in the same
+transaction.
 """
 import logging
 
@@ -39,6 +45,7 @@ def sweep_memory_vector_outbox(db=None, *, batch: int = BATCH_SIZE) -> dict:
         applied = 0
         errors = 0
         for row in rows:
+            db.execute(text("SAVEPOINT row_savepoint"))
             try:
                 if row["event_type"] == "upsert":
                     ok = vector_store.upsert_memory_embedding(
@@ -59,12 +66,13 @@ def sweep_memory_vector_outbox(db=None, *, batch: int = BATCH_SIZE) -> dict:
                 db.execute(text(
                     "UPDATE agent_memory_vector_outbox SET state = 'applied' WHERE id = :id"
                 ), {"id": row["outbox_id"]})
-                db.commit()
+                db.execute(text("RELEASE SAVEPOINT row_savepoint"))
                 applied += 1
             except Exception:
                 errors += 1
                 logger.exception("memory vector sweep failed for outbox row %s", row["outbox_id"])
-                db.rollback()
+                db.execute(text("ROLLBACK TO SAVEPOINT row_savepoint"))
+        db.commit()
         return {"processed": len(rows), "applied": applied, "errors": errors}
     finally:
         if owns_session:

@@ -287,3 +287,46 @@ def test_sweep_claims_rows_with_for_update_skip_locked_not_double_processed(sess
     assert first == {"processed": 1, "applied": 1, "errors": 0}
     assert second == {"processed": 0, "applied": 0, "errors": 0}
     assert calls == ["mem-once"]
+
+
+def test_sweep_claim_query_holds_locks_on_all_batch_rows_until_commit(session):
+    """Regression test for a real concurrency bug caught in review: the
+    original per-row-commit design released locks on unprocessed batch rows
+    early. This verifies the property the fix depends on -- the batch's
+    SELECT ... FOR UPDATE OF ov SKIP LOCKED holds its locks on every
+    claimed row for as long as the claiming transaction stays open (i.e.
+    until the sweep's single end-of-batch commit), not just until the
+    first per-row write commits."""
+    _insert_memory(session, memory_id="mem-1", display_text="fact one")
+    _insert_memory(session, memory_id="mem-2", display_text="fact two", subject_key="self",
+                   predicate="user.preference")
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-1', 'mem-1', 'upsert', 'pending', now()), "
+        "('vo-2', 'mem-2', 'upsert', 'pending', now())"
+    ))
+    session.commit()
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    second_session = sessionmaker(bind=create_engine(str(session.bind.url)))()
+    try:
+        claim_query = text(
+            "SELECT ov.id FROM agent_memory_vector_outbox ov "
+            "WHERE ov.state = 'pending' ORDER BY ov.created_at "
+            "FOR UPDATE OF ov SKIP LOCKED"
+        )
+        claimed_by_a = session.execute(claim_query).scalars().all()
+        assert set(claimed_by_a) == {"vo-1", "vo-2"}
+
+        # session B's identical claim query, while A's transaction is still
+        # open (no commit yet -- exactly what the fixed sweep does for its
+        # whole batch), must see BOTH rows as locked (SKIP LOCKED -> empty
+        # result). This is the exact property the original per-row-commit
+        # design violated.
+        claimed_by_b = second_session.execute(claim_query).scalars().all()
+        assert claimed_by_b == []
+
+        session.commit()
+    finally:
+        second_session.close()
