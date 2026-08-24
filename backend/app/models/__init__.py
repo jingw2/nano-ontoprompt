@@ -64,6 +64,13 @@ from app.models.agent_runtime import (
     AgentStreamTicket,
     AgentPurgeJob,
     AgentPurgeMarker,
+    AgentMemoryPredicateRegistry,
+    AgentMemory,
+    AgentMemoryConsent,
+    AgentMemoryRevision,
+    AgentMemoryConflict,
+    AgentMemoryVectorOutbox,
+    AgentMemoryExtractionOutbox,
 )
 from app.models.skill import (
     SkillPackage,
@@ -133,6 +140,13 @@ def load_all_models():
         AgentStreamTicket,
         AgentPurgeJob,
         AgentPurgeMarker,
+        AgentMemoryPredicateRegistry,
+        AgentMemory,
+        AgentMemoryConsent,
+        AgentMemoryRevision,
+        AgentMemoryConflict,
+        AgentMemoryVectorOutbox,
+        AgentMemoryExtractionOutbox,
     )
     from app.models import retention  # noqa: F401
     from app.models.skill import (  # noqa: F401
@@ -216,6 +230,13 @@ __all__ = [
     "AgentStreamTicket",
     "AgentPurgeJob",
     "AgentPurgeMarker",
+    "AgentMemoryPredicateRegistry",
+    "AgentMemory",
+    "AgentMemoryConsent",
+    "AgentMemoryRevision",
+    "AgentMemoryConflict",
+    "AgentMemoryVectorOutbox",
+    "AgentMemoryExtractionOutbox",
     "SkillPackage",
     "SkillVersion",
     "SkillSignature",

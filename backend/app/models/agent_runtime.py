@@ -17,12 +17,15 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     JSON,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -469,3 +472,188 @@ class AgentPurgeMarker(Base):
     )
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AgentMemoryPredicateRegistry(Base):
+    __tablename__ = "agent_memory_predicate_registry"
+    __table_args__ = (
+        CheckConstraint("cardinality IN ('single', 'multi')", name="ck_agent_memory_predicate_registry_cardinality"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    predicate: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    cardinality: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AgentMemory(Base):
+    __tablename__ = "agent_memories"
+    __table_args__ = (
+        CheckConstraint("kind IN ('semantic', 'episodic')", name="ck_agent_memories_kind"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_agent_memories_confidence"),
+        CheckConstraint(
+            "consent_basis IN ('explicit_statement', 'explicit_confirmation')",
+            name="ck_agent_memories_consent_basis",
+        ),
+        CheckConstraint(
+            "status IN ('pending_confirmation', 'active', 'conflicted', 'deleted')",
+            name="ck_agent_memories_status",
+        ),
+        # partial unique index — the spec's "unique active" dedup constraint:
+        # multiple historical/deleted/conflicted rows may share a dedup key,
+        # but at most one 'active' row may.
+        Index(
+            "uq_agent_memories_active_dedup_key",
+            "security_domain_id", "agent_id", "user_id", "subject_key", "predicate", "canonical_value_hash",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    security_domain_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("security_domains.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    predicate: Mapped[str] = mapped_column(
+        String(100), ForeignKey("agent_memory_predicate_registry.predicate", ondelete="RESTRICT"), nullable=False
+    )
+    canonical_value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    canonical_value_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric, nullable=False)
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False)
+    consent_basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_spans: Mapped[list] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    embedding_model_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentMemoryConsent(Base):
+    __tablename__ = "agent_memory_consents"
+    __table_args__ = (
+        CheckConstraint(
+            "consent_basis IN ('explicit_statement', 'explicit_confirmation')",
+            name="ck_agent_memory_consents_consent_basis",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    security_domain_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("security_domains.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    consent_basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentMemoryRevision(Base):
+    __tablename__ = "agent_memory_revisions"
+    __table_args__ = (
+        UniqueConstraint("memory_id", "revision_no", name="uq_agent_memory_revisions_memory_revision"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    memory_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_memories.id", ondelete="RESTRICT"), nullable=False
+    )
+    revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    canonical_value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    display_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric, nullable=False)
+    consent_basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_spans: Mapped[list] = mapped_column(JSONB, nullable=False)
+    consent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_memory_consents.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentMemoryConflict(Base):
+    __tablename__ = "agent_memory_conflicts"
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'resolved')", name="ck_agent_memory_conflicts_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    security_domain_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("security_domains.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    subject_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    predicate: Mapped[str] = mapped_column(
+        String(100), ForeignKey("agent_memory_predicate_registry.predicate", ondelete="RESTRICT"), nullable=False
+    )
+    memory_id_a: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_memories.id", ondelete="RESTRICT"), nullable=False
+    )
+    memory_id_b: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_memories.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    resolved_by_revision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_memory_revisions.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentMemoryVectorOutbox(Base):
+    __tablename__ = "agent_memory_vector_outbox"
+    __table_args__ = (
+        CheckConstraint("event_type IN ('upsert', 'delete')", name="ck_agent_memory_vector_outbox_event_type"),
+        CheckConstraint("state IN ('pending', 'applied')", name="ck_agent_memory_vector_outbox_state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    memory_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_memories.id", ondelete="RESTRICT"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AgentMemoryExtractionOutbox(Base):
+    __tablename__ = "agent_memory_extraction_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('pending', 'processing', 'applied', 'skipped')",
+            name="ck_agent_memory_extraction_outbox_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    turn_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_turns.id", ondelete="RESTRICT"), nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
