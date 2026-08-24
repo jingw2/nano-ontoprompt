@@ -181,3 +181,109 @@ def test_memory_collection_name_is_namespaced_per_security_domain():
     from app.services.memory import vector_store
     assert vector_store.memory_collection_name("sd-1") != vector_store.memory_collection_name("sd-2")
     assert "sd-1" in vector_store.memory_collection_name("sd-1")
+
+
+def test_sweep_applies_pending_upsert_and_sets_embedding_model_version(session, monkeypatch):
+    _insert_memory(session, memory_id="mem-up", display_text="User likes tea")
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-1', 'mem-up', 'upsert', 'pending', now())"
+    ))
+    session.commit()
+
+    from app.services.memory import vector_store
+    calls = []
+    monkeypatch.setattr(vector_store, "upsert_memory_embedding",
+                        lambda mid, sd, text_: calls.append((mid, sd, text_)) or True)
+
+    from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
+    result = sweep_memory_vector_outbox(db=session)
+    assert result == {"processed": 1, "applied": 1, "errors": 0}
+    assert calls == [("mem-up", DEFAULT_DOMAIN, "User likes tea")]
+
+    outbox_state = session.execute(text(
+        "SELECT state FROM agent_memory_vector_outbox WHERE id = 'vo-1'"
+    )).scalar_one()
+    assert outbox_state == "applied"
+    embedding_version = session.execute(text(
+        "SELECT embedding_model_version FROM agent_memories WHERE id = 'mem-up'"
+    )).scalar_one()
+    assert embedding_version == vector_store.MEMORY_EMBEDDING_MODEL_VERSION
+
+
+def test_sweep_applies_pending_delete_and_clears_embedding_model_version(session, monkeypatch):
+    _insert_memory(session, memory_id="mem-del", status="deleted")
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = 'memory-embed-chroma-default-v1' "
+        "WHERE id = 'mem-del'"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-2', 'mem-del', 'delete', 'pending', now())"
+    ))
+    session.commit()
+
+    from app.services.memory import vector_store
+    monkeypatch.setattr(vector_store, "delete_memory_embedding", lambda mid, sd: True)
+
+    from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
+    result = sweep_memory_vector_outbox(db=session)
+    assert result == {"processed": 1, "applied": 1, "errors": 0}
+    embedding_version = session.execute(text(
+        "SELECT embedding_model_version FROM agent_memories WHERE id = 'mem-del'"
+    )).scalar_one()
+    assert embedding_version is None
+
+
+def test_sweep_isolates_per_row_errors_and_leaves_row_pending(session, monkeypatch):
+    _insert_memory(session, memory_id="mem-a", display_text="fact a")
+    _insert_memory(session, memory_id="mem-b", display_text="fact b", subject_key="self",
+                   predicate="user.preference")
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-a', 'mem-a', 'upsert', 'pending', now()), "
+        "('vo-b', 'mem-b', 'upsert', 'pending', now())"
+    ))
+    session.commit()
+
+    from app.services.memory import vector_store
+
+    def flaky_upsert(memory_id, security_domain_id, display_text):
+        if memory_id == "mem-a":
+            raise RuntimeError("simulated Chroma failure")
+        return True
+
+    monkeypatch.setattr(vector_store, "upsert_memory_embedding", flaky_upsert)
+
+    from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
+    result = sweep_memory_vector_outbox(db=session)
+    assert result == {"processed": 2, "applied": 1, "errors": 1}
+    states = {r["memory_id"]: r["state"] for r in session.execute(text(
+        "SELECT memory_id, state FROM agent_memory_vector_outbox"
+    )).mappings().all()}
+    assert states["mem-a"] == "pending"
+    assert states["mem-b"] == "applied"
+
+
+def test_sweep_claims_rows_with_for_update_skip_locked_not_double_processed(session, monkeypatch):
+    """Two sequential sweep calls over the same already-applied row must not
+    re-invoke the vector store a second time — the claim (state transition)
+    happens atomically as part of the same statement that selects the row."""
+    _insert_memory(session, memory_id="mem-once")
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-once', 'mem-once', 'upsert', 'pending', now())"
+    ))
+    session.commit()
+
+    from app.services.memory import vector_store
+    calls = []
+    monkeypatch.setattr(vector_store, "upsert_memory_embedding",
+                        lambda mid, sd, t: calls.append(mid) or True)
+
+    from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
+    first = sweep_memory_vector_outbox(db=session)
+    second = sweep_memory_vector_outbox(db=session)
+    assert first == {"processed": 1, "applied": 1, "errors": 0}
+    assert second == {"processed": 0, "applied": 0, "errors": 0}
+    assert calls == ["mem-once"]

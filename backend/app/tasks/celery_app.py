@@ -27,6 +27,7 @@ celery_app = Celery("ontoprompt",
                         "app.tasks.agent_retention",
                         "app.tasks.agent_memory",
                         "app.tasks.agent_memory_extraction",
+                        "app.tasks.agent_memory_vector",
                         # v2 pipeline / mapping / connection sync tasks
                         "app.tasks.v2.pipeline_run",
                         "app.tasks.v2.mapping_apply",
@@ -56,6 +57,10 @@ celery_app.conf.beat_schedule = {
     },
     "agent-memory-extraction-sweep": {
         "task": "agent.memory_extraction_sweep",
+        "schedule": 60.0,
+    },
+    "agent-memory-vector-sweep": {
+        "task": "agent.memory_vector_sweep",
         "schedule": 60.0,
     },
 }
