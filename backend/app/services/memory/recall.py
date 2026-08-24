@@ -47,3 +47,54 @@ def _lexical_channel(db: Session, *, security_domain_id: str, agent_id: str, use
     if min_rank == max_rank:
         return {mid: 1.0 for mid, v in ranks.items() if v > 0}
     return {mid: (v - min_rank) / (max_rank - min_rank) for mid, v in ranks.items() if v > 0}
+
+
+import math
+from datetime import datetime, timezone
+
+SOURCE_QUALITY = {
+    "explicit_user_correction": 1.00,       # unreachable with today's schema (documented)
+    "explicit_statement": 0.95,
+    "explicit_confirmation": 0.90,
+    "policy_approved_tool_result": 0.80,    # unreachable with today's schema (documented)
+    "grounded_document_extraction": 0.75,   # unreachable with today's schema (documented)
+}
+
+SCORE_THRESHOLD = 0.60
+
+
+def _semantic_channel(security_domain_id: str, query_text: str, limit: int, *,
+                      sql_candidates: list[dict]) -> dict[str, float]:
+    from app.services.memory import vector_store
+
+    current_versions = {
+        c["id"] for c in sql_candidates
+        if c.get("embedding_model_version") == vector_store.MEMORY_EMBEDDING_MODEL_VERSION
+    }
+    if not current_versions:
+        return {}
+    hits = vector_store.query_similar(security_domain_id, query_text, limit)
+    return {h["id"]: h["cosine"] for h in hits if h["id"] in current_versions}
+
+
+def _recency_score(updated_at: datetime, now: datetime) -> float:
+    age_days = (now - updated_at).total_seconds() / 86400.0
+    return math.exp(-age_days / 30.0)
+
+
+def _score_candidate(*, semantic: float | None, lexical: float, confidence: float,
+                     source_quality: float, recency: float) -> tuple[float, str] | None:
+    confidence = max(0.0, min(1.0, confidence))
+    if semantic is not None:
+        semantic_mapped = (semantic + 1.0) / 2.0
+        score = (0.50 * semantic_mapped + 0.20 * lexical + 0.15 * confidence
+                 + 0.10 * recency + 0.05 * source_quality)
+        mode = "hybrid"
+    else:
+        if lexical <= 0.0:
+            return None
+        score = (0.40 * lexical + 0.30 * confidence + 0.20 * recency + 0.10 * source_quality)
+        mode = "lexical_only"
+    if score < SCORE_THRESHOLD:
+        return None
+    return score, mode

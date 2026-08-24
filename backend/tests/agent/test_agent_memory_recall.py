@@ -419,3 +419,85 @@ def test_lexical_channel_excludes_non_matching_candidates_entirely(session):
     scores = _lexical_channel(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
                               user_id="u-1", query_text="zzz_no_match_zzz", limit=10)
     assert scores == {}
+
+
+def test_semantic_channel_excludes_stale_embedding_model_version(monkeypatch):
+    from app.services.memory import recall, vector_store
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [
+        {"id": "mem-current", "cosine": 0.8}, {"id": "mem-stale", "cosine": 0.9},
+        {"id": "mem-never-embedded", "cosine": 0.7},
+    ])
+    sql_candidates = [
+        {"id": "mem-current", "embedding_model_version": vector_store.MEMORY_EMBEDDING_MODEL_VERSION},
+        {"id": "mem-stale", "embedding_model_version": "old-version"},
+        {"id": "mem-never-embedded", "embedding_model_version": None},
+    ]
+    scores = recall._semantic_channel("sd-1", "query", 10, sql_candidates=sql_candidates)
+    assert scores == {"mem-current": 0.8}
+
+
+def test_semantic_channel_empty_when_chroma_unavailable(monkeypatch):
+    from app.services.memory import recall, vector_store
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [])
+    scores = recall._semantic_channel("sd-1", "query", 10, sql_candidates=[
+        {"id": "mem-1", "embedding_model_version": vector_store.MEMORY_EMBEDDING_MODEL_VERSION}])
+    assert scores == {}
+
+
+def test_recency_score_matches_exponential_decay_to_six_decimals():
+    from datetime import datetime, timedelta, timezone
+    from app.services.memory.recall import _recency_score
+    now = datetime(2026, 8, 24, 12, 0, 0, tzinfo=timezone.utc)
+    updated_at = now - timedelta(days=30)
+    import math
+    expected = round(math.exp(-30 / 30), 6)
+    assert round(_recency_score(updated_at, now), 6) == expected == round(math.exp(-1), 6)
+
+
+def test_score_candidate_hybrid_formula_to_six_decimals():
+    from app.services.memory.recall import _score_candidate
+    result = _score_candidate(semantic=0.9, lexical=0.8, confidence=0.7, source_quality=0.95,
+                              recency=0.6)
+    score, mode = result
+    expected = 0.50 * ((0.9 + 1.0) / 2.0) + 0.20 * 0.8 + 0.15 * 0.7 + 0.10 * 0.6 + 0.05 * 0.95
+    assert round(score, 6) == round(expected, 6)
+    assert mode == "hybrid"
+
+
+def test_score_candidate_lexical_only_formula_to_six_decimals():
+    from app.services.memory.recall import _score_candidate
+    result = _score_candidate(semantic=None, lexical=0.8, confidence=0.7, source_quality=0.90,
+                              recency=0.6)
+    score, mode = result
+    expected = 0.40 * 0.8 + 0.30 * 0.7 + 0.20 * 0.6 + 0.10 * 0.90
+    assert round(score, 6) == round(expected, 6)
+    assert mode == "lexical_only"
+
+
+def test_score_candidate_lexical_only_requires_positive_lexical_evidence():
+    from app.services.memory.recall import _score_candidate
+    assert _score_candidate(semantic=None, lexical=0.0, confidence=1.0, source_quality=1.0,
+                            recency=1.0) is None
+
+
+def test_score_candidate_below_threshold_rejected_for_both_modes():
+    from app.services.memory.recall import _score_candidate
+    assert _score_candidate(semantic=0.1, lexical=0.1, confidence=0.1, source_quality=0.1,
+                            recency=0.1) is None
+    assert _score_candidate(semantic=None, lexical=0.1, confidence=0.1, source_quality=0.1,
+                            recency=0.1) is None
+
+
+def test_score_candidate_exactly_at_threshold_is_accepted():
+    from app.services.memory.recall import _score_candidate
+    # lexical-only: 0.40*l + 0.30*c + 0.20*r + 0.10*q == 0.60 exactly when all inputs are 0.6
+    result = _score_candidate(semantic=None, lexical=0.6, confidence=0.6, source_quality=0.6,
+                              recency=0.6)
+    assert result is not None
+    assert round(result[0], 6) == 0.6
+
+
+def test_source_quality_maps_the_two_reachable_consent_bases():
+    from app.services.memory.recall import SOURCE_QUALITY
+    assert SOURCE_QUALITY["explicit_statement"] == 0.95
+    assert SOURCE_QUALITY["explicit_confirmation"] == 0.90
