@@ -501,3 +501,130 @@ def test_source_quality_maps_the_two_reachable_consent_bases():
     from app.services.memory.recall import SOURCE_QUALITY
     assert SOURCE_QUALITY["explicit_statement"] == 0.95
     assert SOURCE_QUALITY["explicit_confirmation"] == 0.90
+
+
+def _no_semantic_hits(monkeypatch):
+    """Deterministically empties the semantic channel regardless of whether a
+    real Chroma instance is reachable in this environment or what it may
+    have indexed from earlier test runs — every test in this file reuses
+    DEFAULT_DOMAIN, so relying on Chroma's *actual* current state instead of
+    explicitly mocking it would make these tests flaky/order-dependent."""
+    from app.services.memory import recall as recall_module
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, q, limit, *, sql_candidates: {})
+
+
+def test_recall_memories_all_lexical_returns_cited_strings(session, monkeypatch):
+    _no_semantic_hits(monkeypatch)
+    _insert_memory(session, memory_id="mem-1", display_text="User's favorite color is blue",
+                   confidence=0.9)
+    session.commit()
+
+    # NOTE: deviates from the task-6 brief's literal query_text="what color".
+    # plainto_tsquery('simple', 'what color') ANDs both terms ('simple' has no
+    # stopword list, so 'what' is a required literal token); since "what" never
+    # appears in the stored text, that query produces zero lexical matches
+    # (verified directly against Postgres) and the test would incorrectly
+    # assert on an unreachable case. "favorite color" shares both tokens with
+    # the fixture text and exercises the same all-lexical-citation behavior
+    # the test is meant to verify.
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="favorite color", model_name="gpt-4o",
+                             recall_count=8, recall_token_budget=800)
+    assert result == ["[memory:mem-1] User's favorite color is blue"]
+
+
+def test_recall_memories_deduplicates_cross_channel_duplicate_winner(session, monkeypatch):
+    """A memory present in BOTH the lexical and vector channels' raw hit
+    lists must appear exactly once in the final result, scored once."""
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-1", display_text="User likes tea", confidence=0.9)
+    session.commit()
+
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-1": 0.95} if any(c["id"] == "mem-1" for c in sql_candidates) else {}))
+
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1", query_text="tea",
+                                           model_name="gpt-4o", recall_count=8,
+                                           recall_token_budget=800)
+    assert len(result) == 1
+    assert result == ["[memory:mem-1] User likes tea"]
+
+
+def test_recall_memories_stops_at_recall_count(session, monkeypatch):
+    _no_semantic_hits(monkeypatch)
+    for i in range(5):
+        _insert_memory(session, memory_id=f"mem-{i}", display_text=f"apple fact number {i}",
+                       subject_key=f"subject-{i}", predicate="user.fact", confidence=0.9)
+    session.commit()
+
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="apple", model_name="gpt-4o",
+                             recall_count=2, recall_token_budget=8000)
+    assert len(result) == 2
+
+
+def test_recall_memories_stops_at_token_budget_without_truncating(session, monkeypatch):
+    _no_semantic_hits(monkeypatch)
+    from app.services.runtime.tokenizer import count_tokens
+    long_text = "User's preference is: " + ("word " * 200)
+    _insert_memory(session, memory_id="mem-long", display_text=long_text, confidence=0.9)
+    session.commit()
+
+    budget = count_tokens(f"[memory:mem-long] {long_text}", "gpt-4o") - 1
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="preference", model_name="gpt-4o",
+                             recall_count=8, recall_token_budget=budget)
+    assert result == []  # doesn't fit even by one token — skipped, never truncated
+
+
+def test_recall_memories_empty_when_no_candidates(session):
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="anything", model_name="gpt-4o",
+                             recall_count=8, recall_token_budget=800)
+    assert result == []
+
+
+def test_recall_memories_sequential_mixed_selection_prefers_diversity(session, monkeypatch):
+    """Two embedded candidates: greedy selection's diversity penalty must
+    still admit both if the query itself has room."""
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-1", display_text="User likes coffee",
+                   subject_key="s1", predicate="user.fact", confidence=0.9)
+    _insert_memory(session, memory_id="mem-2", display_text="User likes tea",
+                   subject_key="s2", predicate="user.fact", confidence=0.9)
+    session.commit()
+
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-1": 0.9, "mem-2": 0.9}))
+
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1",
+                                           query_text="beverage", model_name="gpt-4o",
+                                           recall_count=8, recall_token_budget=8000)
+    assert set(result) == {"[memory:mem-1] User likes coffee", "[memory:mem-2] User likes tea"}
+
+
+def test_recall_memories_final_tie_break_order(session, monkeypatch):
+    """Two candidates with identical score/selection_score break the tie by
+    updated_at DESC, then id ASC."""
+    _no_semantic_hits(monkeypatch)
+    _insert_memory(session, memory_id="mem-b", display_text="apple", subject_key="s1",
+                   predicate="user.fact", confidence=0.9)
+    _insert_memory(session, memory_id="mem-a", display_text="apple", subject_key="s2",
+                   predicate="user.fact", confidence=0.9)
+    session.commit()
+    # both are byte-identical text so lexical/confidence/recency/source_quality are identical
+    # too (recency ties because both inserted in the same test transaction's `now()` call);
+    # tie-break must fall through to updated_at DESC, id ASC. Since both rows' updated_at are
+    # effectively equal (same statement batch), id ASC decides: 'mem-a' < 'mem-b'.
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="apple", model_name="gpt-4o",
+                             recall_count=1, recall_token_budget=8000)
+    assert result == ["[memory:mem-a] apple"]
