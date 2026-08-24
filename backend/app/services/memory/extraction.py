@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.services.agent.memory_settings import validate_memory_settings
-from app.services.memory.canonicalizer import canonical_hash
+from app.services.memory.canonicalizer import CanonicalizationError, canonical_hash
 from app.services.memory.consent import grant_consent
 from app.services.memory.predicate_registry import (
     PredicateRegistryError, check_cardinality, lookup_predicate,
@@ -109,17 +109,40 @@ def extract_memories_for_turn(db: Session, *, turn_id: str) -> dict:
             continue
 
         subject_key = candidate["subject_key"]
-        value_hash = canonical_hash(candidate["canonical_value"], "candidate_value")
+        try:
+            value_hash = canonical_hash(candidate["canonical_value"], "candidate_value")
+        except CanonicalizationError:
+            # Untrusted LLM output (e.g. json.loads happily accepts bare
+            # NaN/Infinity, which _parse_response passes through untouched)
+            # can produce a canonical_value that fails canonicalization. No
+            # DB statement has run yet for this candidate, so no rollback is
+            # needed -- just drop this one candidate, not the whole batch.
+            counters["rejected"] += 1
+            continue
 
+        # Non-deleted, not just active: a candidate must also be checked
+        # against pending_confirmation/conflicted rows, or a retry of the
+        # SAME turn (Task 6/7's sweep retries a turn whenever extraction
+        # fails partway through, by design) would either (a) duplicate a
+        # pending_confirmation row every retry, since an active-only lookup
+        # never finds it, or (b) find nothing at all once a predicate has
+        # been driven fully into 'conflicted' (both rows invisible under an
+        # active-only filter), fall through to the plain-write branch, and
+        # silently resurrect a fresh 'active' row for an already-contested
+        # fact. 'deleted' rows are genuine tombstones (from consent
+        # revocation) and correctly stay excluded.
         existing = db.execute(text(
-            "SELECT id, confidence FROM agent_memories WHERE security_domain_id = :d AND agent_id = :a "
-            "AND user_id = :u AND subject_key = :sk AND predicate = :pred AND status = 'active'"
+            "SELECT id, confidence, status FROM agent_memories WHERE security_domain_id = :d AND agent_id = :a "
+            "AND user_id = :u AND subject_key = :sk AND predicate = :pred AND status != 'deleted'"
         ), {"d": security_domain_id, "a": agent_id, "u": user_id, "sk": subject_key,
             "pred": candidate["predicate"]}).mappings().all()
 
         exact_match = next((e for e in existing if _same_hash(db, e["id"], value_hash)), None)
         if exact_match is not None:
-            # exact duplicate: merge provenance, retain MAXIMUM confidence
+            # exact duplicate (regardless of the matching row's status):
+            # merge provenance, retain MAXIMUM confidence. Only confidence/
+            # updated_at are touched -- a conflicted or pending_confirmation
+            # row's status is never changed as a side effect of a merge.
             db.execute(text(
                 "UPDATE agent_memories SET confidence = GREATEST(confidence, :conf), updated_at = now() "
                 "WHERE id = :id"
@@ -128,6 +151,15 @@ def extract_memories_for_turn(db: Session, *, turn_id: str) -> dict:
             continue
 
         if predicate_row["cardinality"] == "single" and existing:
+            if any(e["status"] == "conflicted" for e in existing):
+                # The predicate is already contested for this subject.
+                # Conflict resolution is out of scope for this plan (see
+                # _open_conflict's note); a differing candidate here is
+                # redundant with the conflict already open -- no-op rather
+                # than writing a fresh active row or opening a second
+                # conflict record.
+                counters["rejected"] += 1
+                continue
             # different single-valued value -> conflict set, neither recalled until resolved
             try:
                 _open_conflict(db, security_domain_id=security_domain_id, agent_id=agent_id, user_id=user_id,

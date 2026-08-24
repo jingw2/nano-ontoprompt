@@ -640,3 +640,97 @@ def test_sweep_processes_pending_outbox_rows_and_isolates_per_row_errors(session
     assert states["t-2"] == "applied"
     # a failed row stays pending for retry on the next sweep, not stuck 'processing'
     assert states["t-1"] == "pending"
+
+
+def test_extraction_retrying_pending_confirmation_candidate_does_not_duplicate(session, monkeypatch):
+    """Task 6/7's sweep retries a turn whenever extract_memories_for_turn
+    fails partway through (by design -- the outbox row stays 'pending' on
+    error). If the SAME candidate that already landed as pending_confirmation
+    is re-extracted on a later retry, the dedup lookup must find that
+    existing pending_confirmation row (not just active rows) and merge into
+    it, not create a second, duplicate row for the identical fact."""
+    from app.services.memory import extraction as extraction_module
+    candidate = {"subject_key": "self", "predicate": "user.preference", "canonical_value": "dark mode",
+                "display_text": "User seems to prefer dark mode", "kind": "semantic", "confidence": 0.7,
+                "sensitivity": "low", "source_spans": [1], "consent_basis": "explicit_confirmation",
+                "expires_at": None}
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [candidate])
+    for i in range(1, 4):
+        turn_id = f"t-{i}"
+        _seed_turn_with_messages(session, turn_id=turn_id)
+        extraction_module.extract_memories_for_turn(session, turn_id=turn_id)
+
+    rows = session.execute(text(
+        "SELECT status FROM agent_memories WHERE predicate = 'user.preference'"
+    )).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "pending_confirmation"
+
+
+def test_extraction_retry_of_conflict_causing_candidate_does_not_resurrect_active_row(session, monkeypatch):
+    """Once a single-valued predicate has been driven into 'conflicted'
+    (both the old and new memory rows move to status='conflicted'), a retry
+    of the SAME differing candidate that caused the conflict must not fall
+    through an active-only dedup lookup and insert a THIRD row with
+    status='active' -- that would silently un-suppress a contested fact for
+    P6B-2b's future active-only recall path, while the conflict itself is
+    still open and unresolved."""
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session, turn_id="t-1", user_text="Call me Alex.")
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+         "display_text": "Name is Alex", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+
+    conflicting_candidate = {
+        "subject_key": "self", "predicate": "user.name", "canonical_value": "Alexandra",
+        "display_text": "Name is Alexandra", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+        "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None,
+    }
+    _seed_turn_with_messages(session, turn_id="t-2", user_text="Actually my name is Alexandra.")
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [conflicting_candidate])
+    first_result = extraction_module.extract_memories_for_turn(session, turn_id="t-2")
+    assert first_result["conflicts"] == 1
+
+    # retry the SAME differing candidate again (simulating a sweep retry of
+    # this turn after some later, unrelated step failed)
+    _seed_turn_with_messages(session, turn_id="t-3", user_text="Actually my name is Alexandra.")
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [conflicting_candidate])
+    retry_result = extraction_module.extract_memories_for_turn(session, turn_id="t-3")
+
+    assert retry_result["written"] == 0
+    active_count = session.execute(text(
+        "SELECT count(*) FROM agent_memories WHERE predicate = 'user.name' AND status = 'active'"
+    )).scalar_one()
+    assert active_count == 0
+    statuses = {r["status"] for r in session.execute(text(
+        "SELECT status FROM agent_memories WHERE predicate = 'user.name'"
+    )).mappings().all()}
+    assert statuses == {"conflicted"}  # still exactly the original two conflicted rows, no third row
+
+
+def test_extraction_isolates_uncanonicalizable_candidate_value(session, monkeypatch):
+    """Untrusted LLM output can produce a canonical_value that fails
+    canonicalization outright (e.g. float('nan') -- json.loads accepts bare
+    NaN/Infinity by default, and _parse_response passes it through
+    untouched). That one candidate must be rejected without aborting the
+    rest of the batch."""
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": float("nan"),
+         "display_text": "Name is NaN", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+        {"subject_key": "self", "predicate": "user.role", "canonical_value": "engineer",
+         "display_text": "User is an engineer", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert result["rejected"] >= 1
+    assert result["written"] == 1
+    row = session.execute(text(
+        "SELECT predicate FROM agent_memories WHERE status = 'active'"
+    )).mappings().one()
+    assert row["predicate"] == "user.role"
