@@ -63,8 +63,8 @@ SOURCE_QUALITY = {
 SCORE_THRESHOLD = 0.60
 
 
-def _semantic_channel(security_domain_id: str, query_text: str, limit: int, *,
-                      sql_candidates: list[dict]) -> dict[str, float]:
+def _semantic_channel(security_domain_id: str, agent_id: str, user_id: str, query_text: str,
+                      limit: int, *, sql_candidates: list[dict]) -> dict[str, float]:
     from app.services.memory import vector_store
 
     current_versions = {
@@ -73,7 +73,7 @@ def _semantic_channel(security_domain_id: str, query_text: str, limit: int, *,
     }
     if not current_versions:
         return {}
-    hits = vector_store.query_similar(security_domain_id, query_text, limit)
+    hits = vector_store.query_similar(security_domain_id, agent_id, user_id, query_text, limit)
     return {h["id"]: h["cosine"] for h in hits if h["id"] in current_versions}
 
 
@@ -206,8 +206,8 @@ def recall_memories(db: Session, *, security_domain_id: str, agent_id: str, user
     lexical_scores = _lexical_channel(db, security_domain_id=security_domain_id,
                                       agent_id=agent_id, user_id=user_id,
                                       query_text=query_text, limit=overfetch)
-    semantic_scores = _semantic_channel(security_domain_id, query_text, overfetch,
-                                        sql_candidates=sql_candidates)
+    semantic_scores = _semantic_channel(security_domain_id, agent_id, user_id, query_text,
+                                        overfetch, sql_candidates=sql_candidates)
     scored = _dedup_and_score_candidates(sql_candidates=sql_candidates,
                                          lexical_scores=lexical_scores,
                                          semantic_scores=semantic_scores, now=now)

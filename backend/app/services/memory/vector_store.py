@@ -40,7 +40,8 @@ def memory_collection_name(security_domain_id: str) -> str:
     return f"{_COLLECTION_PREFIX}{security_domain_id}"
 
 
-def upsert_memory_embedding(memory_id: str, security_domain_id: str, display_text: str) -> bool:
+def upsert_memory_embedding(memory_id: str, agent_id: str, user_id: str,
+                            security_domain_id: str, display_text: str) -> bool:
     service = _service()
     if not service.available:
         return False
@@ -48,7 +49,8 @@ def upsert_memory_embedding(memory_id: str, security_domain_id: str, display_tex
     if not collection:
         return False
     try:
-        collection.upsert(ids=[memory_id], documents=[display_text])
+        collection.upsert(ids=[memory_id], documents=[display_text],
+                          metadatas=[{"agent_id": agent_id, "user_id": user_id}])
         return True
     except Exception as e:
         logger.warning("memory embedding upsert failed for %s: %s", memory_id, e)
@@ -70,7 +72,8 @@ def delete_memory_embedding(memory_id: str, security_domain_id: str) -> bool:
         return False
 
 
-def query_similar(security_domain_id: str, query_text: str, n_results: int) -> list[dict[str, Any]]:
+def query_similar(security_domain_id: str, agent_id: str, user_id: str, query_text: str,
+                  n_results: int) -> list[dict[str, Any]]:
     service = _service()
     if not service.available or n_results <= 0:
         return []
@@ -80,6 +83,7 @@ def query_similar(security_domain_id: str, query_text: str, n_results: int) -> l
     try:
         results = collection.query(
             query_texts=[query_text], n_results=n_results, include=["distances"],
+            where={"$and": [{"agent_id": agent_id}, {"user_id": user_id}]},
         )
     except Exception as e:
         logger.warning("memory embedding query failed for domain %s: %s", security_domain_id, e)

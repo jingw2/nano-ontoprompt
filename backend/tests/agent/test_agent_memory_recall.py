@@ -155,25 +155,28 @@ def test_upsert_and_query_similar_roundtrips_when_chroma_available():
 
     domain = f"sd-vs-{uuid.uuid4().hex[:8]}"
     memory_id = f"mem-{uuid.uuid4().hex[:8]}"
-    ok = vector_store.upsert_memory_embedding(memory_id, domain, "User's favorite color is blue")
+    ok = vector_store.upsert_memory_embedding(memory_id, "ag-1", "u-1", domain,
+                                              "User's favorite color is blue")
     assert ok is True
 
-    hits = vector_store.query_similar(domain, "what color does the user like", n_results=5)
+    hits = vector_store.query_similar(domain, "ag-1", "u-1", "what color does the user like",
+                                      n_results=5)
     assert any(h["id"] == memory_id for h in hits)
     hit = next(h for h in hits if h["id"] == memory_id)
     assert -1.0 <= hit["cosine"] <= 1.0
 
     deleted = vector_store.delete_memory_embedding(memory_id, domain)
     assert deleted is True
-    hits_after = vector_store.query_similar(domain, "what color does the user like", n_results=5)
+    hits_after = vector_store.query_similar(domain, "ag-1", "u-1",
+                                            "what color does the user like", n_results=5)
     assert all(h["id"] != memory_id for h in hits_after)
 
 
 def test_upsert_returns_false_when_chroma_unavailable(monkeypatch):
     from app.services.memory import vector_store
     monkeypatch.setattr(vector_store, "is_available", lambda: False)
-    assert vector_store.upsert_memory_embedding("mem-x", "sd-1", "text") is False
-    assert vector_store.query_similar("sd-1", "query", n_results=5) == []
+    assert vector_store.upsert_memory_embedding("mem-x", "ag-1", "u-1", "sd-1", "text") is False
+    assert vector_store.query_similar("sd-1", "ag-1", "u-1", "query", n_results=5) == []
     assert vector_store.delete_memory_embedding("mem-x", "sd-1") is False
 
 
@@ -194,7 +197,7 @@ def test_sweep_applies_pending_upsert_and_sets_embedding_model_version(session, 
     from app.services.memory import vector_store
     calls = []
     monkeypatch.setattr(vector_store, "upsert_memory_embedding",
-                        lambda mid, sd, text_: calls.append((mid, sd, text_)) or True)
+                        lambda mid, aid, uid, sd, text_: calls.append((mid, sd, text_)) or True)
 
     from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
     result = sweep_memory_vector_outbox(db=session)
@@ -248,7 +251,7 @@ def test_sweep_isolates_per_row_errors_and_leaves_row_pending(session, monkeypat
 
     from app.services.memory import vector_store
 
-    def flaky_upsert(memory_id, security_domain_id, display_text):
+    def flaky_upsert(memory_id, agent_id, user_id, security_domain_id, display_text):
         if memory_id == "mem-a":
             raise RuntimeError("simulated Chroma failure")
         return True
@@ -279,7 +282,7 @@ def test_sweep_claims_rows_with_for_update_skip_locked_not_double_processed(sess
     from app.services.memory import vector_store
     calls = []
     monkeypatch.setattr(vector_store, "upsert_memory_embedding",
-                        lambda mid, sd, t: calls.append(mid) or True)
+                        lambda mid, aid, uid, sd, t: calls.append(mid) or True)
 
     from app.tasks.agent_memory_vector import sweep_memory_vector_outbox
     first = sweep_memory_vector_outbox(db=session)
@@ -423,7 +426,7 @@ def test_lexical_channel_excludes_non_matching_candidates_entirely(session):
 
 def test_semantic_channel_excludes_stale_embedding_model_version(monkeypatch):
     from app.services.memory import recall, vector_store
-    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, a, u, q, n: [
         {"id": "mem-current", "cosine": 0.8}, {"id": "mem-stale", "cosine": 0.9},
         {"id": "mem-never-embedded", "cosine": 0.7},
     ])
@@ -432,14 +435,15 @@ def test_semantic_channel_excludes_stale_embedding_model_version(monkeypatch):
         {"id": "mem-stale", "embedding_model_version": "old-version"},
         {"id": "mem-never-embedded", "embedding_model_version": None},
     ]
-    scores = recall._semantic_channel("sd-1", "query", 10, sql_candidates=sql_candidates)
+    scores = recall._semantic_channel("sd-1", "ag-1", "u-1", "query", 10,
+                                      sql_candidates=sql_candidates)
     assert scores == {"mem-current": 0.8}
 
 
 def test_semantic_channel_empty_when_chroma_unavailable(monkeypatch):
     from app.services.memory import recall, vector_store
-    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [])
-    scores = recall._semantic_channel("sd-1", "query", 10, sql_candidates=[
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, a, u, q, n: [])
+    scores = recall._semantic_channel("sd-1", "ag-1", "u-1", "query", 10, sql_candidates=[
         {"id": "mem-1", "embedding_model_version": vector_store.MEMORY_EMBEDDING_MODEL_VERSION}])
     assert scores == {}
 
@@ -511,7 +515,7 @@ def _no_semantic_hits(monkeypatch):
     explicitly mocking it would make these tests flaky/order-dependent."""
     from app.services.memory import recall as recall_module
     monkeypatch.setattr(recall_module, "_semantic_channel",
-                        lambda sd, q, limit, *, sql_candidates: {})
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: {})
 
 
 def test_recall_memories_all_lexical_returns_cited_strings(session, monkeypatch):
@@ -542,7 +546,8 @@ def test_recall_memories_deduplicates_cross_channel_duplicate_winner(session, mo
     _insert_memory(session, memory_id="mem-1", display_text="User likes tea", confidence=0.9)
     session.commit()
 
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-1": 0.95} if any(c["id"] == "mem-1" for c in sql_candidates) else {}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -600,7 +605,8 @@ def test_recall_memories_sequential_mixed_selection_prefers_diversity(session, m
                    subject_key="s2", predicate="user.fact", confidence=0.9)
     session.commit()
 
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-1": 0.9, "mem-2": 0.9}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -610,24 +616,29 @@ def test_recall_memories_sequential_mixed_selection_prefers_diversity(session, m
     assert set(result) == {"[memory:mem-1] User likes coffee", "[memory:mem-2] User likes tea"}
 
 
-def test_recall_memories_final_tie_break_order(session, monkeypatch):
-    """Two candidates with identical score/selection_score break the tie by
-    updated_at DESC, then id ASC."""
-    _no_semantic_hits(monkeypatch)
-    _insert_memory(session, memory_id="mem-b", display_text="apple", subject_key="s1",
-                   predicate="user.fact", confidence=0.9)
-    _insert_memory(session, memory_id="mem-a", display_text="apple", subject_key="s2",
-                   predicate="user.fact", confidence=0.9)
-    session.commit()
-    # both are byte-identical text so lexical/confidence/recency/source_quality are identical
-    # too (recency ties because both inserted in the same test transaction's `now()` call);
-    # tie-break must fall through to updated_at DESC, id ASC. Since both rows' updated_at are
-    # effectively equal (same statement batch), id ASC decides: 'mem-a' < 'mem-b'.
-    from app.services.memory.recall import recall_memories
-    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
-                             user_id="u-1", query_text="apple", model_name="gpt-4o",
-                             recall_count=1, recall_token_budget=8000)
-    assert result == ["[memory:mem-a] apple"]
+def test_recall_memories_final_tie_break_order():
+    """Two candidates with identical score/selection_score AND identical
+    updated_at must break the tie via id ASC. Calls _greedy_select directly
+    (not recall_memories's full pipeline) because real DB inserts always
+    produce distinct updated_at timestamps a few hundred microseconds
+    apart, which the previous version of this test relied on by mistake --
+    that made the test pass via the updated_at DESC tier instead of the
+    id ASC tier it claimed to test, leaving _reverse_id_key completely
+    uncovered."""
+    from datetime import datetime, timezone
+    from app.services.memory.recall import _greedy_select
+
+    same_timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candidates = [
+        {"id": "mem-b", "display_text": "apple", "score": 0.9,
+         "ranking_mode": "lexical_only", "cosine": None, "updated_at": same_timestamp},
+        {"id": "mem-a", "display_text": "apple", "score": 0.9,
+         "ranking_mode": "lexical_only", "cosine": None, "updated_at": same_timestamp},
+    ]
+    selected = _greedy_select(candidates, recall_count=1, recall_token_budget=8000,
+                              model_name="gpt-4o")
+    assert len(selected) == 1
+    assert selected[0]["id"] == "mem-a"  # id ASC: "mem-a" < "mem-b"
 
 
 def test_greedy_select_diversity_penalty_stays_bounded_with_negative_raw_cosine(session, monkeypatch):
@@ -649,7 +660,8 @@ def test_greedy_select_diversity_penalty_stays_bounded_with_negative_raw_cosine(
 
     # raw cosines chosen so (cosine+1)/2 keeps both hybrid-eligible (score >= 0.60)
     # while still being far enough apart in raw space to have flipped the bug's sign.
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-already-selected": -0.2, "mem-new-candidate": 0.9}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -726,6 +738,30 @@ def test_recall_for_turn_fails_open_on_exception(session, monkeypatch):
     assert result == []
 
 
+def test_recall_for_turn_rolls_back_session_on_db_error(session, monkeypatch):
+    """A genuine DB-level error inside recall (e.g. a bad column reference)
+    aborts the current Postgres transaction on the Turn's shared session.
+    _recall_for_turn must roll that back before returning [] — otherwise
+    every later statement on the same session fails with
+    InFailedSqlTransaction even though recall itself degraded correctly."""
+    from app.services.memory import recall as recall_module
+
+    def _broken_recall(db, **kw):
+        db.execute(text("SELECT nonexistent_column_xyz FROM agent_memories"))
+
+    monkeypatch.setattr(recall_module, "recall_memories", _broken_recall)
+
+    from app.runtime.langgraph_runtime import _recall_for_turn
+    result = _recall_for_turn(session, session_id="sess-1", agent_id="ag-1",
+                              query_text="anything", model_name="gpt-4o",
+                              recall_count=8, recall_token_budget=800)
+    assert result == []
+
+    # The session must still be usable: without a rollback, Postgres refuses
+    # any further statement on the aborted transaction.
+    assert session.execute(text("SELECT 1")).scalar_one() == 1
+
+
 def test_recall_for_turn_empty_for_unknown_session(session):
     from app.runtime.langgraph_runtime import _recall_for_turn
     result = _recall_for_turn(session, session_id="does-not-exist", agent_id="ag-1",
@@ -740,7 +776,8 @@ def test_golden_all_embedded_candidates_use_hybrid_mode(session, monkeypatch):
                    confidence=0.9)
     session.commit()
 
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-1": 0.9}))
     # no lexical match at all for this query on purpose — still eligible via hybrid alone
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -790,7 +827,8 @@ def test_golden_mixed_candidates_highest_result_from_hybrid_mode(session, monkey
                    subject_key="s2", predicate="user.fact", confidence=0.1)
     session.commit()
 
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-embedded": 0.99} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -823,7 +861,8 @@ def test_golden_mixed_candidates_highest_result_from_lexical_only_mode(session, 
     # = 0.466875, the diversity-formula discount that applies even on the first pick)
     # still loses decisively to mem-lexical's undiscounted lexical_only score of 0.98
     # -- a real head-to-head where lexical-only wins on the merits.
-    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+    monkeypatch.setattr(recall_module, "_semantic_channel",
+                        lambda sd, aid, uid, q, limit, *, sql_candidates: (
         {"mem-embedded": 0.6} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
@@ -846,7 +885,7 @@ def test_golden_chroma_outage_all_candidates_fall_back_to_lexical_only(session, 
     ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
     session.commit()
 
-    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [])
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, a, u, q, n: [])
 
     from app.services.memory.recall import recall_memories
     result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
@@ -866,7 +905,7 @@ def test_golden_missing_embedding_excluded_from_vector_channel(session):
     assert row is None
 
     from app.services.memory.recall import _semantic_channel
-    scores = _semantic_channel(DEFAULT_DOMAIN, "query", 10, sql_candidates=[
+    scores = _semantic_channel(DEFAULT_DOMAIN, "ag-1", "u-1", "query", 10, sql_candidates=[
         {"id": "mem-1", "embedding_model_version": None}])
     assert scores == {}
 
@@ -881,9 +920,10 @@ def test_golden_stale_embedding_model_version_excluded_from_vector_channel(sessi
     ))
     session.commit()
 
-    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, a, u, q, n: [
         {"id": "mem-1", "cosine": 0.99}])  # Chroma still physically has it — SQL side is stale
 
-    scores = recall_module._semantic_channel(DEFAULT_DOMAIN, "query", 10, sql_candidates=[
+    scores = recall_module._semantic_channel(DEFAULT_DOMAIN, "ag-1", "u-1", "query", 10,
+                                             sql_candidates=[
         {"id": "mem-1", "embedding_model_version": "a-since-retired-embedding-model"}])
     assert scores == {}

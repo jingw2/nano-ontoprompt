@@ -102,6 +102,7 @@ def _recall_for_turn(db, *, session_id: str, agent_id: str, query_text: str, mod
     except Exception:
         logger.exception("memory recall failed for session_id=%s, agent_id=%s — continuing "
                          "with no recalled memories", session_id, agent_id)
+        db.rollback()
         return []
 
 

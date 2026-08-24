@@ -36,7 +36,7 @@ def sweep_memory_vector_outbox(db=None, *, batch: int = BATCH_SIZE) -> dict:
     try:
         rows = db.execute(text(
             "SELECT ov.id AS outbox_id, ov.memory_id, ov.event_type, m.security_domain_id, "
-            "m.display_text "
+            "m.agent_id, m.user_id, m.display_text "
             "FROM agent_memory_vector_outbox ov "
             "JOIN agent_memories m ON m.id = ov.memory_id "
             "WHERE ov.state = 'pending' ORDER BY ov.created_at LIMIT :batch "
@@ -49,7 +49,8 @@ def sweep_memory_vector_outbox(db=None, *, batch: int = BATCH_SIZE) -> dict:
             try:
                 if row["event_type"] == "upsert":
                     ok = vector_store.upsert_memory_embedding(
-                        row["memory_id"], row["security_domain_id"], row["display_text"])
+                        row["memory_id"], row["agent_id"], row["user_id"],
+                        row["security_domain_id"], row["display_text"])
                     if not ok:
                         raise RuntimeError("vector store upsert returned False")
                     db.execute(text(
