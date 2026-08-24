@@ -674,3 +674,61 @@ def test_greedy_select_diversity_penalty_stays_bounded_with_negative_raw_cosine(
     # (cosine + 1) / 2 for raw -0.2 is 0.4 -- must be in [0, 1], never the raw -0.2
     assert 0.0 <= scored[0]["cosine"] <= 1.0
     assert round(scored[0]["cosine"], 6) == 0.4
+
+
+def test_recall_for_turn_invokes_recall_memories_with_derived_scope(session, monkeypatch):
+    """Integration-shaped unit test: exercises the same call chain
+    _build_messages_and_tools uses, not the full LangGraph runtime (which
+    needs a live model server) — verifies recall_memories is actually
+    invoked with the right scope, derived from the baseline session fixture's
+    sess-1/ag-1/u-1 (already seeded, no extra setup needed)."""
+    _insert_memory(session, memory_id="mem-1", display_text="User likes dark mode", confidence=0.9)
+    session.commit()
+
+    from app.services.memory import recall as recall_module
+    captured = {}
+    real_recall = recall_module.recall_memories
+
+    def spy(db, **kwargs):
+        captured.update(kwargs)
+        return real_recall(db, **kwargs)
+
+    monkeypatch.setattr(recall_module, "recall_memories", spy)
+
+    # NOTE: deviates from the task-7 brief's literal query_text="theme preference"
+    # for the same reason documented above test_recall_memories_all_lexical_returns_
+    # cited_strings: plainto_tsquery('simple', 'theme preference') ANDs both terms,
+    # neither of which appears in "User likes dark mode", so it produces zero
+    # lexical matches; with Chroma unavailable in this environment the semantic
+    # channel is empty too, so the brief's literal query_text makes the real
+    # recall_memories legitimately return [] and the assertion unreachable.
+    # "dark mode" shares tokens with the fixture text and exercises the same
+    # scope-derivation behavior this test is meant to verify.
+    from app.runtime.langgraph_runtime import _recall_for_turn
+    result = _recall_for_turn(session, session_id="sess-1", agent_id="ag-1",
+                              query_text="dark mode", model_name="gpt-4o",
+                              recall_count=8, recall_token_budget=800)
+    assert result == ["[memory:mem-1] User likes dark mode"]
+    assert captured["security_domain_id"] == DEFAULT_DOMAIN
+    assert captured["agent_id"] == "ag-1"
+    assert captured["user_id"] == "u-1"
+
+
+def test_recall_for_turn_fails_open_on_exception(session, monkeypatch):
+    from app.services.memory import recall as recall_module
+    monkeypatch.setattr(recall_module, "recall_memories",
+                        lambda db, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    from app.runtime.langgraph_runtime import _recall_for_turn
+    result = _recall_for_turn(session, session_id="sess-1", agent_id="ag-1",
+                              query_text="anything", model_name="gpt-4o",
+                              recall_count=8, recall_token_budget=800)
+    assert result == []
+
+
+def test_recall_for_turn_empty_for_unknown_session(session):
+    from app.runtime.langgraph_runtime import _recall_for_turn
+    result = _recall_for_turn(session, session_id="does-not-exist", agent_id="ag-1",
+                              query_text="anything", model_name="gpt-4o",
+                              recall_count=8, recall_token_budget=800)
+    assert result == []

@@ -80,6 +80,31 @@ def _safe_tool_name(descriptor_id: str) -> str:
     return descriptor_id.replace(":", "_").replace("-", "_")
 
 
+def _recall_for_turn(db, *, session_id: str, agent_id: str, query_text: str, model_name: str,
+                     recall_count: int, recall_token_budget: int) -> list[str]:
+    """Fail-open wrapper around recall_memories: a degraded/unavailable
+    recall path (DB hiccup, unexpected error) must never fail the Turn —
+    it just means no memories get recalled this time, logged for
+    observability."""
+    try:
+        row = db.execute(text(
+            "SELECT u.security_domain_id, s.owner_user_id FROM agent_sessions s "
+            "JOIN users u ON u.id = s.owner_user_id WHERE s.id = :sid"
+        ), {"sid": session_id}).mappings().one_or_none()
+        if row is None:
+            return []
+        from app.services.memory.recall import recall_memories
+        return recall_memories(
+            db, security_domain_id=row["security_domain_id"], agent_id=agent_id,
+            user_id=row["owner_user_id"], query_text=query_text, model_name=model_name,
+            recall_count=recall_count, recall_token_budget=recall_token_budget,
+        )
+    except Exception:
+        logger.exception("memory recall failed for session_id=%s, agent_id=%s — continuing "
+                         "with no recalled memories", session_id, agent_id)
+        return []
+
+
 def _bound_summary(payload: dict, *, limit: int = 5) -> dict:
     """Observable, bounded tool result summary for the event stream."""
     summary: dict[str, Any] = {}
@@ -615,10 +640,21 @@ class LangGraphRuntime:
         # it's nullable (not every model has a verified contract), in which
         # case DEFAULT_TOTAL_BUDGET_TOKENS is the only fallback available.
         total_budget_tokens = (self._caller_info or {}).get("conservative_input_limit") or DEFAULT_TOTAL_BUDGET_TOKENS
+
+        recalled_memories: list[str] = []
+        if memory_settings["long_term_enabled"]:
+            recalled_memories = _recall_for_turn(
+                self.db, session_id=context.session_id, agent_id=context.agent_id,
+                query_text=context.user_message or "", model_name=context.model_name or "gpt-4o",
+                recall_count=memory_settings["recall_count"],
+                recall_token_budget=memory_settings["recall_token_budget"],
+            )
+
         messages = assemble_bounded_messages(
             system_prompt=system, tool_schemas=tools,
             application_state={**assembled["application_state"], **ontology_context},
-            retrieval_required=[], retrieval_optional=[], summary_text=summary_text, recalled_memories=[],
+            retrieval_required=[], retrieval_optional=[], summary_text=summary_text,
+            recalled_memories=recalled_memories,
             history_rows=history_rows, pending_interrupt=None,
             user_message=context.user_message or "请继续。", model_name=context.model_name or "gpt-4o",
             budgets=memory_settings, total_budget_tokens=total_budget_tokens,
