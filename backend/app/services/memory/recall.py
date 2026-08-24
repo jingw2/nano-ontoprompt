@@ -120,7 +120,8 @@ def _dedup_and_score_candidates(*, sql_candidates: list[dict], lexical_scores: d
         score, ranking_mode = result
         scored.append({
             "id": memory_id, "display_text": candidate["display_text"], "score": score,
-            "ranking_mode": ranking_mode, "cosine": semantic if ranking_mode == "hybrid" else None,
+            "ranking_mode": ranking_mode,
+            "cosine": (semantic + 1.0) / 2.0 if ranking_mode == "hybrid" else None,
             "updated_at": candidate["updated_at"],
         })
     return scored

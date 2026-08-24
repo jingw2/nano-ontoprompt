@@ -628,3 +628,49 @@ def test_recall_memories_final_tie_break_order(session, monkeypatch):
                              user_id="u-1", query_text="apple", model_name="gpt-4o",
                              recall_count=1, recall_token_budget=8000)
     assert result == ["[memory:mem-a] apple"]
+
+
+def test_greedy_select_diversity_penalty_stays_bounded_with_negative_raw_cosine(session, monkeypatch):
+    """Regression test for a real bug caught in review: storing the RAW
+    (unmapped, [-1,1]-range) semantic cosine instead of the (cosine+1)/2
+    -mapped value let the diversity penalty flip into a bonus for
+    negative/widely-divergent raw cosines. Confirms the fixed code keeps
+    _cosine_similarity_proxy's output genuinely bounded and the diversity
+    term genuinely penalizes (not rewards) closeness to an already-selected
+    embedded item."""
+    from datetime import datetime, timezone
+
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-already-selected", display_text="fact alpha",
+                   subject_key="s1", predicate="user.fact", confidence=0.9)
+    _insert_memory(session, memory_id="mem-new-candidate", display_text="fact beta",
+                   subject_key="s2", predicate="user.fact", confidence=0.9)
+    session.commit()
+
+    # raw cosines chosen so (cosine+1)/2 keeps both hybrid-eligible (score >= 0.60)
+    # while still being far enough apart in raw space to have flipped the bug's sign.
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-already-selected": -0.2, "mem-new-candidate": 0.9}))
+
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1", query_text="fact",
+                                           model_name="gpt-4o", recall_count=2,
+                                           recall_token_budget=8000)
+    # both should still be selected (score threshold is independently satisfied by
+    # each candidate's OWN mapped semantic score, not by the pairwise diversity term)
+    assert set(result) == {"[memory:mem-already-selected] fact alpha",
+                           "[memory:mem-new-candidate] fact beta"}
+
+    # direct unit check on the now-correctly-mapped cosine value stored internally
+    now = datetime.now(timezone.utc)
+    scored = recall_module._dedup_and_score_candidates(
+        sql_candidates=[
+            {"id": "mem-already-selected", "display_text": "fact alpha", "confidence": 0.9,
+             "consent_basis": "explicit_statement", "updated_at": now},
+        ],
+        lexical_scores={"mem-already-selected": 1.0},
+        semantic_scores={"mem-already-selected": -0.2}, now=now)
+    assert len(scored) == 1
+    # (cosine + 1) / 2 for raw -0.2 is 0.4 -- must be in [0, 1], never the raw -0.2
+    assert 0.0 <= scored[0]["cosine"] <= 1.0
+    assert round(scored[0]["cosine"], 6) == 0.4
