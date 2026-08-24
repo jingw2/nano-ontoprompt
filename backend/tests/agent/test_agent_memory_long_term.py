@@ -64,8 +64,9 @@ def session():
     ))
     s.execute(text(
         "INSERT INTO agent_versions (id, agent_id, version_no, name, default_model_config_version_id, "
-        "default_model_name, system_prompt, application_state_schema_version_id, config_hash, created_by, created_at) "
-        "VALUES ('av-1', 'ag-1', 1, 'test-version', 'mcv-1', 'test-model', '', :svid, 'h', 'u-1', now())"
+        "default_model_name, system_prompt, application_state_schema_version_id, config_hash, memory_settings, created_by, created_at) "
+        "VALUES ('av-1', 'ag-1', 1, 'test-version', 'mcv-1', 'test-model', '', :svid, 'h', "
+        "'{\"long_term_enabled\": true}'::json, 'u-1', now())"
     ), {"svid": app_schema_version_id})
     s.execute(text("UPDATE agents SET active_version_id = 'av-1' WHERE id = 'ag-1'"))
     s.execute(text(
@@ -408,3 +409,176 @@ def test_revoke_consent_only_tombstones_memories_via_their_LATEST_revision(sessi
     assert tombstoned == 0  # m-1's LATEST revision (rev-2) depends on new_consent, not old_consent
     memory = session.execute(text("SELECT status FROM agent_memories WHERE id = 'm-1'")).mappings().one()
     assert memory["status"] == "active"
+
+
+def _seed_turn_with_messages(session, turn_id="t-1", user_text="Please call me Alex.", assistant_text="Got it, Alex!"):
+    session.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, created_at, updated_at) "
+        "VALUES (:id, 'sess-1', 'succeeded', now(), now())"
+    ), {"id": turn_id})
+    # Allocate unique ordinals per session by extracting the turn number
+    turn_no = int(turn_id.split('-')[1])
+    ordinal_user = (turn_no - 1) * 2
+    ordinal_assistant = ordinal_user + 1
+    session.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES (:id1, 'sess-1', :turn, 'user', :ord_u, :u, now()), "
+        "(:id2, 'sess-1', :turn, 'assistant', :ord_a, :a, now())"
+    ), {"id1": f"{turn_id}-u", "id2": f"{turn_id}-a", "turn": turn_id, "ord_u": ordinal_user,
+        "ord_a": ordinal_assistant, "u": user_text, "a": assistant_text})
+    session.commit()
+
+
+def test_extraction_writes_explicit_statement_directly(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+         "display_text": "User's name is Alex", "kind": "semantic", "confidence": 0.95,
+         "sensitivity": "low", "source_spans": [0], "consent_basis": "explicit_statement",
+         "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert result == {"candidates": 1, "written": 1, "pending_confirmation": 0, "conflicts": 0, "rejected": 0}
+    row = session.execute(text(
+        "SELECT status, predicate, consent_basis FROM agent_memories WHERE agent_id = 'ag-1'"
+    )).mappings().one()
+    assert row["status"] == "active"
+    assert row["predicate"] == "user.name"
+    assert row["consent_basis"] == "explicit_statement"
+
+
+def test_extraction_holds_tool_derived_candidates_pending_confirmation(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.preference", "canonical_value": "dark mode",
+         "display_text": "User seems to prefer dark mode", "kind": "semantic", "confidence": 0.7,
+         "sensitivity": "low", "source_spans": [1], "consent_basis": "explicit_confirmation",
+         "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert result["pending_confirmation"] == 1
+    assert result["written"] == 0
+    row = session.execute(text(
+        "SELECT status FROM agent_memories WHERE agent_id = 'ag-1'"
+    )).mappings().one()
+    assert row["status"] == "pending_confirmation"
+
+
+def test_extraction_does_not_grant_consent_for_unconfirmed_candidates(session, monkeypatch):
+    """A candidate whose consent_basis is 'explicit_confirmation' has not
+    actually been consented to yet -- no real agent_memory_consents row
+    should be created (and the revision's consent_id must stay NULL) until
+    a future P6B-3 confirm action does so for real."""
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.preference", "canonical_value": "dark mode",
+         "display_text": "User seems to prefer dark mode", "kind": "semantic", "confidence": 0.7,
+         "sensitivity": "low", "source_spans": [1], "consent_basis": "explicit_confirmation",
+         "expires_at": None},
+    ])
+    extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert session.execute(text("SELECT count(*) FROM agent_memory_consents")).scalar_one() == 0
+    revision = session.execute(text(
+        "SELECT consent_id FROM agent_memory_revisions"
+    )).mappings().one()
+    assert revision["consent_id"] is None
+
+
+def test_extraction_rejects_unknown_predicate(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.ssn", "canonical_value": "123-45-6789",
+         "display_text": "SSN", "kind": "semantic", "confidence": 0.9, "sensitivity": "high",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert result["rejected"] == 1
+    assert result["written"] == 0
+    assert session.execute(text("SELECT count(*) FROM agent_memories")).scalar_one() == 0
+
+
+def test_extraction_deduplicates_exact_repeat_by_merging_provenance(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session, turn_id="t-1")
+    candidate = {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+                "display_text": "User's name is Alex", "kind": "semantic", "confidence": 0.80,
+                "sensitivity": "low", "source_spans": [0], "consent_basis": "explicit_statement",
+                "expires_at": None}
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [candidate])
+    extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+
+    _seed_turn_with_messages(session, turn_id="t-2")
+    higher_confidence = {**candidate, "confidence": 0.95}
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [higher_confidence])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-2")
+
+    assert result["written"] == 0  # merged into the existing row, not a new one
+    rows = session.execute(text(
+        "SELECT confidence FROM agent_memories WHERE status = 'active'"
+    )).mappings().all()
+    assert len(rows) == 1
+    assert float(rows[0]["confidence"]) == 0.95  # retained MAXIMUM confidence
+
+
+def test_extraction_creates_conflict_set_on_different_single_valued_correction(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session, turn_id="t-1", user_text="Call me Alex.")
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+         "display_text": "Name is Alex", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+
+    _seed_turn_with_messages(session, turn_id="t-2", user_text="Actually my name is Alexandra.")
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alexandra",
+         "display_text": "Name is Alexandra", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-2")
+    assert result["conflicts"] == 1
+    conflict = session.execute(text(
+        "SELECT status FROM agent_memory_conflicts WHERE predicate = 'user.name'"
+    )).mappings().one()
+    assert conflict["status"] == "open"
+    # neither memory is recalled while conflicted
+    statuses = {r["status"] for r in session.execute(text(
+        "SELECT status FROM agent_memories WHERE predicate = 'user.name'"
+    )).mappings().all()}
+    assert statuses == {"conflicted"}
+
+
+def test_extraction_noop_when_long_term_disabled(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    session.execute(text(
+        "UPDATE agent_versions SET memory_settings = '{\"long_term_enabled\": false}'::json WHERE id = 'av-1'"
+    ))
+    session.commit()
+    _seed_turn_with_messages(session)
+    called = []
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: called.append(1))
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert called == []
+    assert result == {"candidates": 0, "written": 0, "pending_confirmation": 0, "conflicts": 0, "rejected": 0}
+
+
+def test_extraction_writes_vector_outbox_row_for_each_new_active_memory(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+         "display_text": "Name is Alex", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    outbox = session.execute(text(
+        "SELECT event_type, state FROM agent_memory_vector_outbox"
+    )).mappings().all()
+    assert len(outbox) == 1
+    assert outbox[0]["event_type"] == "upsert"
+    assert outbox[0]["state"] == "pending"
