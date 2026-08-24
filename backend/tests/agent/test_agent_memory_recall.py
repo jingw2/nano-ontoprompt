@@ -145,3 +145,39 @@ def test_downgrade_removes_search_vector_column():
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         engine.dispose()
+
+
+def test_upsert_and_query_similar_roundtrips_when_chroma_available():
+    from app.services.memory import vector_store
+
+    if not vector_store.is_available():
+        pytest.skip("Chroma not reachable in this environment")
+
+    domain = f"sd-vs-{uuid.uuid4().hex[:8]}"
+    memory_id = f"mem-{uuid.uuid4().hex[:8]}"
+    ok = vector_store.upsert_memory_embedding(memory_id, domain, "User's favorite color is blue")
+    assert ok is True
+
+    hits = vector_store.query_similar(domain, "what color does the user like", n_results=5)
+    assert any(h["id"] == memory_id for h in hits)
+    hit = next(h for h in hits if h["id"] == memory_id)
+    assert -1.0 <= hit["cosine"] <= 1.0
+
+    deleted = vector_store.delete_memory_embedding(memory_id, domain)
+    assert deleted is True
+    hits_after = vector_store.query_similar(domain, "what color does the user like", n_results=5)
+    assert all(h["id"] != memory_id for h in hits_after)
+
+
+def test_upsert_returns_false_when_chroma_unavailable(monkeypatch):
+    from app.services.memory import vector_store
+    monkeypatch.setattr(vector_store, "is_available", lambda: False)
+    assert vector_store.upsert_memory_embedding("mem-x", "sd-1", "text") is False
+    assert vector_store.query_similar("sd-1", "query", n_results=5) == []
+    assert vector_store.delete_memory_embedding("mem-x", "sd-1") is False
+
+
+def test_memory_collection_name_is_namespaced_per_security_domain():
+    from app.services.memory import vector_store
+    assert vector_store.memory_collection_name("sd-1") != vector_store.memory_collection_name("sd-2")
+    assert "sd-1" in vector_store.memory_collection_name("sd-1")
