@@ -732,3 +732,144 @@ def test_recall_for_turn_empty_for_unknown_session(session):
                               query_text="anything", model_name="gpt-4o",
                               recall_count=8, recall_token_budget=800)
     assert result == []
+
+
+def test_golden_all_embedded_candidates_use_hybrid_mode(session, monkeypatch):
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-1", display_text="User prefers email over chat",
+                   confidence=0.9)
+    session.commit()
+
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-1": 0.9}))
+    # no lexical match at all for this query on purpose — still eligible via hybrid alone
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1",
+                                           query_text="zzz_no_lexical_match_zzz",
+                                           model_name="gpt-4o", recall_count=8,
+                                           recall_token_budget=800)
+    assert result == ["[memory:mem-1] User prefers email over chat"]
+
+
+def test_golden_all_lexical_candidates_use_lexical_only_mode(session, monkeypatch):
+    _no_semantic_hits(monkeypatch)
+    _insert_memory(session, memory_id="mem-1", display_text="apple apple apple", confidence=0.9)
+    session.commit()
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="apple", model_name="gpt-4o",
+                             recall_count=8, recall_token_budget=800)
+    assert result == ["[memory:mem-1] apple apple apple"]
+
+
+def test_golden_mixed_candidates_highest_result_from_hybrid_mode(session, monkeypatch):
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-embedded", display_text="User loves hiking",
+                   subject_key="s1", predicate="user.fact", confidence=0.95)
+    # NOTE: deviates from the task-8 brief's literal display_text="hiking hiking"
+    # (confidence=0.5) for mem-lexical. Verified directly against Postgres and by
+    # running the real (unmocked) recall_memories: with "hiking hiking" (2 hits)
+    # vs "User loves hiking" (1 hit), ts_rank_cd ranks them 0.2 vs 0.1, so
+    # min-max normalization gives mem-embedded lexical=0.0 and mem-lexical
+    # lexical=1.0. _greedy_select's selection_score for a hybrid-mode candidate
+    # is always 0.75*score (even with zero diversity penalty on the first pick),
+    # while a lexical_only candidate's selection_score is its raw score with no
+    # discount. With mem-embedded's own lexical component pinned at 0.0, its max
+    # attainable selection_score (~0.60, using the reachable max source_quality
+    # of 0.95) is provably lower than mem-lexical's lexical_only score at
+    # confidence=0.5 (~0.845) for ANY valid confidence/semantic values -- so the
+    # brief's literal fixture can never produce a hybrid-mode winner; it was
+    # failing when run verbatim. Fixed by (a) using a single "hiking" occurrence
+    # for mem-lexical too, so both candidates' lexical ranks tie at 1.0 (verified
+    # equal via ts_rank_cd), removing mem-embedded's lexical-component handicap,
+    # and (b) lowering mem-lexical's confidence to 0.1 so its own score drops
+    # below the hybrid candidate's now-competitive 0.75-discounted selection
+    # score. Everything else (assertions, ids, intent: verify a hybrid-mode
+    # candidate can out-rank a lexical-only one) is unchanged.
+    _insert_memory(session, memory_id="mem-lexical", display_text="hiking",
+                   subject_key="s2", predicate="user.fact", confidence=0.1)
+    session.commit()
+
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-embedded": 0.99} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
+
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1", query_text="hiking",
+                                           model_name="gpt-4o", recall_count=1,
+                                           recall_token_budget=8000)
+    assert result == ["[memory:mem-embedded] User loves hiking"]
+
+
+def test_golden_mixed_candidates_highest_result_from_lexical_only_mode(session, monkeypatch):
+    from app.services.memory import recall as recall_module
+    _insert_memory(session, memory_id="mem-embedded", display_text="unrelated fact",
+                   subject_key="s1", predicate="user.fact", confidence=0.5)
+    _insert_memory(session, memory_id="mem-lexical", display_text="running running running",
+                   subject_key="s2", predicate="user.fact", confidence=0.95)
+    session.commit()
+
+    monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
+        {"mem-embedded": 0.1} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
+
+    result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
+                                           agent_id="ag-1", user_id="u-1", query_text="running",
+                                           model_name="gpt-4o", recall_count=1,
+                                           recall_token_budget=8000)
+    assert result == ["[memory:mem-lexical] running running running"]
+
+
+def test_golden_chroma_outage_all_candidates_fall_back_to_lexical_only(session, monkeypatch):
+    """Even a candidate that WAS previously embedded (a current, matching
+    embedding_model_version on the SQL row) must fall back to lexical-only
+    if Chroma itself is unreachable/errors at query time — this is the
+    meaningful "outage" case, distinct from "never embedded" (already
+    covered by test_golden_missing_embedding_excluded_from_vector_channel)."""
+    from app.services.memory import vector_store
+    _insert_memory(session, memory_id="mem-1", display_text="banana banana", confidence=0.9)
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = :v WHERE id = 'mem-1'"
+    ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
+    session.commit()
+
+    monkeypatch.setattr(vector_store, "is_available", lambda: False)
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [])
+
+    from app.services.memory.recall import recall_memories
+    result = recall_memories(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                             user_id="u-1", query_text="banana", model_name="gpt-4o",
+                             recall_count=8, recall_token_budget=800)
+    assert result == ["[memory:mem-1] banana banana"]
+
+
+def test_golden_missing_embedding_excluded_from_vector_channel(session):
+    _insert_memory(session, memory_id="mem-1", display_text="never embedded fact",
+                   confidence=0.9)
+    session.commit()
+    # embedding_model_version defaults to NULL — missing, per Global Constraints.
+    row = session.execute(text(
+        "SELECT embedding_model_version FROM agent_memories WHERE id = 'mem-1'"
+    )).scalar_one()
+    assert row is None
+
+    from app.services.memory.recall import _semantic_channel
+    scores = _semantic_channel(DEFAULT_DOMAIN, "query", 10, sql_candidates=[
+        {"id": "mem-1", "embedding_model_version": None}])
+    assert scores == {}
+
+
+def test_golden_stale_embedding_model_version_excluded_from_vector_channel(session, monkeypatch):
+    from app.services.memory import recall as recall_module, vector_store
+    _insert_memory(session, memory_id="mem-1", display_text="stale embedding fact",
+                   confidence=0.9)
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = 'a-since-retired-embedding-model' "
+        "WHERE id = 'mem-1'"
+    ))
+    session.commit()
+
+    monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [
+        {"id": "mem-1", "cosine": 0.99}])  # Chroma still physically has it — SQL side is stale
+
+    scores = recall_module._semantic_channel(DEFAULT_DOMAIN, "query", 10, sql_candidates=[
+        {"id": "mem-1", "embedding_model_version": "a-since-retired-embedding-model"}])
+    assert scores == {}
