@@ -46,30 +46,35 @@ def _normalize_number(value) -> str:
     raise CanonicalizationError(f"unsupported numeric type {type(value)}")
 
 
-def _canonicalize_internal(value, in_container=False):
-    """Internal canonicalization helper.
+def canonicalize(value):
+    """Recursively canonicalize a JSON-compatible value per every rule in the
+    module docstring (NFKC + whitespace-collapse + case-fold for strings,
+    string-form for numbers, UTC RFC3339 for timestamps, sorted keys for
+    objects, sorted values for SetSemantics, unchanged order for plain lists).
 
-    When in_container=True, numbers are NOT converted to strings;
-    only bare top-level numbers are stringified.
+    Every rule — including number normalization — applies at every level of
+    nesting, not just at the top, so that structurally-equal facts (e.g. an
+    `int` 3 vs. a `float` 3.0 nested under the same key) canonicalize to the
+    same value and therefore hash identically.
+
+    Call this exactly once, on raw (not-yet-canonicalized) input.
+    canonicalize() is NOT idempotent for CaseSensitive-wrapped values: the
+    output is a plain str that no longer carries the case-sensitivity
+    marker, so re-canonicalizing already-canonicalized output would silently
+    casefold a value the first pass deliberately preserved.
     """
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, CaseSensitive):
-        return str(value)
+        # NFKC + whitespace-collapse still apply; only case-folding is skipped.
+        text = unicodedata.normalize("NFKC", str(value))
+        return " ".join(text.split())
     if isinstance(value, str):
         text = unicodedata.normalize("NFKC", value)
         text = " ".join(text.split())  # collapses all Unicode whitespace, trims ends
         return text.casefold()
     if isinstance(value, (int, float, Decimal)):
-        if in_container:
-            # Inside containers, preserve the number type but validate it
-            if isinstance(value, float):
-                if math.isnan(value) or math.isinf(value):
-                    raise CanonicalizationError("NaN/infinity are not canonicalizable")
-            return value
-        else:
-            # Top-level numbers are canonicalized to strings
-            return _normalize_number(value)
+        return _normalize_number(value)
     if isinstance(value, datetime):
         dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
         return dt.isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -78,17 +83,13 @@ def _canonicalize_internal(value, in_container=False):
         types = {type(v) for v in value}
         if len(types) > 1:
             raise CanonicalizationError("mixed-type sets are not canonicalizable")
-        items = [_canonicalize_internal(v, in_container=True) for v in value]
+        items = [canonicalize(v) for v in value]
         return sorted(items)
     if isinstance(value, list):
-        return [_canonicalize_internal(v, in_container=True) for v in value]
+        return [canonicalize(v) for v in value]
     if isinstance(value, dict):
-        return {k: _canonicalize_internal(value[k], in_container=True) for k in sorted(value)}
+        return {k: canonicalize(value[k]) for k in sorted(value)}
     raise CanonicalizationError(f"unsupported type {type(value)}")
-
-
-def canonicalize(value):
-    return _canonicalize_internal(value, in_container=False)
 
 
 def canonical_hash(value, value_type: str) -> str:

@@ -206,17 +206,46 @@ def test_canonicalize_converts_timestamps_to_utc_rfc3339_microseconds():
 
 def test_canonicalize_sorts_object_keys():
     from app.services.memory.canonicalizer import canonicalize
-    assert canonicalize({"b": 1, "a": 2}) == {"a": 2, "b": 1}
+    # nested numbers are also normalized to their canonical string form
+    # (see test_canonicalize_normalizes_numbers_recursively_in_containers)
+    assert canonicalize({"b": 1, "a": 2}) == {"a": "2", "b": "1"}
 
 
 def test_canonicalize_preserves_list_order_by_default():
     from app.services.memory.canonicalizer import canonicalize
-    assert canonicalize([3, 1, 2]) == [3, 1, 2]
+    assert canonicalize([3, 1, 2]) == ["3", "1", "2"]
 
 
 def test_canonicalize_sorts_set_semantics_lists():
     from app.services.memory.canonicalizer import canonicalize, SetSemantics
-    assert canonicalize(SetSemantics([3, 1, 2])) == [1, 2, 3]
+    assert canonicalize(SetSemantics([3, 1, 2])) == ["1", "2", "3"]
+
+
+def test_canonicalize_normalizes_numbers_recursively_in_containers():
+    from decimal import Decimal
+    from app.services.memory.canonicalizer import canonicalize
+    # number normalization applies at every level of nesting, not just the
+    # top level -- an int 3 and a float 3.0 nested under the same key must
+    # canonicalize identically so their dedup hashes match.
+    assert canonicalize({"amount": 3}) == canonicalize({"amount": 3.0})
+    assert canonicalize([Decimal("3.140")]) == ["3.14"]
+
+
+def test_canonical_hash_treats_equal_nested_numbers_as_identical():
+    from decimal import Decimal
+    from app.services.memory.canonicalizer import canonical_hash
+    assert canonical_hash({"amount": 3}, "object") == canonical_hash({"amount": 3.0}, "object")
+    # a bare Decimal nested inside a container must not crash canonical_hash
+    assert canonical_hash({"amount": Decimal("3.140")}, "object") == canonical_hash({"amount": 3.14}, "object")
+
+
+def test_canonicalize_case_sensitive_still_applies_nfkc_and_whitespace_rules():
+    from app.services.memory.canonicalizer import canonicalize, CaseSensitive
+    # CaseSensitive only skips case-folding -- NFKC normalization and
+    # whitespace-collapsing are unconditional rules that still apply.
+    assert canonicalize(CaseSensitive("  MixedCase   Name  ")) == "MixedCase Name"
+    # U+FB01 LATIN SMALL LIGATURE FI -> "fi" under NFKC, case preserved
+    assert canonicalize(CaseSensitive("ﬁle")) == "file"
 
 
 def test_canonicalize_rejects_nan_and_infinity():
