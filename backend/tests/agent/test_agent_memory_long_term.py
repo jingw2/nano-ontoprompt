@@ -322,3 +322,89 @@ def test_check_cardinality_ignores_deleted_rows(session):
     # only 9 active now -> 10th allowed
     check_cardinality(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1", user_id="u-1",
                       subject_key="self", predicate="user.preference")
+
+
+def test_grant_consent_creates_a_row(session):
+    from app.services.memory.consent import grant_consent
+    consent_id = grant_consent(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                               user_id="u-1", consent_basis="explicit_statement")
+    row = session.execute(text(
+        "SELECT consent_basis, revoked_at FROM agent_memory_consents WHERE id = :id"
+    ), {"id": consent_id}).mappings().one()
+    assert row["consent_basis"] == "explicit_statement"
+    assert row["revoked_at"] is None
+
+
+def test_revoke_consent_tombstones_dependent_memories_and_writes_vector_outbox(session):
+    from app.services.memory.consent import grant_consent, revoke_consent
+    consent_id = grant_consent(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                               user_id="u-1", consent_basis="explicit_statement")
+    session.execute(text(
+        "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, subject_key, "
+        "predicate, canonical_value, canonical_value_hash, display_text, confidence, sensitivity, "
+        "consent_basis, source_spans, status, created_at, updated_at) "
+        "VALUES ('m-1', :d, 'ag-1', 'u-1', 'semantic', 'self', 'user.name', "
+        "'{}'::jsonb, 'h' || repeat('0', 63), 'x', 0.9, 'low', 'explicit_statement', '[]'::jsonb, "
+        "'active', now(), now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, display_text, "
+        "confidence, consent_basis, source_spans, consent_id, created_by, created_at) "
+        "VALUES ('rev-1', 'm-1', 1, '{}'::jsonb, 'x', 0.9, 'explicit_statement', '[]'::jsonb, :cid, 'u-1', now())"
+    ), {"cid": consent_id})
+    session.commit()
+
+    tombstoned = revoke_consent(session, consent_id=consent_id)
+    assert tombstoned == 1
+
+    memory = session.execute(text(
+        "SELECT status, deleted_at FROM agent_memories WHERE id = 'm-1'"
+    )).mappings().one()
+    assert memory["status"] == "deleted"
+    assert memory["deleted_at"] is not None
+
+    outbox = session.execute(text(
+        "SELECT event_type, state FROM agent_memory_vector_outbox WHERE memory_id = 'm-1'"
+    )).mappings().one()
+    assert outbox["event_type"] == "delete"
+    assert outbox["state"] == "pending"
+
+    consent_row = session.execute(text(
+        "SELECT revoked_at FROM agent_memory_consents WHERE id = :id"
+    ), {"id": consent_id}).mappings().one()
+    assert consent_row["revoked_at"] is not None
+
+
+def test_revoke_consent_only_tombstones_memories_via_their_LATEST_revision(session):
+    """A memory corrected under a NEW consent must not be tombstoned when the
+    OLD consent basis is revoked -- only the latest revision's consent
+    governs the current active row."""
+    from app.services.memory.consent import grant_consent, revoke_consent
+    old_consent = grant_consent(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                                user_id="u-1", consent_basis="explicit_statement")
+    new_consent = grant_consent(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1",
+                                user_id="u-1", consent_basis="explicit_statement")
+    session.execute(text(
+        "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, subject_key, "
+        "predicate, canonical_value, canonical_value_hash, display_text, confidence, sensitivity, "
+        "consent_basis, source_spans, status, created_at, updated_at) "
+        "VALUES ('m-1', :d, 'ag-1', 'u-1', 'semantic', 'self', 'user.name', "
+        "'{}'::jsonb, 'h' || repeat('0', 63), 'x', 0.9, 'low', 'explicit_statement', '[]'::jsonb, "
+        "'active', now(), now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, display_text, "
+        "confidence, consent_basis, source_spans, consent_id, created_by, created_at, superseded_at) "
+        "VALUES ('rev-1', 'm-1', 1, '{}'::jsonb, 'old', 0.9, 'explicit_statement', '[]'::jsonb, :cid, 'u-1', now(), now())"
+    ), {"cid": old_consent})
+    session.execute(text(
+        "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, display_text, "
+        "confidence, consent_basis, source_spans, consent_id, created_by, created_at) "
+        "VALUES ('rev-2', 'm-1', 2, '{}'::jsonb, 'new', 0.9, 'explicit_statement', '[]'::jsonb, :cid, 'u-1', now())"
+    ), {"cid": new_consent})
+    session.commit()
+
+    tombstoned = revoke_consent(session, consent_id=old_consent)
+    assert tombstoned == 0  # m-1's LATEST revision (rev-2) depends on new_consent, not old_consent
+    memory = session.execute(text("SELECT status FROM agent_memories WHERE id = 'm-1'")).mappings().one()
+    assert memory["status"] == "active"
