@@ -273,3 +273,52 @@ def test_canonical_hash_includes_version_and_value_type():
 def test_canonical_hash_is_deterministic():
     from app.services.memory.canonicalizer import canonical_hash
     assert canonical_hash({"b": 1, "a": 2}, "object") == canonical_hash({"a": 2, "b": 1}, "object")
+
+
+def test_lookup_predicate_returns_registered_cardinality(session):
+    from app.services.memory.predicate_registry import lookup_predicate
+    assert lookup_predicate(session, "user.preference") == {"predicate": "user.preference", "cardinality": "multi"}
+    assert lookup_predicate(session, "user.name") == {"predicate": "user.name", "cardinality": "single"}
+    assert lookup_predicate(session, "user.unknown") is None
+
+
+def _seed_active_memory(session, mid: str, predicate: str = "user.preference", subject_key: str = "self"):
+    session.execute(text(
+        "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, subject_key, "
+        "predicate, canonical_value, canonical_value_hash, display_text, confidence, sensitivity, "
+        "consent_basis, source_spans, status, created_at, updated_at) "
+        "VALUES (:id, :d, 'ag-1', 'u-1', 'semantic', :sk, :pred, "
+        "'{}'::jsonb, :hash, 'x', 0.9, 'low', 'explicit_statement', '[]'::jsonb, "
+        "'active', now(), now())"
+    ), {"id": mid, "d": DEFAULT_DOMAIN, "sk": subject_key, "pred": predicate, "hash": f"h{mid}" + "0" * 60})
+
+
+def test_check_cardinality_passes_under_the_cap(session):
+    from app.services.memory.predicate_registry import check_cardinality
+    for i in range(9):
+        _seed_active_memory(session, f"m-{i}")
+    session.commit()
+    check_cardinality(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1", user_id="u-1",
+                      subject_key="self", predicate="user.preference")  # 9 active, 10th allowed -> no raise
+
+
+def test_check_cardinality_raises_at_the_cap(session):
+    from app.services.memory.predicate_registry import PredicateRegistryError, check_cardinality
+    for i in range(10):
+        _seed_active_memory(session, f"m-{i}")
+    session.commit()
+    with pytest.raises(PredicateRegistryError):
+        check_cardinality(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1", user_id="u-1",
+                          subject_key="self", predicate="user.preference")
+
+
+def test_check_cardinality_ignores_deleted_rows(session):
+    from app.services.memory.predicate_registry import check_cardinality
+    for i in range(10):
+        _seed_active_memory(session, f"m-{i}")
+    session.commit()
+    session.execute(text("UPDATE agent_memories SET status = 'deleted' WHERE id = 'm-0'"))
+    session.commit()
+    # only 9 active now -> 10th allowed
+    check_cardinality(session, security_domain_id=DEFAULT_DOMAIN, agent_id="ag-1", user_id="u-1",
+                      subject_key="self", predicate="user.preference")
