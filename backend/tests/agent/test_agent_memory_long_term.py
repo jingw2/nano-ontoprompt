@@ -156,3 +156,91 @@ def test_extraction_outbox_state_check_constraint(session):
         ))
         session.commit()
     session.rollback()
+
+
+def test_canonicalize_nfkc_normalizes_unicode():
+    from app.services.memory.canonicalizer import canonicalize
+    # U+FB01 LATIN SMALL LIGATURE FI -> "fi" under NFKC
+    assert canonicalize("ﬁle") == "file"
+
+
+def test_canonicalize_trims_and_collapses_whitespace():
+    from app.services.memory.canonicalizer import canonicalize
+    assert canonicalize("  hello   world    ") == "hello world"
+
+
+def test_canonicalize_case_folds_predicate_and_schema_declared_strings():
+    from app.services.memory.canonicalizer import canonicalize
+    # bare string values case-fold by default (predicate/subject-key handling
+    # is the caller's responsibility per-field; canonicalize() folds any
+    # plain string value it's given)
+    assert canonicalize("HELLO World") == "hello world"
+
+
+def test_canonicalize_preserves_case_sensitive_marked_values():
+    from app.services.memory.canonicalizer import canonicalize, CaseSensitive
+    assert canonicalize(CaseSensitive("MixedCase")) == "MixedCase"
+
+
+def test_canonicalize_encodes_booleans_and_null_explicitly():
+    from app.services.memory.canonicalizer import canonicalize
+    assert canonicalize(True) is True
+    assert canonicalize(False) is False
+    assert canonicalize(None) is None
+
+
+def test_canonicalize_normalizes_integers_and_decimals():
+    from app.services.memory.canonicalizer import canonicalize
+    assert canonicalize(3.0) == "3"
+    assert canonicalize(3.140) == "3.14"
+    assert canonicalize(1e3) == "1000"
+    assert canonicalize(42) == "42"
+
+
+def test_canonicalize_converts_timestamps_to_utc_rfc3339_microseconds():
+    from datetime import datetime, timezone
+    from app.services.memory.canonicalizer import canonicalize
+    dt = datetime(2026, 8, 24, 10, 30, 0, 500000, tzinfo=timezone.utc)
+    assert canonicalize(dt) == "2026-08-24T10:30:00.500000Z"
+
+
+def test_canonicalize_sorts_object_keys():
+    from app.services.memory.canonicalizer import canonicalize
+    assert canonicalize({"b": 1, "a": 2}) == {"a": 2, "b": 1}
+
+
+def test_canonicalize_preserves_list_order_by_default():
+    from app.services.memory.canonicalizer import canonicalize
+    assert canonicalize([3, 1, 2]) == [3, 1, 2]
+
+
+def test_canonicalize_sorts_set_semantics_lists():
+    from app.services.memory.canonicalizer import canonicalize, SetSemantics
+    assert canonicalize(SetSemantics([3, 1, 2])) == [1, 2, 3]
+
+
+def test_canonicalize_rejects_nan_and_infinity():
+    from app.services.memory.canonicalizer import CanonicalizationError, canonicalize
+    with pytest.raises(CanonicalizationError):
+        canonicalize(float("nan"))
+    with pytest.raises(CanonicalizationError):
+        canonicalize(float("inf"))
+
+
+def test_canonicalize_rejects_mixed_type_sets():
+    from app.services.memory.canonicalizer import CanonicalizationError, SetSemantics, canonicalize
+    with pytest.raises(CanonicalizationError):
+        canonicalize(SetSemantics([1, "two", 3]))
+
+
+def test_canonical_hash_includes_version_and_value_type():
+    from app.services.memory.canonicalizer import CANONICALIZER_VERSION, canonical_hash
+    h1 = canonical_hash("hello", "string")
+    h2 = canonical_hash("hello", "text")  # different value_type -> different hash
+    assert h1 != h2
+    assert len(h1) == 64  # sha256 hex digest
+
+
+def test_canonical_hash_is_deterministic():
+    from app.services.memory.canonicalizer import canonical_hash
+    assert canonical_hash({"b": 1, "a": 2}, "object") == canonical_hash({"a": 2, "b": 1}, "object")
