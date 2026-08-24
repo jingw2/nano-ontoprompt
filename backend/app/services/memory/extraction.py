@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.services.agent.memory_settings import validate_memory_settings
@@ -128,9 +129,20 @@ def extract_memories_for_turn(db: Session, *, turn_id: str) -> dict:
 
         if predicate_row["cardinality"] == "single" and existing:
             # different single-valued value -> conflict set, neither recalled until resolved
-            _open_conflict(db, security_domain_id=security_domain_id, agent_id=agent_id, user_id=user_id,
-                           subject_key=subject_key, predicate=candidate["predicate"],
-                           existing_memory_id=existing[0]["id"], candidate=candidate, value_hash=value_hash)
+            try:
+                _open_conflict(db, security_domain_id=security_domain_id, agent_id=agent_id, user_id=user_id,
+                               subject_key=subject_key, predicate=candidate["predicate"],
+                               existing_memory_id=existing[0]["id"], candidate=candidate, value_hash=value_hash)
+            except IntegrityError:
+                # Untrusted LLM output tripped a DB CHECK/FK constraint (e.g.
+                # out-of-range confidence, misspelled kind/consent_basis).
+                # Postgres aborts the transaction on a failed statement, so
+                # the session must be rolled back before the next candidate
+                # can run. Drop only this candidate, not the whole batch --
+                # see extract_memories_for_turn's docstring contract.
+                db.rollback()
+                counters["rejected"] += 1
+                continue
             counters["conflicts"] += 1
             continue
 
@@ -143,17 +155,26 @@ def extract_memories_for_turn(db: Session, *, turn_id: str) -> dict:
                 continue
 
         status = "active" if candidate["consent_basis"] == "explicit_statement" else "pending_confirmation"
-        memory_id = _write_memory(db, security_domain_id=security_domain_id, agent_id=agent_id,
-                                  user_id=user_id, candidate=candidate, value_hash=value_hash, status=status)
+        try:
+            memory_id = _write_memory(db, security_domain_id=security_domain_id, agent_id=agent_id,
+                                      user_id=user_id, candidate=candidate, value_hash=value_hash, status=status)
+            if status == "active":
+                db.execute(text(
+                    "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+                    "VALUES (:id, :mid, 'upsert', 'pending', now())"
+                ), {"id": _new_id(), "mid": memory_id})
+            db.commit()
+        except IntegrityError:
+            # See comment above: isolate this candidate's bad DB write from
+            # the rest of the batch, and roll back the aborted transaction
+            # so subsequent candidates can still be processed.
+            db.rollback()
+            counters["rejected"] += 1
+            continue
         if status == "active":
             counters["written"] += 1
-            db.execute(text(
-                "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
-                "VALUES (:id, :mid, 'upsert', 'pending', now())"
-            ), {"id": _new_id(), "mid": memory_id})
         else:
             counters["pending_confirmation"] += 1
-        db.commit()
 
     return counters
 
@@ -184,8 +205,16 @@ def _write_memory(db: Session, *, security_domain_id: str, agent_id: str, user_i
     # conflicted -- only recall is gated by conflict status, not consent.
     consent_id = None
     if candidate["consent_basis"] == "explicit_statement":
+        # commit=False: the consent insert must land in the SAME transaction
+        # as the memory/revision inserts below, so all writes for this one
+        # candidate commit together atomically (or none do). This keeps
+        # grant_consent() idempotency-safe under Task 6/7's retry-tolerant
+        # periodic sweep -- a crash between a committed consent and the
+        # not-yet-committed memory row would otherwise cause a retry to
+        # mint a second, duplicate consent grant for the same candidate.
         consent_id = grant_consent(db, security_domain_id=security_domain_id, agent_id=agent_id,
-                                   user_id=user_id, consent_basis=candidate["consent_basis"])
+                                   user_id=user_id, consent_basis=candidate["consent_basis"],
+                                   commit=False)
     memory_id = _new_id()
     db.execute(text(
         "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, subject_key, "

@@ -16,13 +16,14 @@ def _new_id() -> str:
 
 
 def grant_consent(db: Session, *, security_domain_id: str, agent_id: str, user_id: str,
-                  consent_basis: str) -> str:
+                  consent_basis: str, commit: bool = True) -> str:
     consent_id = _new_id()
     db.execute(text(
         "INSERT INTO agent_memory_consents (id, security_domain_id, agent_id, user_id, consent_basis, granted_at) "
         "VALUES (:id, :d, :a, :u, :basis, now())"
     ), {"id": consent_id, "d": security_domain_id, "a": agent_id, "u": user_id, "basis": consent_basis})
-    db.commit()
+    if commit:
+        db.commit()
     return consent_id
 
 

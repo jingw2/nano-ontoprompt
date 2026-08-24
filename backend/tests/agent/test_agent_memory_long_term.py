@@ -582,3 +582,29 @@ def test_extraction_writes_vector_outbox_row_for_each_new_active_memory(session,
     assert len(outbox) == 1
     assert outbox[0]["event_type"] == "upsert"
     assert outbox[0]["state"] == "pending"
+
+
+def test_extraction_isolates_candidate_that_violates_db_constraint(session, monkeypatch):
+    """Untrusted LLM output can be well-shaped (passes `_grounded()`'s
+    presence check) but still violate a DB CHECK constraint -- e.g.
+    confidence outside [0, 1]. That one candidate's failed write must not
+    abort the whole batch: the next candidate must still be written, and
+    extract_memories_for_turn must return its counters normally instead of
+    raising."""
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session)
+    monkeypatch.setattr(extraction_module, "_call_extractor", lambda *a, **k: [
+        {"subject_key": "self", "predicate": "user.name", "canonical_value": "Alex",
+         "display_text": "Name is Alex", "kind": "semantic", "confidence": 1.5, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+        {"subject_key": "self", "predicate": "user.role", "canonical_value": "engineer",
+         "display_text": "User is an engineer", "kind": "semantic", "confidence": 0.9, "sensitivity": "low",
+         "source_spans": [0], "consent_basis": "explicit_statement", "expires_at": None},
+    ])
+    result = extraction_module.extract_memories_for_turn(session, turn_id="t-1")
+    assert result["rejected"] >= 1
+    assert result["written"] == 1
+    row = session.execute(text(
+        "SELECT predicate FROM agent_memories WHERE status = 'active'"
+    )).mappings().one()
+    assert row["predicate"] == "user.role"
