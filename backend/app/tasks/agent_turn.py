@@ -12,6 +12,7 @@ fails closed and never finalizes.  No API execution fallback and no Action
 writes.
 """
 import asyncio
+import uuid
 
 from sqlalchemy import text
 
@@ -119,6 +120,10 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             claim_generation=claim["claim_generation"], claim_token=claim_token,
             response_message_id=message_id,
         )
+        db.execute(text(
+            "INSERT INTO agent_memory_extraction_outbox (id, turn_id, session_id, state, created_at) "
+            "VALUES (:id, :turn_id, :session_id, 'pending', now())"
+        ), {"id": str(uuid.uuid4()), "turn_id": turn_id, "session_id": row["session_id"]})
         db.commit()
         return {"turn_id": turn_id, "status": "succeeded",
                 "events": [e.event_type for e in runtime_events]}

@@ -608,3 +608,35 @@ def test_extraction_isolates_candidate_that_violates_db_constraint(session, monk
         "SELECT predicate FROM agent_memories WHERE status = 'active'"
     )).mappings().one()
     assert row["predicate"] == "user.role"
+
+
+def test_sweep_processes_pending_outbox_rows_and_isolates_per_row_errors(session, monkeypatch):
+    from app.services.memory import extraction as extraction_module
+    _seed_turn_with_messages(session, turn_id="t-1")
+    _seed_turn_with_messages(session, turn_id="t-2")
+    session.execute(text(
+        "INSERT INTO agent_memory_extraction_outbox (id, turn_id, session_id, state, created_at) "
+        "VALUES ('eo-1', 't-1', 'sess-1', 'pending', now()), ('eo-2', 't-2', 'sess-1', 'pending', now())"
+    ))
+    session.commit()
+
+    calls = []
+
+    def fake_extract(db, *, turn_id):
+        calls.append(turn_id)
+        if turn_id == "t-1":
+            raise RuntimeError("simulated extraction failure")
+        return {"candidates": 0, "written": 0, "pending_confirmation": 0, "conflicts": 0, "rejected": 0}
+
+    monkeypatch.setattr(extraction_module, "extract_memories_for_turn", fake_extract)
+    from app.tasks.agent_memory_extraction import sweep_memory_extraction
+    result = sweep_memory_extraction(db=session)
+    assert sorted(calls) == ["t-1", "t-2"]
+    assert result == {"processed": 2, "applied": 1, "errors": 1}
+
+    states = {r["turn_id"]: r["state"] for r in session.execute(text(
+        "SELECT turn_id, state FROM agent_memory_extraction_outbox"
+    )).mappings().all()}
+    assert states["t-2"] == "applied"
+    # a failed row stays pending for retry on the next sweep, not stuck 'processing'
+    assert states["t-1"] == "pending"
