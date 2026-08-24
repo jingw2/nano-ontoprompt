@@ -808,8 +808,23 @@ def test_golden_mixed_candidates_highest_result_from_lexical_only_mode(session, 
                    subject_key="s2", predicate="user.fact", confidence=0.95)
     session.commit()
 
+    # NOTE: deviates from the task-8 brief's literal semantic mock value of 0.1 for
+    # mem-embedded. Verified directly by calling the real _score_candidate: with
+    # lexical=0.0 (mem-embedded's "unrelated fact" shares no tokens with "running"),
+    # confidence=0.5, source_quality=0.95 (explicit_statement), recency~1.0, a
+    # semantic of 0.1 (mapped to (0.1+1)/2=0.55) produces a hybrid score of only
+    # ~0.4975 -- below SCORE_THRESHOLD=0.60, so _score_candidate rejects it outright
+    # and mem-embedded never enters _greedy_select's pool at all. The test then
+    # "passes" only because mem-lexical is the sole scored candidate, not because it
+    # genuinely outranked a real hybrid-mode contender -- defeating the point of a
+    # "mixed candidates" golden. Raised semantic to 0.6 (mapped 0.8), which
+    # _score_candidate confirms clears the threshold at exactly 0.6225 (hybrid mode,
+    # genuinely in the pool), while its _greedy_select selection_score (0.75 * 0.6225
+    # = 0.466875, the diversity-formula discount that applies even on the first pick)
+    # still loses decisively to mem-lexical's undiscounted lexical_only score of 0.98
+    # -- a real head-to-head where lexical-only wins on the merits.
     monkeypatch.setattr(recall_module, "_semantic_channel", lambda sd, q, limit, *, sql_candidates: (
-        {"mem-embedded": 0.1} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
+        {"mem-embedded": 0.6} if any(c["id"] == "mem-embedded" for c in sql_candidates) else {}))
 
     result = recall_module.recall_memories(session, security_domain_id=DEFAULT_DOMAIN,
                                            agent_id="ag-1", user_id="u-1", query_text="running",
@@ -831,7 +846,6 @@ def test_golden_chroma_outage_all_candidates_fall_back_to_lexical_only(session, 
     ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
     session.commit()
 
-    monkeypatch.setattr(vector_store, "is_available", lambda: False)
     monkeypatch.setattr(vector_store, "query_similar", lambda sd, q, n: [])
 
     from app.services.memory.recall import recall_memories
