@@ -33,9 +33,18 @@ function embeddingLabel(status: MemoryDetail['embedding_status'], t: (key: strin
   return t('agent.memory.embedding_never', 'Embedding: not yet embedded')
 }
 
-function extractError(err: unknown, fallback: string): string {
+const ERROR_CODE_KEYS: Record<string, string> = {
+  MEMORY_CONFLICT: 'agent.memory.error_conflict',
+  MEMORY_CONSENT_REQUIRED: 'agent.memory.error_consent_required',
+}
+
+function extractError(err: unknown, fallback: string, t: (key: string, fallback: string) => string): string {
   const detail = (err as { detail?: string })?.detail
-  return typeof detail === 'string' && detail ? detail : fallback
+  if (typeof detail === 'string' && detail) {
+    const key = ERROR_CODE_KEYS[detail]
+    return key ? t(key, detail) : detail
+  }
+  return fallback
 }
 
 export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props) {
@@ -60,7 +69,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
         setConflicts(confRes.items)
       })
       .catch(err => {
-        setError(extractError(err, t('agent.memory.load_failed', '加载记忆失败')))
+        setError(extractError(err, t('agent.memory.load_failed', '加载记忆失败'), t))
       })
   }, [agentId, t])
 
@@ -86,7 +95,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
       await agentMemoriesApi.confirm(agentId, memoryId, true)
       await load()
     } catch (err) {
-      setError(extractError(err, t('agent.memory.action_failed', '操作失败')))
+      setError(extractError(err, t('agent.memory.action_failed', '操作失败'), t))
     } finally {
       setBusyId(null)
     }
@@ -98,7 +107,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
       await agentMemoriesApi.reject(agentId, memoryId)
       await load()
     } catch (err) {
-      setError(extractError(err, t('agent.memory.action_failed', '操作失败')))
+      setError(extractError(err, t('agent.memory.action_failed', '操作失败'), t))
     } finally {
       setBusyId(null)
     }
@@ -112,7 +121,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
       await agentMemoriesApi.correct(agentId, memoryId, text)
       await load()
     } catch (err) {
-      setError(extractError(err, t('agent.memory.action_failed', '操作失败')))
+      setError(extractError(err, t('agent.memory.action_failed', '操作失败'), t))
     } finally {
       setBusyId(null)
     }
@@ -125,7 +134,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
       await agentMemoriesApi.delete(agentId, memoryId)
       await load()
     } catch (err) {
-      setError(extractError(err, t('agent.memory.action_failed', '操作失败')))
+      setError(extractError(err, t('agent.memory.action_failed', '操作失败'), t))
     } finally {
       setBusyId(null)
     }
@@ -137,7 +146,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
       await agentMemoriesApi.resolveConflict(agentId, conflictId, winningMemoryId)
       await load()
     } catch (err) {
-      setError(extractError(err, t('agent.memory.action_failed', '操作失败')))
+      setError(extractError(err, t('agent.memory.action_failed', '操作失败'), t))
     } finally {
       setBusyId(null)
     }

@@ -263,6 +263,19 @@ def test_confirm_memory_rejects_conflicted_memory(session):
         confirm_memory(session, user_id="u-1", memory_id="mem-a", consent=True)
 
 
+def test_confirm_memory_on_already_deleted_memory_raises_consent_required(session):
+    _insert_memory(session, memory_id="mem-1", status="deleted",
+                   consent_basis="explicit_confirmation")
+    session.execute(text(
+        "UPDATE agent_memories SET deleted_at = now() WHERE id = 'mem-1'"
+    ))
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConsentRequiredError, confirm_memory
+    with pytest.raises(MemoryConsentRequiredError):
+        confirm_memory(session, user_id="u-1", memory_id="mem-1", consent=True)
+
+
 def test_reject_memory_tombstones_without_granting_consent(session):
     _insert_memory(session, memory_id="mem-1", status="pending_confirmation",
                    consent_basis="explicit_confirmation")
@@ -284,6 +297,47 @@ def test_reject_memory_tombstones_without_granting_consent(session):
         "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
     )).scalar_one()
     assert outbox_count == 0  # pending_confirmation memories are never embedded, per P6B-2a
+
+
+def test_reject_memory_enqueues_delete_outbox_for_active_embedded_memory(session):
+    from app.services.memory import vector_store
+    _insert_memory(session, memory_id="mem-1", status="active")
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = :v WHERE id = 'mem-1'"
+    ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
+    session.commit()
+
+    from app.services.memory.inspection import reject_memory
+    reject_memory(session, user_id="u-1", memory_id="mem-1")
+
+    row = session.execute(text(
+        "SELECT status, deleted_at FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "deleted"
+    assert row["deleted_at"] is not None
+    outbox = session.execute(text(
+        "SELECT event_type, state FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).mappings().one()
+    assert outbox["event_type"] == "delete"
+    assert outbox["state"] == "pending"
+
+
+def test_reject_memory_called_twice_is_idempotent(session):
+    from app.services.memory import vector_store
+    _insert_memory(session, memory_id="mem-1", status="active")
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = :v WHERE id = 'mem-1'"
+    ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
+    session.commit()
+
+    from app.services.memory.inspection import reject_memory
+    reject_memory(session, user_id="u-1", memory_id="mem-1")
+    reject_memory(session, user_id="u-1", memory_id="mem-1")  # second call: no-op
+
+    outbox_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).scalar_one()
+    assert outbox_count == 1  # not duplicated by the second call
 
 
 def test_correct_memory_supersedes_revision_and_updates_row(session):
@@ -329,6 +383,82 @@ def test_correct_memory_rejects_conflicted_memory(session):
     from app.services.memory.inspection import MemoryConflictError, correct_memory
     with pytest.raises(MemoryConflictError):
         correct_memory(session, user_id="u-1", memory_id="mem-a", display_text="new value")
+
+
+def test_correct_memory_on_deleted_memory_returns_none_and_no_outbox(session):
+    _insert_memory(session, memory_id="mem-1", status="deleted")
+    session.execute(text(
+        "UPDATE agent_memories SET deleted_at = now() WHERE id = 'mem-1'"
+    ))
+    session.commit()
+
+    from app.services.memory.inspection import correct_memory
+    result = correct_memory(session, user_id="u-1", memory_id="mem-1", display_text="new value")
+    assert result is None
+
+    outbox_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).scalar_one()
+    assert outbox_count == 0
+
+
+def test_correct_memory_carries_forward_consent_id(session):
+    _insert_memory(session, memory_id="mem-1", display_text="original")
+    session.execute(text(
+        "INSERT INTO agent_memory_consents (id, security_domain_id, agent_id, user_id, "
+        "consent_basis, granted_at) VALUES ('con-1', :d, 'ag-1', 'u-1', 'explicit_statement', now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "UPDATE agent_memory_revisions SET consent_id = 'con-1' WHERE id = 'rev-mem-1'"
+    ))
+    session.commit()
+
+    from app.services.memory.inspection import correct_memory
+    correct_memory(session, user_id="u-1", memory_id="mem-1", display_text="corrected")
+
+    new_consent_id = session.execute(text(
+        "SELECT consent_id FROM agent_memory_revisions "
+        "WHERE memory_id = 'mem-1' AND superseded_at IS NULL"
+    )).scalar_one()
+    assert new_consent_id == "con-1"
+
+
+def test_correct_memory_uses_candidate_value_namespace_and_syncs_canonical_value(session):
+    from app.services.memory.canonicalizer import canonical_hash
+    _insert_memory(session, memory_id="mem-1", display_text="original")
+    session.commit()
+
+    from app.services.memory.inspection import correct_memory
+    correct_memory(session, user_id="u-1", memory_id="mem-1", display_text="corrected value")
+
+    row = session.execute(text(
+        "SELECT canonical_value, canonical_value_hash FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    # Same inputs a fresh candidate restating this value would hash with --
+    # extraction.py always calls canonical_hash(value, "candidate_value").
+    expected_hash = canonical_hash("corrected value", "candidate_value")
+    assert row["canonical_value_hash"] == expected_hash
+    assert row["canonical_value"] == "corrected value"
+
+
+def test_correct_memory_dedup_collision_raises_memory_conflict_error(session):
+    from app.services.memory.canonicalizer import canonical_hash
+    _insert_memory(session, memory_id="mem-1", subject_key="self", predicate="user.name",
+                   display_text="Alex", status="active")
+    _insert_memory(session, memory_id="mem-2", subject_key="self", predicate="user.name",
+                   display_text="Bob", status="active")
+    colliding_hash = canonical_hash("Robert", "candidate_value")
+    session.execute(text(
+        "UPDATE agent_memories SET canonical_value_hash = :h WHERE id = 'mem-2'"
+    ), {"h": colliding_hash})
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConflictError, correct_memory
+    with pytest.raises(MemoryConflictError):
+        correct_memory(session, user_id="u-1", memory_id="mem-1", display_text="Robert")
+
+    # session must still be usable -- proves the rollback actually happened
+    assert session.execute(text("SELECT 1")).scalar_one() == 1
 
 
 def test_delete_memory_tombstones_and_enqueues_outbox_when_previously_embedded(session):
@@ -472,6 +602,34 @@ def test_resolve_conflict_skips_outbox_delete_when_loser_never_embedded(session)
         "SELECT memory_id, event_type FROM agent_memory_vector_outbox"
     )).mappings().all()}
     assert outbox_events == {"mem-a": "upsert"}  # no delete for the never-embedded loser
+
+
+def test_resolve_conflict_grants_consent_for_unconsented_explicit_confirmation_winner(session):
+    _insert_memory(session, memory_id="mem-a", status="conflicted", display_text="Alex",
+                   consent_basis="explicit_confirmation")
+    _insert_memory(session, memory_id="mem-b", status="conflicted", display_text="Alexandra",
+                   subject_key="self")
+    session.execute(text(
+        "INSERT INTO agent_memory_conflicts (id, security_domain_id, agent_id, user_id, "
+        "subject_key, predicate, memory_id_a, memory_id_b, status, created_at) "
+        "VALUES ('conf-1', :d, 'ag-1', 'u-1', 'self', 'user.name', 'mem-a', 'mem-b', 'open', now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+
+    from app.services.memory.inspection import resolve_conflict
+    result = resolve_conflict(session, user_id="u-1", conflict_id="conf-1",
+                              winning_memory_id="mem-a")
+    assert result["status"] == "active"
+
+    consent_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_consents"
+    )).scalar_one()
+    assert consent_count == 1
+    revision_consent_id = session.execute(text(
+        "SELECT consent_id FROM agent_memory_revisions "
+        "WHERE memory_id = 'mem-a' AND superseded_at IS NULL"
+    )).scalar_one()
+    assert revision_consent_id is not None
 
 
 def test_resolve_conflict_rejects_memory_id_not_in_this_conflict(session):

@@ -419,6 +419,47 @@ def test_purge_hard_deletes_long_tombstoned_memories_and_children(schema):
     session.close()
 
 
+def test_purge_never_deletes_memory_with_pending_vector_outbox_row(schema):
+    session = _session(schema)
+    old_deleted_at = datetime.now(timezone.utc) - timedelta(days=31)
+    _seed_memory_prereqs(session)
+
+    # Never successfully swept from Chroma: embedding_model_version is still
+    # set and its vector-outbox row is still state='pending' (sweep failure /
+    # Chroma down for 30+ days) -- step 12 must not hard-delete this memory,
+    # or the Chroma document is permanently orphaned with no SQL record it
+    # ever existed.
+    session.execute(text(
+        "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, "
+        "subject_key, predicate, canonical_value, canonical_value_hash, display_text, "
+        "confidence, sensitivity, consent_basis, source_spans, status, deleted_at, "
+        "embedding_model_version, created_at, updated_at) "
+        "VALUES ('mem-unswept', :d, 'ag-1', 'u-1', 'semantic', 'mem-unswept', 'user.name', "
+        "'\"x\"'::jsonb, 'hash-mem-unswept', 'fact', 0.9, 'low', 'explicit_statement', "
+        "'[0]'::jsonb, 'deleted', :deleted_at, 'memory-embed-chroma-default-v1', now(), now())"
+    ), {"d": DEFAULT_DOMAIN, "deleted_at": old_deleted_at})
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-unswept', 'mem-unswept', 'delete', 'pending', now())"
+    ))
+    session.commit()
+
+    from app.services.retention.fixed_policy import run_fixed_purge, claim_purge_job
+    job = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="fixed")
+    result = run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN,
+                             job_id=job["id"], claim_token=job["claim_token"])
+    ledger = result["ledger"]
+
+    assert ledger["purge_expired_long_term_memories"] == 0
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_memories WHERE id = 'mem-unswept'"
+    )).scalar_one() == 1
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-unswept'"
+    )).scalar_one() == 1
+    session.close()
+
+
 def test_purge_never_deletes_memory_still_part_of_open_conflict(schema):
     session = _session(schema)
     old_deleted_at = datetime.now(timezone.utc) - timedelta(days=31)

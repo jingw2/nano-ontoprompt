@@ -9,6 +9,7 @@ access-grant check, matching the spec's "consented inspection" framing.
 from __future__ import annotations
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 
@@ -111,6 +112,8 @@ def confirm_memory(db: Session, *, user_id: str, memory_id: str, consent: bool) 
         raise MemoryConsentRequiredError("MEMORY_CONSENT_REQUIRED")
     if row["status"] == "conflicted":
         raise MemoryConflictError("MEMORY_CONFLICT")
+    if row["status"] != "pending_confirmation":
+        raise MemoryConsentRequiredError("MEMORY_CONSENT_REQUIRED")
 
     from app.services.memory.consent import grant_consent
     consent_id = grant_consent(db, security_domain_id=row["security_domain_id"],
@@ -132,10 +135,16 @@ def confirm_memory(db: Session, *, user_id: str, memory_id: str, consent: bool) 
 
 
 def reject_memory(db: Session, *, user_id: str, memory_id: str) -> None:
-    db.execute(text(
+    row = db.execute(text(
         "UPDATE agent_memories SET status = 'deleted', deleted_at = now(), updated_at = now() "
-        "WHERE id = :id AND user_id = :u AND status != 'deleted'"
-    ), {"id": memory_id, "u": user_id})
+        "WHERE id = :id AND user_id = :u AND status != 'deleted' "
+        "RETURNING embedding_model_version"
+    ), {"id": memory_id, "u": user_id}).mappings().one_or_none()
+    if row is not None and row["embedding_model_version"] is not None:
+        db.execute(text(
+            "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+            "VALUES (:id, :mid, 'delete', 'pending', now())"
+        ), {"id": _new_id(), "mid": memory_id})
     db.commit()
 
 
@@ -146,16 +155,23 @@ def correct_memory(db: Session, *, user_id: str, memory_id: str, display_text: s
     from app.services.memory.canonicalizer import canonical_hash
 
     row = db.execute(text(
-        "SELECT status, confidence, consent_basis FROM agent_memories "
-        "WHERE id = :id AND user_id = :u"
+        "SELECT m.status, m.confidence, m.consent_basis, r.consent_id FROM agent_memories m "
+        "JOIN agent_memory_revisions r ON r.memory_id = m.id AND r.superseded_at IS NULL "
+        "WHERE m.id = :id AND m.user_id = :u"
     ), {"id": memory_id, "u": user_id}).mappings().one_or_none()
     if row is None:
         return None
     if row["status"] == "conflicted":
         raise MemoryConflictError("MEMORY_CONFLICT")
+    if row["status"] == "deleted":
+        return None
 
     final_confidence = confidence if confidence is not None else float(row["confidence"])
-    value_hash = canonical_hash(display_text, "corrected_value")
+    # "candidate_value" (not "corrected_value"): must match extraction.py's
+    # value_type literal exactly, or a corrected memory's hash lives in a
+    # permanently different namespace than any future candidate's hash and
+    # _same_hash() in extraction.py can never match it again.
+    value_hash = canonical_hash(display_text, "candidate_value")
     next_revision_no = db.execute(text(
         "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM agent_memory_revisions WHERE memory_id = :id"
     ), {"id": memory_id}).scalar_one()
@@ -166,16 +182,22 @@ def correct_memory(db: Session, *, user_id: str, memory_id: str, display_text: s
     ), {"id": memory_id})
     db.execute(text(
         "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, "
-        "display_text, confidence, consent_basis, source_spans, created_by, created_at) "
+        "display_text, confidence, consent_basis, source_spans, consent_id, created_by, created_at) "
         "VALUES (:id, :mid, :rno, CAST(:val AS jsonb), :disp, :conf, :consent_basis, "
-        "CAST('[]' AS jsonb), :u, now())"
+        "CAST('[]' AS jsonb), :cid, :u, now())"
     ), {"id": _new_id(), "mid": memory_id, "rno": next_revision_no,
         "val": json.dumps(display_text), "disp": display_text, "conf": final_confidence,
-        "consent_basis": row["consent_basis"], "u": user_id})
-    db.execute(text(
-        "UPDATE agent_memories SET display_text = :disp, confidence = :conf, "
-        "canonical_value_hash = :hash, updated_at = now() WHERE id = :id"
-    ), {"disp": display_text, "conf": final_confidence, "hash": value_hash, "id": memory_id})
+        "consent_basis": row["consent_basis"], "cid": row["consent_id"], "u": user_id})
+    try:
+        db.execute(text(
+            "UPDATE agent_memories SET display_text = :disp, confidence = :conf, "
+            "canonical_value = CAST(:val AS jsonb), canonical_value_hash = :hash, updated_at = now() "
+            "WHERE id = :id"
+        ), {"disp": display_text, "conf": final_confidence, "val": json.dumps(display_text),
+            "hash": value_hash, "id": memory_id})
+    except IntegrityError:
+        db.rollback()
+        raise MemoryConflictError("MEMORY_CONFLICT")
     db.execute(text(
         "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
         "VALUES (:id, :mid, 'upsert', 'pending', now())"
@@ -215,7 +237,7 @@ def list_conflicts(db: Session, *, user_id: str, agent_id: str) -> list[dict]:
 def resolve_conflict(db: Session, *, user_id: str, conflict_id: str,
                      winning_memory_id: str) -> dict:
     conflict = db.execute(text(
-        "SELECT memory_id_a, memory_id_b FROM agent_memory_conflicts "
+        "SELECT memory_id_a, memory_id_b, security_domain_id, agent_id FROM agent_memory_conflicts "
         "WHERE id = :id AND user_id = :u AND status = 'open'"
     ), {"id": conflict_id, "u": user_id}).mappings().one_or_none()
     if conflict is None:
@@ -225,13 +247,29 @@ def resolve_conflict(db: Session, *, user_id: str, conflict_id: str,
     losing_memory_id = (conflict["memory_id_b"] if winning_memory_id == conflict["memory_id_a"]
                         else conflict["memory_id_a"])
 
-    winning_revision_id = db.execute(text(
-        "SELECT id FROM agent_memory_revisions WHERE memory_id = :id AND superseded_at IS NULL"
-    ), {"id": winning_memory_id}).scalar_one()
+    winning_revision = db.execute(text(
+        "SELECT id, consent_basis, consent_id FROM agent_memory_revisions "
+        "WHERE memory_id = :id AND superseded_at IS NULL"
+    ), {"id": winning_memory_id}).mappings().one()
+    winning_revision_id = winning_revision["id"]
 
     db.execute(text(
         "UPDATE agent_memories SET status = 'active', updated_at = now() WHERE id = :id"
     ), {"id": winning_memory_id})
+    if (winning_revision["consent_id"] is None
+            and winning_revision["consent_basis"] == "explicit_confirmation"):
+        # Mirror confirm_memory's pattern: activating an explicit_confirmation
+        # winner IS the user's confirmation -- grant real consent now rather
+        # than leaving the winner active with no consent backing it. Skip if
+        # a consent_id is already present (e.g. this side was previously the
+        # active side of the conflict) to avoid double-granting.
+        from app.services.memory.consent import grant_consent
+        consent_id = grant_consent(db, security_domain_id=conflict["security_domain_id"],
+                                   agent_id=conflict["agent_id"], user_id=user_id,
+                                   consent_basis="explicit_confirmation", commit=False)
+        db.execute(text(
+            "UPDATE agent_memory_revisions SET consent_id = :cid WHERE id = :rid"
+        ), {"cid": consent_id, "rid": winning_revision_id})
     row = db.execute(text(
         "UPDATE agent_memories SET status = 'deleted', deleted_at = now(), updated_at = now() "
         "WHERE id = :id RETURNING embedding_model_version"

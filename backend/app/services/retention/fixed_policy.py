@@ -264,6 +264,9 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
         "SELECT m.id FROM agent_memories m "
         "WHERE m.security_domain_id = :domain AND m.status = 'deleted' "
         "AND m.deleted_at < :cutoff "
+        "AND m.embedding_model_version IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM agent_memory_vector_outbox ov "
+        "  WHERE ov.memory_id = m.id AND ov.state = 'pending') "
         "AND NOT EXISTS (SELECT 1 FROM agent_memory_conflicts c "
         "  WHERE (c.memory_id_a = m.id OR c.memory_id_b = m.id) AND c.status = 'open')"
     ), {"domain": security_domain_id, "cutoff": memory_cutoff}).fetchall()]
