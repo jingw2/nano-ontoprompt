@@ -829,6 +829,19 @@
         "title": "CancelTurnRequest",
         "type": "object"
       },
+      "ConfirmMemoryRequest": {
+        "properties": {
+          "consent": {
+            "title": "Consent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "consent"
+        ],
+        "title": "ConfirmMemoryRequest",
+        "type": "object"
+      },
       "ConnectionCreate": {
         "properties": {
           "config": {
@@ -879,6 +892,30 @@
           "status"
         ],
         "title": "ConnectionResponse",
+        "type": "object"
+      },
+      "CorrectMemoryRequest": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "display_text": {
+            "title": "Display Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_text"
+        ],
+        "title": "CorrectMemoryRequest",
         "type": "object"
       },
       "CreateAgentAccessGrantRequest": {
@@ -3276,6 +3313,19 @@
           "preview_hash"
         ],
         "title": "ResolveApprovalRequest",
+        "type": "object"
+      },
+      "ResolveConflictRequest": {
+        "properties": {
+          "winning_memory_id": {
+            "title": "Winning Memory Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "winning_memory_id"
+        ],
+        "title": "ResolveConflictRequest",
         "type": "object"
       },
       "ResolveReconciliationRequest": {
@@ -5992,6 +6042,466 @@
         "summary": "Agent Audit List",
         "tags": [
           "agent-application-state"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories": {
+      "get": {
+        "operationId": "get_memories_api_v1_agents__agent_id__memories_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Memories",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/conflicts": {
+      "get": {
+        "operationId": "get_conflicts_api_v1_agents__agent_id__memories_conflicts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Conflicts",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/conflicts/{conflict_id}/resolve": {
+      "post": {
+        "operationId": "post_resolve_conflict_api_v1_agents__agent_id__memories_conflicts__conflict_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conflict_id",
+            "required": true,
+            "schema": {
+              "title": "Conflict Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveConflictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Resolve Conflict",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/{memory_id}": {
+      "get": {
+        "operationId": "get_memory_detail_api_v1_agents__agent_id__memories__memory_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Memory Detail",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/{memory_id}/confirm": {
+      "post": {
+        "operationId": "post_confirm_memory_api_v1_agents__agent_id__memories__memory_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Confirm Memory",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/{memory_id}/correct": {
+      "post": {
+        "operationId": "post_correct_memory_api_v1_agents__agent_id__memories__memory_id__correct_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Correct Memory",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/{memory_id}/delete": {
+      "post": {
+        "operationId": "post_delete_memory_api_v1_agents__agent_id__memories__memory_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Delete Memory",
+        "tags": [
+          "agent-memories"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/memories/{memory_id}/reject": {
+      "post": {
+        "operationId": "post_reject_memory_api_v1_agents__agent_id__memories__memory_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Reject Memory",
+        "tags": [
+          "agent-memories"
         ]
       }
     },

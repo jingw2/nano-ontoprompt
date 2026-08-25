@@ -135,7 +135,6 @@ CORE_SECTION12 = {
 }
 
 POST_MVP_SURFACES = {
-    ("GET", "/api/v1/agents/{agent_id}/memories"),          # P6B
     ("GET", "/api/v2/signed-skills"),                       # P7C
     ("GET", "/api/v2/mcp-applications"),                    # P7D/P7E
 }

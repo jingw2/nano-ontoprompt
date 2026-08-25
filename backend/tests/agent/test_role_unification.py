@@ -108,6 +108,14 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v1/mcp"),
         ("POST", "/api/v1/mcp/write-requests/{request_id}/approve"),
         ("POST", "/api/v1/mcp/write-requests/{request_id}/reject"),
+        # P6B-3: memory inspection/correction/deletion, owner-scoped via
+        # user_id=current_user.id in the service layer (same pattern as the
+        # Agent/application routes above)
+        ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/confirm"),
+        ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/reject"),
+        ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/correct"),
+        ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/delete"),
+        ("POST", "/api/v1/agents/{agent_id}/memories/conflicts/{conflict_id}/resolve"),
     }
     bypasses = []
     for route in app.routes:
