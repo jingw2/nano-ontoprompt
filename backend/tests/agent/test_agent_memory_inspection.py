@@ -139,8 +139,7 @@ def test_get_memory_includes_revision_history(session):
     result = get_memory(session, user_id="u-1", memory_id="mem-1")
     assert result["id"] == "mem-1"
     assert result["display_text"] == "original"
-    revision_texts = {r["display_text"] for r in result["revisions"]}
-    assert revision_texts == {"original", "stale"}
+    assert [r["display_text"] for r in result["revisions"]] == ["original", "stale"]
 
 
 def test_get_memory_returns_none_for_wrong_user(session):
