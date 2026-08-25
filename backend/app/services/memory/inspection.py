@@ -196,3 +196,58 @@ def delete_memory(db: Session, *, user_id: str, memory_id: str) -> None:
             "VALUES (:id, :mid, 'delete', 'pending', now())"
         ), {"id": _new_id(), "mid": memory_id})
     db.commit()
+
+
+def list_conflicts(db: Session, *, user_id: str, agent_id: str) -> list[dict]:
+    rows = db.execute(text(
+        "SELECT c.id AS conflict_id, c.subject_key, c.predicate, c.memory_id_a, "
+        "ma.display_text AS display_text_a, c.memory_id_b, mb.display_text AS display_text_b, "
+        "c.created_at "
+        "FROM agent_memory_conflicts c "
+        "JOIN agent_memories ma ON ma.id = c.memory_id_a "
+        "JOIN agent_memories mb ON mb.id = c.memory_id_b "
+        "WHERE c.user_id = :u AND c.agent_id = :a AND c.status = 'open' "
+        "ORDER BY c.created_at DESC"
+    ), {"u": user_id, "a": agent_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def resolve_conflict(db: Session, *, user_id: str, conflict_id: str,
+                     winning_memory_id: str) -> dict:
+    conflict = db.execute(text(
+        "SELECT memory_id_a, memory_id_b FROM agent_memory_conflicts "
+        "WHERE id = :id AND user_id = :u AND status = 'open'"
+    ), {"id": conflict_id, "u": user_id}).mappings().one_or_none()
+    if conflict is None:
+        raise MemoryConflictError("MEMORY_CONFLICT")
+    if winning_memory_id not in (conflict["memory_id_a"], conflict["memory_id_b"]):
+        raise MemoryConflictError("MEMORY_CONFLICT")
+    losing_memory_id = (conflict["memory_id_b"] if winning_memory_id == conflict["memory_id_a"]
+                        else conflict["memory_id_a"])
+
+    winning_revision_id = db.execute(text(
+        "SELECT id FROM agent_memory_revisions WHERE memory_id = :id AND superseded_at IS NULL"
+    ), {"id": winning_memory_id}).scalar_one()
+
+    db.execute(text(
+        "UPDATE agent_memories SET status = 'active', updated_at = now() WHERE id = :id"
+    ), {"id": winning_memory_id})
+    row = db.execute(text(
+        "UPDATE agent_memories SET status = 'deleted', deleted_at = now(), updated_at = now() "
+        "WHERE id = :id RETURNING embedding_model_version"
+    ), {"id": losing_memory_id}).mappings().one()
+    db.execute(text(
+        "UPDATE agent_memory_conflicts SET status = 'resolved', "
+        "resolved_by_revision_id = :rid, resolved_at = now() WHERE id = :id"
+    ), {"rid": winning_revision_id, "id": conflict_id})
+    db.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES (:id, :mid, 'upsert', 'pending', now())"
+    ), {"id": _new_id(), "mid": winning_memory_id})
+    if row["embedding_model_version"] is not None:
+        db.execute(text(
+            "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+            "VALUES (:id, :mid, 'delete', 'pending', now())"
+        ), {"id": _new_id(), "mid": losing_memory_id})
+    db.commit()
+    return get_memory(db, user_id=user_id, memory_id=winning_memory_id)

@@ -391,3 +391,106 @@ def test_correct_memory_handles_display_text_with_double_quotes(session):
     from app.services.memory.inspection import get_memory
     fetched = get_memory(session, user_id="u-1", memory_id="mem-1")
     assert fetched["display_text"] == 'She said "hi" to me'
+
+
+def _seed_conflict(session, *, winner_id="mem-a", loser_id="mem-b"):
+    _insert_memory(session, memory_id=winner_id, status="conflicted", display_text="Alex")
+    _insert_memory(session, memory_id=loser_id, status="conflicted", display_text="Alexandra",
+                   subject_key="self")
+    session.execute(text(
+        "INSERT INTO agent_memory_conflicts (id, security_domain_id, agent_id, user_id, "
+        "subject_key, predicate, memory_id_a, memory_id_b, status, created_at) "
+        "VALUES ('conf-1', :d, 'ag-1', 'u-1', 'self', 'user.name', :a, :b, 'open', now())"
+    ), {"d": DEFAULT_DOMAIN, "a": winner_id, "b": loser_id})
+    session.commit()
+
+
+def test_list_conflicts_returns_both_sides(session):
+    _seed_conflict(session)
+
+    from app.services.memory.inspection import list_conflicts
+    result = list_conflicts(session, user_id="u-1", agent_id="ag-1")
+    assert len(result) == 1
+    assert result[0]["conflict_id"] == "conf-1"
+    assert {result[0]["display_text_a"], result[0]["display_text_b"]} == {"Alex", "Alexandra"}
+
+
+def test_resolve_conflict_activates_winner_and_tombstones_loser(session):
+    from app.services.memory import vector_store
+    _seed_conflict(session, winner_id="mem-a", loser_id="mem-b")
+    # mem-b (the loser) was previously active and embedded before losing this
+    # conflict -- the realistic case the "delete" outbox assertion below is
+    # meant to exercise. See _open_conflict's actual write path for why a
+    # freshly-extracted conflicting candidate is NOT the only way a loser
+    # can arrive at this state.
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = :v WHERE id = 'mem-b'"
+    ), {"v": vector_store.MEMORY_EMBEDDING_MODEL_VERSION})
+    session.commit()
+
+    from app.services.memory.inspection import resolve_conflict
+    result = resolve_conflict(session, user_id="u-1", conflict_id="conf-1",
+                              winning_memory_id="mem-a")
+    assert result["status"] == "active"
+
+    winner = session.execute(text(
+        "SELECT status FROM agent_memories WHERE id = 'mem-a'"
+    )).mappings().one()
+    assert winner["status"] == "active"
+    loser = session.execute(text(
+        "SELECT status, deleted_at FROM agent_memories WHERE id = 'mem-b'"
+    )).mappings().one()
+    assert loser["status"] == "deleted"
+    assert loser["deleted_at"] is not None
+
+    conflict = session.execute(text(
+        "SELECT status, resolved_by_revision_id, resolved_at FROM agent_memory_conflicts "
+        "WHERE id = 'conf-1'"
+    )).mappings().one()
+    assert conflict["status"] == "resolved"
+    assert conflict["resolved_by_revision_id"] is not None
+    assert conflict["resolved_at"] is not None
+
+    outbox_events = {r["memory_id"]: r["event_type"] for r in session.execute(text(
+        "SELECT memory_id, event_type FROM agent_memory_vector_outbox"
+    )).mappings().all()}
+    assert outbox_events == {"mem-a": "upsert", "mem-b": "delete"}
+
+
+def test_resolve_conflict_skips_outbox_delete_when_loser_never_embedded(session):
+    _seed_conflict(session, winner_id="mem-a", loser_id="mem-b")
+    # deliberately do NOT set embedding_model_version on mem-b here -- this is
+    # the realistic "never-embedded pending_confirmation-turned-conflicted
+    # candidate" case from _open_conflict's actual write path (a fresh
+    # candidate is written directly as 'conflicted', never taking the
+    # status == 'active' branch that would enqueue an embedding upsert).
+
+    from app.services.memory.inspection import resolve_conflict
+    resolve_conflict(session, user_id="u-1", conflict_id="conf-1", winning_memory_id="mem-a")
+
+    outbox_events = {r["memory_id"]: r["event_type"] for r in session.execute(text(
+        "SELECT memory_id, event_type FROM agent_memory_vector_outbox"
+    )).mappings().all()}
+    assert outbox_events == {"mem-a": "upsert"}  # no delete for the never-embedded loser
+
+
+def test_resolve_conflict_rejects_memory_id_not_in_this_conflict(session):
+    _seed_conflict(session)
+    _insert_memory(session, memory_id="mem-unrelated", subject_key="other",
+                   predicate="user.preference")
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConflictError, resolve_conflict
+    with pytest.raises(MemoryConflictError):
+        resolve_conflict(session, user_id="u-1", conflict_id="conf-1",
+                         winning_memory_id="mem-unrelated")
+
+
+def test_resolve_conflict_rejects_already_resolved_conflict(session):
+    _seed_conflict(session)
+    from app.services.memory.inspection import resolve_conflict
+    resolve_conflict(session, user_id="u-1", conflict_id="conf-1", winning_memory_id="mem-a")
+
+    from app.services.memory.inspection import MemoryConflictError
+    with pytest.raises(MemoryConflictError):
+        resolve_conflict(session, user_id="u-1", conflict_id="conf-1", winning_memory_id="mem-a")
