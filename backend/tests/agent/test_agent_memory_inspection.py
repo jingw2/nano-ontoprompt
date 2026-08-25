@@ -284,3 +284,96 @@ def test_reject_memory_tombstones_without_granting_consent(session):
         "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
     )).scalar_one()
     assert outbox_count == 0  # pending_confirmation memories are never embedded, per P6B-2a
+
+
+def test_correct_memory_supersedes_revision_and_updates_row(session):
+    _insert_memory(session, memory_id="mem-1", display_text="User's name is Alex", confidence=0.9)
+    session.commit()
+
+    from app.services.memory.inspection import correct_memory
+    result = correct_memory(session, user_id="u-1", memory_id="mem-1",
+                            display_text="User's name is Alexander", confidence=0.95)
+    assert result["display_text"] == "User's name is Alexander"
+
+    row = session.execute(text(
+        "SELECT display_text, confidence FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["display_text"] == "User's name is Alexander"
+    assert float(row["confidence"]) == 0.95
+
+    revisions = session.execute(text(
+        "SELECT revision_no, display_text, superseded_at FROM agent_memory_revisions "
+        "WHERE memory_id = 'mem-1' ORDER BY revision_no"
+    )).mappings().all()
+    assert len(revisions) == 2
+    assert revisions[0]["superseded_at"] is not None
+    assert revisions[1]["display_text"] == "User's name is Alexander"
+    assert revisions[1]["superseded_at"] is None
+
+    outbox = session.execute(text(
+        "SELECT event_type, state FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).mappings().one()
+    assert outbox["event_type"] == "upsert"
+
+
+def test_correct_memory_rejects_conflicted_memory(session):
+    _insert_memory(session, memory_id="mem-a", status="conflicted")
+    _insert_memory(session, memory_id="mem-b", status="conflicted", subject_key="self")
+    session.execute(text(
+        "INSERT INTO agent_memory_conflicts (id, security_domain_id, agent_id, user_id, "
+        "subject_key, predicate, memory_id_a, memory_id_b, status, created_at) "
+        "VALUES ('conf-1', :d, 'ag-1', 'u-1', 'self', 'user.name', 'mem-a', 'mem-b', 'open', now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConflictError, correct_memory
+    with pytest.raises(MemoryConflictError):
+        correct_memory(session, user_id="u-1", memory_id="mem-a", display_text="new value")
+
+
+def test_delete_memory_tombstones_and_enqueues_outbox_when_previously_embedded(session):
+    _insert_memory(session, memory_id="mem-1", status="active")
+    session.execute(text(
+        "UPDATE agent_memories SET embedding_model_version = 'memory-embed-chroma-default-v1' "
+        "WHERE id = 'mem-1'"
+    ))
+    session.commit()
+
+    from app.services.memory.inspection import delete_memory
+    delete_memory(session, user_id="u-1", memory_id="mem-1")
+
+    row = session.execute(text(
+        "SELECT status, deleted_at FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "deleted"
+    assert row["deleted_at"] is not None
+    outbox = session.execute(text(
+        "SELECT event_type FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).mappings().one()
+    assert outbox["event_type"] == "delete"
+
+
+def test_delete_memory_skips_outbox_when_never_embedded(session):
+    _insert_memory(session, memory_id="mem-1", status="pending_confirmation")
+    session.commit()
+
+    from app.services.memory.inspection import delete_memory
+    delete_memory(session, user_id="u-1", memory_id="mem-1")
+
+    outbox_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).scalar_one()
+    assert outbox_count == 0
+
+
+def test_delete_memory_scoped_to_correct_user(session):
+    _insert_memory(session, memory_id="mem-1", user_id="u-1")
+    session.commit()
+
+    from app.services.memory.inspection import delete_memory
+    delete_memory(session, user_id="u-2", memory_id="mem-1")  # wrong user -- silent no-op
+
+    row = session.execute(text(
+        "SELECT status FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "active"  # untouched

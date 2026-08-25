@@ -137,3 +137,60 @@ def reject_memory(db: Session, *, user_id: str, memory_id: str) -> None:
         "WHERE id = :id AND user_id = :u AND status != 'deleted'"
     ), {"id": memory_id, "u": user_id})
     db.commit()
+
+
+def correct_memory(db: Session, *, user_id: str, memory_id: str, display_text: str,
+                   confidence: float | None = None) -> dict:
+    from app.services.memory.canonicalizer import canonical_hash
+
+    row = db.execute(text(
+        "SELECT status, confidence, consent_basis FROM agent_memories "
+        "WHERE id = :id AND user_id = :u"
+    ), {"id": memory_id, "u": user_id}).mappings().one_or_none()
+    if row is None:
+        return None
+    if row["status"] == "conflicted":
+        raise MemoryConflictError("MEMORY_CONFLICT")
+
+    final_confidence = confidence if confidence is not None else float(row["confidence"])
+    value_hash = canonical_hash(display_text, "corrected_value")
+    next_revision_no = db.execute(text(
+        "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM agent_memory_revisions WHERE memory_id = :id"
+    ), {"id": memory_id}).scalar_one()
+
+    db.execute(text(
+        "UPDATE agent_memory_revisions SET superseded_at = now() "
+        "WHERE memory_id = :id AND superseded_at IS NULL"
+    ), {"id": memory_id})
+    db.execute(text(
+        "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, "
+        "display_text, confidence, consent_basis, source_spans, created_by, created_at) "
+        "VALUES (:id, :mid, :rno, CAST(:val AS jsonb), :disp, :conf, :consent_basis, "
+        "CAST('[]' AS jsonb), :u, now())"
+    ), {"id": _new_id(), "mid": memory_id, "rno": next_revision_no,
+        "val": f'"{display_text}"', "disp": display_text, "conf": final_confidence,
+        "consent_basis": row["consent_basis"], "u": user_id})
+    db.execute(text(
+        "UPDATE agent_memories SET display_text = :disp, confidence = :conf, "
+        "canonical_value_hash = :hash, updated_at = now() WHERE id = :id"
+    ), {"disp": display_text, "conf": final_confidence, "hash": value_hash, "id": memory_id})
+    db.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES (:id, :mid, 'upsert', 'pending', now())"
+    ), {"id": _new_id(), "mid": memory_id})
+    db.commit()
+    return get_memory(db, user_id=user_id, memory_id=memory_id)
+
+
+def delete_memory(db: Session, *, user_id: str, memory_id: str) -> None:
+    row = db.execute(text(
+        "UPDATE agent_memories SET status = 'deleted', deleted_at = now(), updated_at = now() "
+        "WHERE id = :id AND user_id = :u AND status != 'deleted' "
+        "RETURNING embedding_model_version"
+    ), {"id": memory_id, "u": user_id}).mappings().one_or_none()
+    if row is not None and row["embedding_model_version"] is not None:
+        db.execute(text(
+            "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+            "VALUES (:id, :mid, 'delete', 'pending', now())"
+        ), {"id": _new_id(), "mid": memory_id})
+    db.commit()
