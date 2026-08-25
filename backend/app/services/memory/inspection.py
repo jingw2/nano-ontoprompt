@@ -91,3 +91,49 @@ def get_memory(db: Session, *, user_id: str, memory_id: str) -> dict | None:
                 "other_display_text": other_text,
             }
     return result
+
+
+import uuid
+
+
+def _new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def confirm_memory(db: Session, *, user_id: str, memory_id: str, consent: bool) -> dict:
+    if not consent:
+        raise MemoryConsentRequiredError("MEMORY_CONSENT_REQUIRED")
+    row = db.execute(text(
+        "SELECT security_domain_id, agent_id, status FROM agent_memories "
+        "WHERE id = :id AND user_id = :u"
+    ), {"id": memory_id, "u": user_id}).mappings().one_or_none()
+    if row is None:
+        raise MemoryConsentRequiredError("MEMORY_CONSENT_REQUIRED")
+    if row["status"] == "conflicted":
+        raise MemoryConflictError("MEMORY_CONFLICT")
+
+    from app.services.memory.consent import grant_consent
+    consent_id = grant_consent(db, security_domain_id=row["security_domain_id"],
+                               agent_id=row["agent_id"], user_id=user_id,
+                               consent_basis="explicit_confirmation", commit=False)
+    db.execute(text(
+        "UPDATE agent_memories SET status = 'active', updated_at = now() WHERE id = :id"
+    ), {"id": memory_id})
+    db.execute(text(
+        "UPDATE agent_memory_revisions SET consent_id = :cid "
+        "WHERE memory_id = :id AND superseded_at IS NULL"
+    ), {"cid": consent_id, "id": memory_id})
+    db.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES (:id, :mid, 'upsert', 'pending', now())"
+    ), {"id": _new_id(), "mid": memory_id})
+    db.commit()
+    return get_memory(db, user_id=user_id, memory_id=memory_id)
+
+
+def reject_memory(db: Session, *, user_id: str, memory_id: str) -> None:
+    db.execute(text(
+        "UPDATE agent_memories SET status = 'deleted', deleted_at = now(), updated_at = now() "
+        "WHERE id = :id AND user_id = :u AND status != 'deleted'"
+    ), {"id": memory_id, "u": user_id})
+    db.commit()

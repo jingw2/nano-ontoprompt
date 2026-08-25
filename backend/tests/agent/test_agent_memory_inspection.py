@@ -202,3 +202,85 @@ def test_get_memory_includes_conflict_info_when_conflicted(session):
     assert result["conflict"]["conflict_id"] == "conf-1"
     assert result["conflict"]["other_memory_id"] == "mem-b"
     assert result["conflict"]["other_display_text"] == "Alexandra"
+
+
+def test_confirm_memory_requires_explicit_consent_flag(session):
+    _insert_memory(session, memory_id="mem-1", status="pending_confirmation",
+                   consent_basis="explicit_confirmation")
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConsentRequiredError, confirm_memory
+    with pytest.raises(MemoryConsentRequiredError):
+        confirm_memory(session, user_id="u-1", memory_id="mem-1", consent=False)
+
+    row = session.execute(text(
+        "SELECT status FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "pending_confirmation"
+
+
+def test_confirm_memory_grants_real_consent_and_activates(session):
+    _insert_memory(session, memory_id="mem-1", status="pending_confirmation",
+                   consent_basis="explicit_confirmation")
+    session.commit()
+
+    from app.services.memory.inspection import confirm_memory
+    result = confirm_memory(session, user_id="u-1", memory_id="mem-1", consent=True)
+    assert result["status"] == "active"
+
+    row = session.execute(text(
+        "SELECT status FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "active"
+    consent_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_consents"
+    )).scalar_one()
+    assert consent_count == 1
+    revision_consent_id = session.execute(text(
+        "SELECT consent_id FROM agent_memory_revisions WHERE memory_id = 'mem-1'"
+    )).scalar_one()
+    assert revision_consent_id is not None
+    outbox = session.execute(text(
+        "SELECT event_type, state FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).mappings().one()
+    assert outbox["event_type"] == "upsert"
+    assert outbox["state"] == "pending"
+
+
+def test_confirm_memory_rejects_conflicted_memory(session):
+    _insert_memory(session, memory_id="mem-a", status="conflicted",
+                   consent_basis="explicit_confirmation")
+    _insert_memory(session, memory_id="mem-b", status="conflicted", subject_key="self")
+    session.execute(text(
+        "INSERT INTO agent_memory_conflicts (id, security_domain_id, agent_id, user_id, "
+        "subject_key, predicate, memory_id_a, memory_id_b, status, created_at) "
+        "VALUES ('conf-1', :d, 'ag-1', 'u-1', 'self', 'user.name', 'mem-a', 'mem-b', 'open', now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+
+    from app.services.memory.inspection import MemoryConflictError, confirm_memory
+    with pytest.raises(MemoryConflictError):
+        confirm_memory(session, user_id="u-1", memory_id="mem-a", consent=True)
+
+
+def test_reject_memory_tombstones_without_granting_consent(session):
+    _insert_memory(session, memory_id="mem-1", status="pending_confirmation",
+                   consent_basis="explicit_confirmation")
+    session.commit()
+
+    from app.services.memory.inspection import reject_memory
+    reject_memory(session, user_id="u-1", memory_id="mem-1")
+
+    row = session.execute(text(
+        "SELECT status, deleted_at FROM agent_memories WHERE id = 'mem-1'"
+    )).mappings().one()
+    assert row["status"] == "deleted"
+    assert row["deleted_at"] is not None
+    consent_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_consents"
+    )).scalar_one()
+    assert consent_count == 0
+    outbox_count = session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-1'"
+    )).scalar_one()
+    assert outbox_count == 0  # pending_confirmation memories are never embedded, per P6B-2a
