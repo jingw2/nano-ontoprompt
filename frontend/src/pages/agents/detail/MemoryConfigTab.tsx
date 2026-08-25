@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { agentDetailApi, type AgentVersion } from '@/api/agentDetail'
+import MemoryInspectionDrawer from './MemoryInspectionDrawer'
 
 interface Props {
   agentId: string
@@ -53,6 +54,7 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
   const [recallCount, setRecallCount] = useState(String(DEFAULTS.recall_count))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [inspectionOpen, setInspectionOpen] = useState(false)
 
   const initial = (activeVersion?.memory_settings ?? {}) as Record<string, unknown>
 
@@ -187,12 +189,8 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         <p className="text-xs text-gray-500 pl-7">{t('agent.memory.long_term_desc', '跨会话保留重要事实与结论，写入长期存储（向量索引），供后续会话检索复用。')}</p>
       </div>
 
-      <div className="border rounded-lg p-3 space-y-3 bg-gray-50 opacity-70">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-gray-600">{t('agent.memory.long_term_group', '长期记忆参数')}</p>
-          <span className="px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-600">{t('agent.memory.available_later', '暂未生效')}</span>
-        </div>
-        <p className="text-xs text-gray-500">{t('agent.memory.long_term_inert_note', '以下参数已保存，但要等长期记忆功能在后续版本上线后才会生效。')}</p>
+      <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+        <p className="text-xs font-medium text-gray-600">{t('agent.memory.long_term_group', '长期记忆参数')}</p>
         <div>
           <label className="block text-xs text-gray-500 mb-1" htmlFor="memory-recall-token-budget">
             {t('agent.memory.recall_token_budget', '召回 Token 预算')}
@@ -220,9 +218,11 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         <p>{t('agent.memory.retention_note', '短期记忆随会话保留；长期记忆按预算与保留策略自动归档，不会无限增长。')}</p>
       </div>
 
-      <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 text-sm text-amber-700" data-testid="memory-unavailable">
-        <p>{t('agent.memory.inspection_unavailable', '记忆检查将在 Memory 功能激活后提供')}</p>
-      </div>
+      <button type="button" onClick={() => setInspectionOpen(true)}
+        className="border rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-50"
+        data-testid="open-memory-inspection">
+        {t('agent.memory.inspect_button', '检查记忆')}
+      </button>
 
       {error && <p className="text-sm text-red-500">{error}</p>}
       {canEdit && (
@@ -231,6 +231,8 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
           {saving ? t('agent.memory.saving', '保存中…') : t('agent.memory.save', '保存')}
         </button>
       )}
+
+      <MemoryInspectionDrawer open={inspectionOpen} onClose={() => setInspectionOpen(false)} agentId={agentId} />
     </div>
   )
 }

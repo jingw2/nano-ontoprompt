@@ -125,15 +125,22 @@ describe('P2C-MEMORY', () => {
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ version_no: 2 }))
   })
 
-  it('shows the inspection-unavailable panel unconditionally and issues zero memory content calls', async () => {
-    server.use()
+  it('has no inspection-unavailable panel and opens the MemoryInspectionDrawer from a button', async () => {
+    server.use(
+      http.get('*/api/v1/agents/a-1/memories', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/memories/conflicts', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    )
     render(<MemoryConfigTab agentId="a-1" activeVersion={VERSION} canEdit={false} onSaved={vi.fn()} onDirtyChange={vi.fn()} />)
-    expect(await screen.findByTestId('memory-unavailable')).toBeTruthy()
-    expect(screen.getByText(/记忆检查将在记忆功能激活后提供/)).toBeTruthy()
-    // onUnhandledRequest: 'error' would fail on any /memories call
+    expect(screen.queryByTestId('memory-unavailable')).toBeNull()
+    expect(screen.queryByTestId('memory-inspection-drawer')).toBeNull()
+    const openButton = screen.getByTestId('open-memory-inspection')
+    await userEvent.click(openButton)
+    expect(await screen.findByTestId('memory-inspection-drawer')).toBeTruthy()
   })
 
-  it('explains short-term, long-term and the grouped numeric parameters with descriptive copy', async () => {
+  it('explains short-term, long-term and the grouped numeric parameters with descriptive copy, with long-term params no longer marked inert', async () => {
     server.use()
     render(<MemoryConfigTab agentId="a-1" activeVersion={VERSION} canEdit onSaved={vi.fn()} onDirtyChange={vi.fn()} />)
     // short-term / long-term descriptions
@@ -141,9 +148,13 @@ describe('P2C-MEMORY', () => {
     expect(screen.getByText(/跨会话保留重要事实与结论/)).toBeTruthy()
     // grouped numeric parameter headings
     expect(screen.getByText('短期记忆参数')).toBeTruthy()
-    expect(screen.getByText('长期记忆参数')).toBeTruthy()
-    // long-term parameters are inert until a future release
-    expect(screen.getByText(/长期记忆功能在后续版本上线后才会生效/)).toBeTruthy()
+    const longTermGroupHeading = screen.getByText('长期记忆参数')
+    expect(longTermGroupHeading).toBeTruthy()
+    // long-term parameters are no longer marked "暂未生效" / inert
+    expect(screen.queryByText('暂未生效')).toBeNull()
+    expect(screen.queryByText(/长期记忆功能在后续版本上线后才会生效/)).toBeNull()
+    const longTermGroupBlock = longTermGroupHeading.closest('.border')
+    expect(longTermGroupBlock?.className).not.toMatch(/opacity-70/)
     // consent + retention notes
     expect(screen.getByText(/记忆写入需要 Agent 拥有写入权限/)).toBeTruthy()
     expect(screen.getByText(/短期记忆随会话保留/)).toBeTruthy()

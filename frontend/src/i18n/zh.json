@@ -365,6 +365,7 @@
     "memory": {
       "change_note": "记忆设置更新",
       "conflict": "检测到新版本，请刷新后重试",
+      "inspect_button": "检查记忆",
       "inspection_unavailable": "记忆检查将在记忆功能激活后提供",
       "long_term": "长期记忆",
       "save": "保存",

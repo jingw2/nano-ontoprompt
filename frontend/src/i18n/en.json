@@ -365,6 +365,7 @@
     "memory": {
       "change_note": "Memory settings update",
       "conflict": "A newer version was detected — refresh and retry",
+      "inspect_button": "Inspect memories",
       "inspection_unavailable": "Memory inspection becomes available once the Memory feature is enabled",
       "long_term": "Long-term memory",
       "save": "Save",
