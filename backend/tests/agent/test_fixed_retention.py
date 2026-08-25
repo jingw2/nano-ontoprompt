@@ -62,7 +62,7 @@ def schema():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0018_agent_memory_short_term").returncode == 0
+    assert _alembic(schema, "upgrade", "0020_agent_memory_recall_index").returncode == 0
     yield schema
     with engine.begin() as connection:
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -345,4 +345,114 @@ def test_purge_session_scope_hold_protects_redaction_steps(schema):
         "SELECT count(*) FROM agent_model_invocations WHERE id = 'mi-1'"
     )).scalar_one()
     assert mi_count == 1  # NOT deleted — session hold protects it
+    session.close()
+
+
+def _seed_memory_prereqs(session):
+    session.execute(text(
+        "INSERT INTO security_domains (id, key, status, created_at) VALUES (:id,'default','active',now()) ON CONFLICT DO NOTHING"
+    ), {"id": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES ('u-1','s','s@t.com','h','editor',true,:d,now(),now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES ('ag-1','private','active','u-1',now(),now())"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_purge_jobs (id, security_domain_id, purge_class, cursor_time, batch_size, generation) "
+        "VALUES ('j-1', :dom, 'fixed', now(), 500, 0)"
+    ), {"dom": DEFAULT_DOMAIN})
+
+
+def test_purge_hard_deletes_long_tombstoned_memories_and_children(schema):
+    session = _session(schema)
+    old_deleted_at = datetime.now(timezone.utc) - timedelta(days=31)
+    recent_deleted_at = datetime.now(timezone.utc) - timedelta(days=5)
+    _seed_memory_prereqs(session)
+
+    def _insert_memory(memory_id, status, deleted_at=None):
+        session.execute(text(
+            "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, "
+            "subject_key, predicate, canonical_value, canonical_value_hash, display_text, "
+            "confidence, sensitivity, consent_basis, source_spans, status, deleted_at, "
+            "created_at, updated_at) "
+            "VALUES (:id, :d, :a, :u, 'semantic', :sk, 'user.name', '\"x\"'::jsonb, :hash, "
+            "'fact', 0.9, 'low', 'explicit_statement', '[0]'::jsonb, :status, :deleted_at, "
+            "now(), now())"
+        ), {"id": memory_id, "d": DEFAULT_DOMAIN, "a": "ag-1", "u": "u-1", "sk": memory_id,
+            "hash": f"hash-{memory_id}", "status": status, "deleted_at": deleted_at})
+
+    _insert_memory("mem-old-deleted", "deleted", old_deleted_at)
+    _insert_memory("mem-recent-deleted", "deleted", recent_deleted_at)
+    _insert_memory("mem-active", "active", None)
+    session.execute(text(
+        "INSERT INTO agent_memory_revisions (id, memory_id, revision_no, canonical_value, "
+        "display_text, confidence, consent_basis, source_spans, created_by, created_at) "
+        "VALUES ('rev-old', 'mem-old-deleted', 1, '\"x\"'::jsonb, 'fact', 0.9, "
+        "'explicit_statement', '[0]'::jsonb, 'u-1', now())"
+    ))
+    session.execute(text(
+        "INSERT INTO agent_memory_vector_outbox (id, memory_id, event_type, state, created_at) "
+        "VALUES ('vo-old', 'mem-old-deleted', 'delete', 'applied', now())"
+    ))
+    session.commit()
+
+    from app.services.retention.fixed_policy import run_fixed_purge, claim_purge_job
+    job = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="fixed")
+    result = run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN,
+                             job_id=job["id"], claim_token=job["claim_token"])
+    ledger = result["ledger"]
+
+    assert ledger["purge_expired_long_term_memories"] == 1
+    remaining_ids = {r["id"] for r in session.execute(text(
+        "SELECT id FROM agent_memories"
+    )).mappings().all()}
+    assert remaining_ids == {"mem-recent-deleted", "mem-active"}
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_memory_revisions WHERE memory_id = 'mem-old-deleted'"
+    )).scalar_one() == 0
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_memory_vector_outbox WHERE memory_id = 'mem-old-deleted'"
+    )).scalar_one() == 0
+    session.close()
+
+
+def test_purge_never_deletes_memory_still_part_of_open_conflict(schema):
+    session = _session(schema)
+    old_deleted_at = datetime.now(timezone.utc) - timedelta(days=31)
+    _seed_memory_prereqs(session)
+
+    def _insert_memory(memory_id, status, deleted_at=None):
+        session.execute(text(
+            "INSERT INTO agent_memories (id, security_domain_id, agent_id, user_id, kind, "
+            "subject_key, predicate, canonical_value, canonical_value_hash, display_text, "
+            "confidence, sensitivity, consent_basis, source_spans, status, deleted_at, "
+            "created_at, updated_at) "
+            "VALUES (:id, :d, :a, :u, 'semantic', 's1', 'user.name', '\"x\"'::jsonb, :hash, "
+            "'fact', 0.9, 'low', 'explicit_statement', '[0]'::jsonb, :status, :deleted_at, "
+            "now(), now())"
+        ), {"id": memory_id, "d": DEFAULT_DOMAIN, "a": "ag-1", "u": "u-1",
+            "hash": f"hash-{memory_id}", "status": status, "deleted_at": deleted_at})
+
+    _insert_memory("mem-a", "deleted", old_deleted_at)
+    _insert_memory("mem-b", "conflicted", None)
+    session.execute(text(
+        "INSERT INTO agent_memory_conflicts (id, security_domain_id, agent_id, user_id, "
+        "subject_key, predicate, memory_id_a, memory_id_b, status, created_at) "
+        "VALUES ('conf-1', :d, 'ag-1', 'u-1', 's1', 'user.name', 'mem-a', 'mem-b', 'open', now())"
+    ), {"d": DEFAULT_DOMAIN})
+    session.commit()
+
+    from app.services.retention.fixed_policy import run_fixed_purge, claim_purge_job
+    job = claim_purge_job(session, security_domain_id=DEFAULT_DOMAIN, purge_class="fixed")
+    result = run_fixed_purge(session, security_domain_id=DEFAULT_DOMAIN,
+                             job_id=job["id"], claim_token=job["claim_token"])
+    ledger = result["ledger"]
+
+    assert ledger["purge_expired_long_term_memories"] == 0
+    assert session.execute(text(
+        "SELECT count(*) FROM agent_memories WHERE id = 'mem-a'"
+    )).scalar_one() == 1
     session.close()

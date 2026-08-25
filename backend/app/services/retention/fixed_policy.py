@@ -48,6 +48,7 @@ PURGE_STEPS = (
     "delete_memory_summaries",
     "clear_session_pointer",
     "graph_index_cleanup",
+    "purge_expired_long_term_memories",
 )
 
 
@@ -250,6 +251,39 @@ def run_fixed_purge(db: Session, *, security_domain_id: str, batch_size: int = 5
     ledger["graph_index_cleanup"] = db.execute(text(
         "DELETE FROM agent_index_outbox WHERE state = 'applied' AND created_at < :cutoff"
     ), {"cutoff": cutoff("graph_index.delete")}).rowcount or 0
+
+    # 12. Long-term memory: hard-delete memories tombstoned (status='deleted')
+    # more than 30 days ago, plus their FK-dependent children, in RESTRICT-safe
+    # order (vector_outbox -> conflicts -> revisions -> memory row itself).
+    # Never purges a memory still referenced by an OPEN conflict, even if
+    # somehow flagged deleted -- by construction a memory only reaches
+    # 'deleted' after any conflict it was part of is already resolved, but
+    # this is a defensive guard, not an assumption.
+    memory_cutoff = now - timedelta(days=30)
+    candidate_ids = [r[0] for r in db.execute(text(
+        "SELECT m.id FROM agent_memories m "
+        "WHERE m.security_domain_id = :domain AND m.status = 'deleted' "
+        "AND m.deleted_at < :cutoff "
+        "AND NOT EXISTS (SELECT 1 FROM agent_memory_conflicts c "
+        "  WHERE (c.memory_id_a = m.id OR c.memory_id_b = m.id) AND c.status = 'open')"
+    ), {"domain": security_domain_id, "cutoff": memory_cutoff}).fetchall()]
+    if candidate_ids:
+        db.execute(text(
+            "DELETE FROM agent_memory_vector_outbox WHERE memory_id = ANY(:ids)"
+        ), {"ids": candidate_ids})
+        db.execute(text(
+            "DELETE FROM agent_memory_conflicts WHERE memory_id_a = ANY(:ids) "
+            "OR memory_id_b = ANY(:ids)"
+        ), {"ids": candidate_ids})
+        db.execute(text(
+            "DELETE FROM agent_memory_revisions WHERE memory_id = ANY(:ids)"
+        ), {"ids": candidate_ids})
+        result = db.execute(text(
+            "DELETE FROM agent_memories WHERE id = ANY(:ids)"
+        ), {"ids": candidate_ids})
+        ledger["purge_expired_long_term_memories"] = result.rowcount or 0
+    else:
+        ledger["purge_expired_long_term_memories"] = 0
 
     db.commit()
     return {"ledger": ledger, "turns_removed": removed}
