@@ -1088,7 +1088,89 @@ Read `backend/app/routers/agent_approvals.py` in full before writing anything �
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `backend/tests/agent/test_agent_memories_api.py` — read `backend/tests/agent/test_agent_approvals_api.py` (or the closest existing API-level test file for a router in this family) first to copy its FastAPI `TestClient`/auth-header/schema-fixture setup pattern exactly (this plan does not repeat that boilerplate here since it's app-wide test infrastructure, not memory-specific — copy it verbatim, adjusting only the seeded resource). The test bodies should cover:
+Create `backend/tests/agent/test_agent_memories_api.py` — read `backend/tests/agent/test_approval_state.py` in full first (this is the real, verified-to-exist precedent for API-level testing of a router in this family — NOT `test_agent_approvals_api.py`, a filename that does not exist in this repo; confirmed during this plan's own setup). Copy its exact structure:
+
+```python
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+from app.routers.agent_memories import router
+from app.services.auth_service import create_access_token
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
+
+
+def _scoped_url(schema: str) -> str:
+    return f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
+
+
+def _alembic(schema: str, *args, check=True):
+    return subprocess.run(
+        [sys.executable, "scripts/run_migrations.py", *args], cwd=BACKEND_DIR,
+        env=dict(os.environ, DATABASE_URL=_scoped_url(schema)),
+        capture_output=True, text=True, check=check,
+    )
+
+
+@pytest.fixture
+def schema():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "p6b3_api_" + uuid.uuid4().hex
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    assert _alembic(schema, "upgrade", "0020_agent_memory_recall_index").returncode == 0
+    yield schema
+    with engine.begin() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    engine.dispose()
+
+
+def _session(schema):
+    return sessionmaker(bind=create_engine(_scoped_url(schema)))()
+
+
+def _seed(schema, *, user_id="u-1", agent_id="ag-1"):
+    s = _session(schema)
+    s.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,"
+        "created_at,updated_at) VALUES (:u,'a','a@t.com','h','editor',true,:d,now(),now())"
+    ), {"u": user_id, "d": DEFAULT_DOMAIN})
+    s.execute(text(
+        "INSERT INTO agents (id,visibility,status,owner_id,created_at,updated_at) "
+        "VALUES (:id,'private','active',:u,now(),now())"
+    ), {"id": agent_id, "u": user_id})
+    s.commit()
+    s.close()
+
+
+def _client(session):
+    from app.deps import get_db
+
+    def override_get_db():
+        yield session
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = override_get_db
+    yield app
+    app.dependency_overrides.clear()
+```
+
+Note this precedent's `_seed` also inserts an `agent_access_grants` row — this task's router does NOT use access-grant capability checks (per this plan's Global Constraints: authorization is by `user_id` alone, not an agent-operator grant), so do NOT copy that `agent_access_grants` insert; the `_seed` above already omits it correctly. `create_access_token({'sub': 'u-1', 'role': 'editor'})` is the exact auth-token-building call, used as `headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'editor'})}"}`, then `with TestClient(client) as c:` and `c.get(...)`/`c.post(..., json=..., headers=headers)`. The test bodies should cover:
 
 ```python
 def test_list_memories_endpoint_returns_only_current_users_memories(client, auth_headers, ...):
@@ -1124,7 +1206,7 @@ def test_resolve_conflict_endpoint_picks_winner(client, auth_headers, ...):
     ...
 ```
 
-Adapt exact function signatures/fixture names to whatever `test_agent_approvals_api.py` (or its nearest equivalent) actually establishes — read that file's own conventions directly rather than guessing a shape here, since this plan cannot know the exact `client`/`auth_headers` fixture names without reading the real file first.
+Write each test function seeding via `_seed(schema)`, opening a session via `_session(schema)`, building `headers` via `create_access_token(...)`, calling `next(_client(s))` for the app, and running requests inside `with TestClient(client) as c:` — matching `test_approval_state.py`'s exact per-test structure (see e.g. its `test_approve_resumes_once`).
 
 Run: `cd backend && TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt pytest tests/agent/test_agent_memories_api.py -v`
 Expected: FAIL — router doesn't exist.
