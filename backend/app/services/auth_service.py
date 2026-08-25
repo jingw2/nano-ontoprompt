@@ -51,7 +51,7 @@ def seed_admin(db: Session):
         admin = User(
             id=str(uuid.uuid4()),
             username=settings.first_admin_user,
-            email=f"{settings.first_admin_user}@ontoprompt.local",
+            email=f"{settings.first_admin_user}@ontexus.local",
             password_hash=hash_password(settings.first_admin_password),
             role="admin",
         )

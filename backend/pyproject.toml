@@ -1,7 +1,7 @@
 [project]
-name = "ontoprompt-backend"
+name = "ontexus-backend"
 version = "0.1.0"
-description = "OntoPrompt backend service"
+description = "Ontexus backend service"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]

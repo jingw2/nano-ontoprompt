@@ -160,7 +160,7 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   },
 ]
 
-const VALIDATION_STORAGE_KEY = 'ontoprompt_validation_rules'
+const VALIDATION_STORAGE_KEY = 'ontexus_validation_rules'
 
 export function loadValidationStates(): Record<string, boolean> {
   try {
@@ -174,7 +174,7 @@ export function saveValidationStates(states: Record<string, boolean>): void {
   localStorage.setItem(VALIDATION_STORAGE_KEY, JSON.stringify(states))
 }
 
-const STORAGE_KEY = 'ontoprompt_extraction_rules'
+const STORAGE_KEY = 'ontexus_extraction_rules'
 
 export function loadRuleStates(): Record<string, ExtractionRuleState> {
   try {

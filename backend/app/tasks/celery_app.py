@@ -15,7 +15,7 @@ require_supported_python()
 from celery import Celery
 from app.config import settings
 
-celery_app = Celery("ontoprompt",
+celery_app = Celery("ontexus",
                     broker=settings.redis_url,
                     backend=settings.redis_url,
                     include=[

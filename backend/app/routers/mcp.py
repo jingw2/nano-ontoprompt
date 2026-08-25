@@ -44,7 +44,7 @@ def mcp_rpc(
         return _result(request_id, {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "nano-ontoprompt-ontology-mcp", "version": "1.0.0"},
+            "serverInfo": {"name": "ontexus-ontology-mcp", "version": "1.0.0"},
         })
     if method == "tools/list":
         return _result(request_id, {"tools": mcp_tools.list_tools()})

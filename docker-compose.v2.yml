@@ -3,13 +3,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ontoprompt
-      POSTGRES_USER: ontoprompt
-      POSTGRES_PASSWORD: ontoprompt
+      POSTGRES_DB: ontexus
+      POSTGRES_USER: ontexus
+      POSTGRES_PASSWORD: ontexus
     ports: ["5432:5432"]
     volumes: [pg_data:/var/lib/postgresql/data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ontoprompt"]
+      test: ["CMD-SHELL", "pg_isready -U ontexus"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,7 +29,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: neo4j/ontoprompt123
+      NEO4J_AUTH: neo4j/ontexus123
     volumes: [neo4j_data:/data]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
@@ -97,6 +97,23 @@ services:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction worker --loglevel=info"
+
+  celery_beat:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction beat --loglevel=info"
 
   frontend:
     build: ./frontend

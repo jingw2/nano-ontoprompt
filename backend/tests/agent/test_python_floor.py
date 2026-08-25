@@ -277,5 +277,5 @@ def test_packaging_build_evaluates_and_emits_python_floor(tmp_path):
     installed = json.loads(report_path.read_text())["install"]
     assert len(installed) == 1
     metadata = installed[0]["metadata"]
-    assert metadata["name"] == "ontoprompt-backend"
+    assert metadata["name"] == "ontexus-backend"
     assert metadata["requires_python"] == REQUIRED_PYTHON_FLOOR

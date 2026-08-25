@@ -86,13 +86,13 @@ def generate_manifest(root: pathlib.Path, *, backend_dir: pathlib.Path | None = 
             frontend_dir / "package-lock.json")
 
     images = {
-        "api": {"ref": "ontoprompt-agent-api", "digest": _role_digest("api", backend_source, backend_reqs, head)},
-        "dispatcher": {"ref": "ontoprompt-agent-dispatcher", "digest": _role_digest("dispatcher", backend_source, backend_reqs, head)},
-        "artifact_worker": {"ref": "ontoprompt-agent-worker", "digest": _role_digest("artifact_worker", backend_source, backend_reqs, head)},
-        "beat": {"ref": "ontoprompt-agent-beat", "digest": _role_digest("beat", backend_source, backend_reqs, head)},
-        "watchdog": {"ref": "ontoprompt-agent-watchdog", "digest": _role_digest("watchdog", backend_source, backend_reqs, head)},
-        "sweeper": {"ref": "ontoprompt-agent-sweeper", "digest": _role_digest("sweeper", backend_source, backend_reqs, head)},
-        "frontend": {"ref": "ontoprompt-agent-frontend", "digest": _role_digest("frontend", frontend_manifest_digest)},
+        "api": {"ref": "ontexus-agent-api", "digest": _role_digest("api", backend_source, backend_reqs, head)},
+        "dispatcher": {"ref": "ontexus-agent-dispatcher", "digest": _role_digest("dispatcher", backend_source, backend_reqs, head)},
+        "artifact_worker": {"ref": "ontexus-agent-worker", "digest": _role_digest("artifact_worker", backend_source, backend_reqs, head)},
+        "beat": {"ref": "ontexus-agent-beat", "digest": _role_digest("beat", backend_source, backend_reqs, head)},
+        "watchdog": {"ref": "ontexus-agent-watchdog", "digest": _role_digest("watchdog", backend_source, backend_reqs, head)},
+        "sweeper": {"ref": "ontexus-agent-sweeper", "digest": _role_digest("sweeper", backend_source, backend_reqs, head)},
+        "frontend": {"ref": "ontexus-agent-frontend", "digest": _role_digest("frontend", frontend_manifest_digest)},
     }
     return {
         "schema_contract_version": SCHEMA_CONTRACT_VERSION,

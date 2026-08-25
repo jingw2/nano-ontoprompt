@@ -6,17 +6,17 @@
 # build time (/manifests/agent.json).  Migrations route through E0-DB's
 # `run_migrations.py`.  Image refs match the roles pinned by
 # `scripts/generate_build_manifest.py`.
-name: ontoprompt-agent
+name: ontexus-agent
 
 services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ontoprompt
-      POSTGRES_USER: ontoprompt
-      POSTGRES_PASSWORD: ontoprompt
+      POSTGRES_DB: ontexus
+      POSTGRES_USER: ontexus
+      POSTGRES_PASSWORD: ontexus
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ontoprompt -d ontoprompt"]
+      test: ["CMD-SHELL", "pg_isready -U ontexus -d ontexus"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -30,16 +30,16 @@ services:
       retries: 10
 
   migration:
-    image: ontoprompt-agent-api:agent-v1
+    image: ontexus-agent-api:agent-v1
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
 
   api:
-    image: ontoprompt-agent-api:agent-v1
+    image: ontexus-agent-api:agent-v1
     ports: ["8000:8000"]
     depends_on:
       migration:
@@ -47,72 +47,72 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   dispatcher:
-    image: ontoprompt-agent-dispatcher:agent-v1
+    image: ontexus-agent-dispatcher:agent-v1
     depends_on:
       migration:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
 
   artifact_worker:
-    image: ontoprompt-agent-worker:agent-v1
+    image: ontexus-agent-worker:agent-v1
     depends_on:
       migration:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
 
   beat:
-    image: ontoprompt-agent-beat:agent-v1
+    image: ontexus-agent-beat:agent-v1
     depends_on:
       migration:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=warning"
 
   watchdog:
-    image: ontoprompt-agent-watchdog:agent-v1
+    image: ontexus-agent-watchdog:agent-v1
     depends_on:
       migration:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
 
   sweeper:
-    image: ontoprompt-agent-sweeper:agent-v1
+    image: ontexus-agent-sweeper:agent-v1
     depends_on:
       migration:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0017_mcp_write_requests && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
 
   frontend:
-    image: ontoprompt-agent-frontend:agent-v1
+    image: ontexus-agent-frontend:agent-v1
     ports: ["5173:4173"]
     depends_on:
       api:

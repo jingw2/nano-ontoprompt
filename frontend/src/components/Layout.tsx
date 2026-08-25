@@ -63,7 +63,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-gray-50">
       <aside className={`bg-white border-r flex flex-col transition-all duration-200 ${collapsed ? 'w-16' : 'w-56'}`}>
         <div className={`p-4 border-b flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
-          {!collapsed && <h1 className="font-bold text-lg">OntoPrompt</h1>}
+          {!collapsed && <h1 className="font-bold text-lg">Ontexus</h1>}
         </div>
 
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">

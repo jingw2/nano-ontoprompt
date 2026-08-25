@@ -112,7 +112,7 @@ const STAGE_PCT: Record<string, number> = {
   'validating output': 65, 'inferring relations': 75, 'saving results': 85, done: 100,
 }
 
-const lastTaskKey = (oid: string) => `ontoprompt_last_task_${oid}`
+const lastTaskKey = (oid: string) => `ontexus_last_task_${oid}`
 
 type SavedTask = { task_id?: string; status?: string; [key: string]: unknown }
 

@@ -21,7 +21,7 @@ const STAGE_PCT: Record<string, number> = {
   queued: 0, 'loading ontology': 10, 'running react agent': 30, 'saving findings': 90, done: 100,
 }
 
-const auditTaskKey = (oid: string) => `ontoprompt_last_audit_${oid}`
+const auditTaskKey = (oid: string) => `ontexus_last_audit_${oid}`
 
 type AuditFinding = {
   severity: string

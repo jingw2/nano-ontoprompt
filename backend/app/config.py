@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     environment: str = "development"  # development | production
-    database_url: str = "sqlite:///./ontoprompt.db"
+    database_url: str = "sqlite:///./ontexus.db"
     redis_url: str = "redis://localhost:6379/0"
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # v2 — Neo4j
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "ontoprompt123"
+    neo4j_password: str = "ontexus123"
 
     # v2 — MinIO
     minio_endpoint: str = "localhost:9000"

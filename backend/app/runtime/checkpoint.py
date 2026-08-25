@@ -1,4 +1,4 @@
-"""Fenced OntoPrompt checkpoint saver (P3B-SAVER, Section 6.1).
+"""Fenced Ontexus checkpoint saver (P3B-SAVER, Section 6.1).
 
 Implements the async LangGraph `BaseCheckpointSaver` surface against
 `agent_turn_checkpoints` / `agent_turn_checkpoint_writes` /
@@ -53,7 +53,7 @@ def _checkpoint_id(config: dict) -> str:
     return (config.get("configurable") or {}).get("checkpoint_id") or ""
 
 
-class OntoPromptCheckpointSaver(BaseCheckpointSaver):
+class OntexusCheckpointSaver(BaseCheckpointSaver):
     """SQL-backed async checkpoint saver for the pinned single-Agent graph."""
 
     def __init__(self, session_factory, serde: SerializerProtocol | None = None):

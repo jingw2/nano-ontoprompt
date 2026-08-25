@@ -41,6 +41,8 @@ celerybeat-schedule
 
 # Test artifacts
 test-results/
+frontend/coverage/
+.playwright-mcp/
 
 # Star history timestamp cache
 scripts/.star-history-cache.json
@@ -67,3 +69,8 @@ frontend/e2e-review/
 
 # Local git worktrees (subagent-driven-development isolation)
 .worktrees/
+
+# Local service data/binaries (MinIO, ChromaDB)
+bin/
+chroma_data/
+minio_data/

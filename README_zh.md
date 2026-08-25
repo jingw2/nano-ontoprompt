@@ -1,4 +1,4 @@
-# nano-ontoprompt
+# Ontexus
 
 **[English Documentation](./README.md)**
 
@@ -15,7 +15,7 @@
 
 本体是特定领域知识的形式化表示——一套共享的概念词汇及概念间的关系。它是把原始数据变成机器可读、可查询知识的结构化骨架。
 
-在 nano-ontoprompt 中,每个本体由以下构件组成:
+在 Ontexus 中,每个本体由以下构件组成:
 
 | 构件 | 含义 | 示例 |
 |---|---|---|
@@ -93,7 +93,7 @@ cp .env.example .env          # 生产环境务必修改密钥
 docker compose -f docker-compose.v2.yml up --build
 ```
 
-将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。轻量 v1 栈可改用 `docker-compose.yml`。
+将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
 
@@ -162,8 +162,7 @@ nano-ontoprompt/
 │       └── api/                # Axios 客户端 (v1 + v2)
 ├── scripts/
 │   └── data/                   # 数据导入与实体关联脚本 (SNOMED、供应链)
-├── docker-compose.yml          # v1 轻量栈
-├── docker-compose.v2.yml       # 完整栈: Postgres + Redis + Neo4j + MinIO + Chroma + LiteLLM
+├── docker-compose.v2.yml       # 完整栈: Postgres + Redis + Neo4j + MinIO + Chroma
 ├── litellm_config.yaml         # LiteLLM 代理配置
 ├── ONTOLOGY.md                 # 架构设计指南
 └── test_data/                  # 示例数据集与 E2E 验收脚本
@@ -177,7 +176,7 @@ nano-ontoprompt/
 
 ```env
 ENVIRONMENT=development        # 设为 production 时, 默认密钥未修改将拒绝启动
-DATABASE_URL=sqlite:///./ontoprompt.db
+DATABASE_URL=sqlite:///./ontexus.db
 SECRET_KEY=change-me
 ENCRYPTION_KEY=                # Fernet 密钥, 用于加密存储的 API Key
 FIRST_ADMIN_USER=admin

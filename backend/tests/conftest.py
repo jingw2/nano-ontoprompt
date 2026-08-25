@@ -7,9 +7,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 # 应用级引擎（lifespan/_seed_db 使用 app.database.SessionLocal）指向独立的临时
-# SQLite，与测试会话引擎分开，且不依赖仓库根目录遗留的 ontoprompt.db（其 schema
+# SQLite，与测试会话引擎分开，且不依赖仓库根目录遗留的 ontexus.db（其 schema
 # 早于 P1A，缺少 security_domain_id）。环境变量必须在导入 app.main 之前设置。
-_app_db_fd, _app_db_path = tempfile.mkstemp(prefix="ontoprompt_app_", suffix=".db")
+_app_db_fd, _app_db_path = tempfile.mkstemp(prefix="ontexus_app_", suffix=".db")
 os.close(_app_db_fd)
 os.environ["DATABASE_URL"] = f"sqlite:///{_app_db_path}"
 
@@ -25,7 +25,7 @@ import uuid  # noqa: E402
 limiter.enabled = False
 
 # 每次 pytest 运行使用独立的临时 SQLite, 避免并发运行互相锁库
-_db_fd, _db_path = tempfile.mkstemp(prefix="ontoprompt_test_", suffix=".db")
+_db_fd, _db_path = tempfile.mkstemp(prefix="ontexus_test_", suffix=".db")
 os.close(_db_fd)
 
 TEST_DB = f"sqlite:///{_db_path}"

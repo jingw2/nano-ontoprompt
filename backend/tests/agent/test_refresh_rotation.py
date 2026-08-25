@@ -27,7 +27,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 SERVICE = BACKEND_DIR / "app" / "services" / "auth_refresh.py"
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 DEFAULT_DOMAIN = "00000000-0000-0000-0000-000000000001"
-REFRESH_COOKIE = "ontoprompt_refresh"
+REFRESH_COOKIE = "ontexus_refresh"
 CSRF_COOKIE = "csrf_token"
 
 
@@ -337,7 +337,7 @@ def test_router_logout_revokes_family_and_clears_cookies(pg_client, refresh_db):
     )
     assert logout.status_code == 200
     cleared = [header for header in logout.headers.get_list("set-cookie")
-               if header.startswith("ontoprompt_refresh=") and "Max-Age=0" in header]
+               if header.startswith("ontexus_refresh=") and "Max-Age=0" in header]
     assert cleared
     with Session() as session:
         user_id = session.execute(text("SELECT id FROM users WHERE username=:u"), {"u": username}).scalar_one()

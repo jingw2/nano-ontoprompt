@@ -1,5 +1,5 @@
 """
-OntoPrompt API v2
+Ontexus API v2
 
 架构：FastAPI + PostgreSQL + Neo4j + ChromaDB + MinIO + Celery/Redis
 v2 新增：Pipelines 全链路（Connection→Dataset→Transform→Curated→Mapping）
@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Neo4j index setup skipped (unavailable); startup continues", exc_info=True)
     yield
 
-app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Ontexus API", version="0.1.0", lifespan=lifespan)
 
 # 注册限流器 - 保护 Auth 等敏感端点
 from app.limiter import limiter

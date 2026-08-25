@@ -1,4 +1,4 @@
-"""P3B-SAVER: fenced OntoPrompt checkpoints + pinned serializer.
+"""P3B-SAVER: fenced Ontexus checkpoints + pinned serializer.
 
 Async-only LangGraph BaseCheckpointSaver surface against
 agent_turn_checkpoints / agent_turn_checkpoint_writes / agent_node_executions:
@@ -103,9 +103,9 @@ def _seed(session, *, turn_id="t-1", agent_id="a-1", editor_id="u-1", status="ru
 
 
 def _saver(schema, serde=None):
-    from app.runtime.checkpoint import OntoPromptCheckpointSaver
+    from app.runtime.checkpoint import OntexusCheckpointSaver
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-    return OntoPromptCheckpointSaver(
+    return OntexusCheckpointSaver(
         session_factory=sessionmaker(bind=create_engine(_scoped_url(schema))),
         serde=serde or JsonPlusSerializer(),
     )

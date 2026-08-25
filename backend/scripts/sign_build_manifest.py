@@ -17,7 +17,7 @@ import json
 import os
 import pathlib
 
-DEV_SIGNING_KEY = "ontoprompt-agent-dev-signing-key"
+DEV_SIGNING_KEY = "ontexus-agent-dev-signing-key"
 
 
 def signing_key() -> bytes:

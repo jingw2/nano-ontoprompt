@@ -300,7 +300,7 @@ def run_extraction(db, oid: str, prompt_id: str, model_cfg, model_name: str) -> 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 65)
-    print("  OntoPrompt 全流程测试")
+    print("  Ontexus 全流程测试")
     print("=" * 65)
 
     # Login

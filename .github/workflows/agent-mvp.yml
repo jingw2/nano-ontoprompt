@@ -45,12 +45,12 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: ontoprompt_test
-          POSTGRES_USER: ontoprompt
-          POSTGRES_PASSWORD: ontoprompt
+          POSTGRES_DB: ontexus_test
+          POSTGRES_USER: ontexus
+          POSTGRES_PASSWORD: ontexus
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U ontoprompt -d ontoprompt_test"
+          --health-cmd "pg_isready -U ontexus -d ontexus_test"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -72,12 +72,12 @@ jobs:
       - name: Migration through the guard
         run: |
           cd backend
-          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             python scripts/run_migrations.py upgrade head
       - name: API smoke through the guarded launcher
         run: |
           cd backend
-          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             REDIS_URL=redis://localhost:6379/0 \
             python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app \
               --host 127.0.0.1 --port 8000 &
@@ -92,7 +92,7 @@ jobs:
       - name: Worker smoke through the guarded launcher
         run: |
           cd backend
-          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             REDIS_URL=redis://localhost:6379/0 \
             timeout 25 python scripts/guarded_entrypoint.py -- python -m celery \
               -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 || code=$?
@@ -100,8 +100,8 @@ jobs:
       - name: Backend core suites
         run: |
           cd backend
-          TEST_DATABASE_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt_test \
-            TEST_DATABASE_ADMIN_URL=postgresql://ontoprompt:ontoprompt@localhost:5432/postgres \
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
             python -m pytest -q
       - name: Agent evaluation corpus
         run: cd backend && python -m evals.agent_ontology.run --manifest core-v1 --adapter fake --seed 141 --output artifacts/evals/result.json

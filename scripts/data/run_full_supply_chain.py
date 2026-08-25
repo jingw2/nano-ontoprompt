@@ -417,7 +417,7 @@ def verify(c, token, ontology_id):
     neo4j_ok = False
     try:
         from neo4j import GraphDatabase
-        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "ontoprompt123"))
+        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "ontexus123"))
         with driver.session() as s:
             node_count = s.run("MATCH (n) RETURN count(n) as c").single()["c"]
             rel_count  = s.run("MATCH ()-[r]->() RETURN count(r) as c").single()["c"]

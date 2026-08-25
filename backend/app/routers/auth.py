@@ -19,7 +19,7 @@ import uuid
 
 router = APIRouter()
 
-REFRESH_COOKIE = "ontoprompt_refresh"
+REFRESH_COOKIE = "ontexus_refresh"
 CSRF_COOKIE = "csrf_token"
 
 

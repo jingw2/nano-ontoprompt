@@ -1,4 +1,4 @@
-# nano-ontoprompt
+# Ontexus
 
 **[中文文档](./README_zh.md)**
 
@@ -15,7 +15,7 @@ Two build paths are supported:
 
 An ontology is a formal representation of knowledge in a specific domain — a shared vocabulary of concepts and the relationships between them. Think of it as the structured backbone that turns raw data into machine-readable, queryable knowledge.
 
-In nano-ontoprompt, every ontology is made of these building blocks:
+In Ontexus, every ontology is made of these building blocks:
 
 | Building Block | What it captures | Example |
 |---|---|---|
@@ -98,7 +98,7 @@ cp .env.example .env          # edit secrets before production use
 docker compose -f docker-compose.v2.yml up --build
 ```
 
-This starts PostgreSQL, Redis, Neo4j, MinIO, ChromaDB, backend and frontend. For the lightweight v1 stack use `docker-compose.yml` instead.
+This starts PostgreSQL, Redis, Neo4j, MinIO, ChromaDB, backend and frontend.
 
 Open [http://localhost:5173](http://localhost:5173). Default credentials: `admin / admin123`.
 
@@ -167,8 +167,7 @@ nano-ontoprompt/
 │       └── api/                # Axios clients (v1 + v2)
 ├── scripts/
 │   └── data/                   # Data import & entity-linking scripts (SNOMED, supply chain)
-├── docker-compose.yml          # v1 lightweight stack
-├── docker-compose.v2.yml       # Full stack: Postgres + Redis + Neo4j + MinIO + Chroma + LiteLLM
+├── docker-compose.v2.yml       # Full stack: Postgres + Redis + Neo4j + MinIO + Chroma
 ├── litellm_config.yaml         # LiteLLM proxy configuration
 ├── ONTOLOGY.md                 # Comprehensive architecture guide
 └── test_data/                  # Sample datasets and E2E acceptance scripts
@@ -182,7 +181,7 @@ See `.env.example` for the full list. Key settings:
 
 ```env
 ENVIRONMENT=development        # "production" enforces non-default secrets at startup
-DATABASE_URL=sqlite:///./ontoprompt.db
+DATABASE_URL=sqlite:///./ontexus.db
 SECRET_KEY=change-me
 ENCRYPTION_KEY=                # Fernet key for encrypting stored API keys
 FIRST_ADMIN_USER=admin
