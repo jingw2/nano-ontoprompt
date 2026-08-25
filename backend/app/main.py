@@ -42,6 +42,7 @@ from app.routers import (
     agent_application_state,
     agent_clarifications,
     agent_events,
+    agent_memories,
     agent_reconciliations,
     agent_turns,
     ontology_access_grants,
@@ -189,6 +190,7 @@ app.include_router(agent_turns.router, prefix="/api/v1", tags=["agent-turns"])
 app.include_router(agent_events.router, prefix="/api/v1", tags=["agent-events"])
 app.include_router(agent_approvals.router, prefix="/api/v1", tags=["agent-approvals"])
 app.include_router(agent_clarifications.router, prefix="/api/v1", tags=["agent-clarifications"])
+app.include_router(agent_memories.router, prefix="/api/v1", tags=["agent-memories"])
 app.include_router(oauth_router.router, prefix="/api/v1", tags=["oauth"])
 # agent_audit is an alias of agent_application_state.router (same object); the
 # application-state router carries both the state and audit read routes.
