@@ -141,6 +141,8 @@ def reject_memory(db: Session, *, user_id: str, memory_id: str) -> None:
 
 def correct_memory(db: Session, *, user_id: str, memory_id: str, display_text: str,
                    confidence: float | None = None) -> dict:
+    import json
+
     from app.services.memory.canonicalizer import canonical_hash
 
     row = db.execute(text(
@@ -168,7 +170,7 @@ def correct_memory(db: Session, *, user_id: str, memory_id: str, display_text: s
         "VALUES (:id, :mid, :rno, CAST(:val AS jsonb), :disp, :conf, :consent_basis, "
         "CAST('[]' AS jsonb), :u, now())"
     ), {"id": _new_id(), "mid": memory_id, "rno": next_revision_no,
-        "val": f'"{display_text}"', "disp": display_text, "conf": final_confidence,
+        "val": json.dumps(display_text), "disp": display_text, "conf": final_confidence,
         "consent_basis": row["consent_basis"], "u": user_id})
     db.execute(text(
         "UPDATE agent_memories SET display_text = :disp, confidence = :conf, "

@@ -377,3 +377,17 @@ def test_delete_memory_scoped_to_correct_user(session):
         "SELECT status FROM agent_memories WHERE id = 'mem-1'"
     )).mappings().one()
     assert row["status"] == "active"  # untouched
+
+
+def test_correct_memory_handles_display_text_with_double_quotes(session):
+    _insert_memory(session, memory_id="mem-1", display_text="original")
+    session.commit()
+
+    from app.services.memory.inspection import correct_memory
+    result = correct_memory(session, user_id="u-1", memory_id="mem-1",
+                            display_text='She said "hi" to me')
+    assert result["display_text"] == 'She said "hi" to me'
+
+    from app.services.memory.inspection import get_memory
+    fetched = get_memory(session, user_id="u-1", memory_id="mem-1")
+    assert fetched["display_text"] == 'She said "hi" to me'
