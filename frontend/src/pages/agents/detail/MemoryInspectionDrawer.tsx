@@ -50,7 +50,7 @@ export default function MemoryInspectionDrawer({ open, onClose, agentId }: Props
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const load = useCallback(() => {
-    setError('')
+    void Promise.resolve().then(() => { setError('') })
     Promise.all([
       agentMemoriesApi.list(agentId),
       agentMemoriesApi.listConflicts(agentId),
