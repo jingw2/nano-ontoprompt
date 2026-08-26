@@ -82,14 +82,6 @@ def test_quote_escaped_without_comma_is_not_corrupted():
     assert result.content.splitlines()[0].count("|") == result.content.splitlines()[2].count("|")
 
 
-@pytest.mark.xfail(
-    reason="Known bug: document_service.py:_read_csv_as_markdown naive-splits "
-    "on every comma, including ones inside quoted fields, corrupting column "
-    "alignment for any CSV with a comma-containing quoted value. Fix tracked "
-    "as sub-project E; this test should start passing (and the xfail marker "
-    "should be removed) once _read_csv_as_markdown uses the csv module.",
-    strict=True,
-)
 def test_embedded_comma_in_quotes_does_not_corrupt_columns():
     result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "embedded_comma_quoted.csv"))
     assert result.ok
@@ -98,16 +90,6 @@ def test_embedded_comma_in_quotes_does_not_corrupt_columns():
     assert data_line.count("|") - 1 == header_cols
 
 
-@pytest.mark.xfail(
-    reason="Known bug: document_service.py:_read_plain_text and "
-    "_read_csv_as_markdown always decode with encoding='utf-8', "
-    "errors='replace', so a real-world GBK-encoded Chinese file silently "
-    "decodes to mojibake (U+FFFD replacement characters) with ok=True and "
-    "no error surfaced. Fix tracked as sub-project E (e.g. encoding "
-    "detection via chardet, or explicit GBK fallback); this test should "
-    "start passing once that lands.",
-    strict=True,
-)
 def test_gbk_encoded_csv_decodes_correctly():
     result = convert_document(str(FIXTURES / "non_utf8.csv"))
     assert result.ok
@@ -115,11 +97,6 @@ def test_gbk_encoded_csv_decodes_correctly():
     assert "�" not in result.content
 
 
-@pytest.mark.xfail(
-    reason="Same root cause as test_gbk_encoded_csv_decodes_correctly, via "
-    "_read_plain_text instead of _read_csv_as_markdown.",
-    strict=True,
-)
 def test_gbk_encoded_txt_decodes_correctly():
     result = convert_document(str(FIXTURES / "non_utf8.txt"))
     assert result.ok
@@ -182,20 +159,15 @@ def test_xml_sample_fixture_exists(domain):
     assert (TEST_DATA_ROOT / domain / f"{domain}_sample.xml").exists()
 
 
-def test_xls_is_currently_unsupported_by_convert_document():
-    # Known gap: .xls is in app.config.allowed_upload_extensions, but
-    # MarkItDown has no .xls converter and convert_document has no special
-    # case for it, so every .xls upload fails conversion outright. Tracked
-    # as a finding for sub-project E.
+def test_xls_converts_to_markdown_table():
     result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.xls"))
-    assert not result.ok
+    assert result.ok
+    assert "|" in result.content
 
 
-def test_xml_is_currently_unsupported_by_convert_document():
-    # Same gap as .xls: .xml is an allowed upload extension with no working
-    # conversion path today.
+def test_xml_converts_to_flattened_text():
     result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.xml"))
-    assert not result.ok
+    assert result.ok
 
 
 @pytest.mark.parametrize("domain", DOMAINS)
@@ -208,14 +180,11 @@ def test_ppt_sample_fixture_exists(domain):
     assert (TEST_DATA_ROOT / domain / f"{domain}_sample.ppt").exists()
 
 
-def test_doc_is_currently_unsupported_by_convert_document():
-    # Known gap, same shape as .xls/.xml: legacy .doc is an allowed upload
-    # extension with no working conversion path today (MarkItDown lists it
-    # under unsupported formats). Tracked for sub-project E.
+def test_doc_converts_via_libreoffice():
     result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.doc"))
-    assert not result.ok
+    assert result.ok
 
 
-def test_ppt_is_currently_unsupported_by_convert_document():
+def test_ppt_converts_via_libreoffice():
     result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.ppt"))
-    assert not result.ok
+    assert result.ok

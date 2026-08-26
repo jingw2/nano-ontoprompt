@@ -52,24 +52,30 @@
 
 ## Known issues found while building this fixture set
 
-These are real, verified gaps in `backend/app/services/document_service.py`
+These were real, verified gaps in `backend/app/services/document_service.py`
 and `backend/app/config.py`'s `allowed_upload_extensions`, found by adding
-fixtures that exercise code paths with previously zero test coverage. None
-are fixed by this fixture set — see `backend/tests/test_document_service.py`
-for the tests that document each one, and sub-project E for the planned fix.
+fixtures that exercise code paths with previously zero test coverage. Not
+fixed by this fixture set itself — see `backend/tests/test_document_service.py`
+for the tests that document each one, and sub-project E for the fixes below.
 
-1. **`.xls`, `.xml`, `.doc`, `.ppt` are accepted upload extensions with no
-   working conversion path.** MarkItDown has no converter for any of the
-   four; every upload of these types fails outright today.
-2. **Non-UTF8 CSV/text silently produces mojibake instead of an error.**
-   `_read_plain_text` and `_read_csv_as_markdown` always decode with
-   `encoding='utf-8', errors='replace'`, so a GBK-encoded file (a realistic
-   encoding for Chinese business documents) "succeeds" with `ok=True` and
-   U+FFFD replacement characters in place of the real text.
-3. **A comma inside a quoted CSV field corrupts column alignment.**
-   `_read_csv_as_markdown` naive-splits on every comma character, including
-   ones inside quoted values, so `"北京, 上海"` becomes two misaligned table
-   cells instead of one.
+1. ~~`.xls`, `.xml`, `.doc`, `.ppt` are accepted upload extensions with no
+   working conversion path.~~ **Fixed (sub-project E).** Added
+   `_read_xls_as_markdown` (via `xlrd`), `_read_xml_as_markdown` (generic
+   `xml.etree.ElementTree` flattening, no schema assumed), and
+   `_convert_legacy_office` which shells out to headless LibreOffice
+   (`soffice --headless --convert-to`) to turn `.doc`/`.ppt` into
+   `.docx`/`.pptx` at request time, then reuses the existing docx/pptx
+   conversion path. LibreOffice is now a runtime dependency, not just a
+   dev-machine convenience for fixture generation.
+2. ~~Non-UTF8 CSV/text silently produces mojibake instead of an error.~~
+   **Fixed (sub-project E).** `_decode_text_bytes` now tries UTF-8 strict,
+   then GB18030 strict (a stdlib codec, superset of GBK — the realistic
+   non-UTF-8 encoding for Chinese business documents), and returns a clear
+   error if neither decodes, instead of silently replacing undecodable
+   bytes with U+FFFD.
+3. ~~A comma inside a quoted CSV field corrupts column alignment.~~
+   **Fixed (sub-project E).** `_read_csv_as_markdown` now parses with the
+   stdlib `csv` module instead of naive-splitting on every comma character.
 4. ~~`SQLConnector.pull_full()` cannot execute against a real database.`~~
    **Fixed (sub-project E).** Root cause wasn't a pandas 3.0 API break —
    pandas 3.0.3 requires `sqlalchemy>=2.0.36`, `requirements.txt` pinned

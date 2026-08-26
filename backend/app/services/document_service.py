@@ -55,6 +55,18 @@ def convert_document(file_path: str, mime_type: str | None = None) -> Conversion
     if ext == ".csv" or (mime_type and "csv" in mime_type):
         return _read_csv_as_markdown(file_path)
 
+    if ext == ".xls":
+        return _read_xls_as_markdown(file_path)
+
+    if ext == ".xml":
+        return _read_xml_as_markdown(file_path)
+
+    if ext == ".doc":
+        return _convert_legacy_office(file_path, "docx")
+
+    if ext == ".ppt":
+        return _convert_legacy_office(file_path, "pptx")
+
     docx_result: ConversionResult | None = None
     if ext == ".docx":
         docx_result = _convert_docx(file_path)
@@ -84,10 +96,27 @@ def convert_document(file_path: str, mime_type: str | None = None) -> Conversion
         return ConversionResult(error=f"文件转换失败：{e}")
 
 
+def _decode_text_bytes(raw: bytes) -> tuple[str | None, str | None]:
+    """Decode raw bytes as UTF-8, falling back to GB18030 (superset of GBK —
+    the realistic non-UTF-8 encoding for Chinese business documents). Returns
+    (text, error); never silently replaces undecodable bytes with U+FFFD, since
+    that produces mojibake with no indication anything went wrong."""
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            return raw.decode(encoding), None
+        except UnicodeDecodeError:
+            continue
+    return None, "无法识别文件编码（已尝试 UTF-8、GB18030）"
+
+
 def _read_plain_text(file_path: str) -> ConversionResult:
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read().strip()
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        text, decode_error = _decode_text_bytes(raw)
+        if decode_error:
+            return ConversionResult(error=f"文本读取失败：{decode_error}")
+        content = text.strip()
         if not content:
             return ConversionResult(error="文件为空")
         return ConversionResult(content=content)
@@ -96,22 +125,113 @@ def _read_plain_text(file_path: str) -> ConversionResult:
 
 
 def _read_csv_as_markdown(file_path: str) -> ConversionResult:
+    import csv
+    import io
+
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-        if not lines:
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        text, decode_error = _decode_text_bytes(raw)
+        if decode_error:
+            return ConversionResult(error=f"CSV 读取失败：{decode_error}")
+        rows = list(csv.reader(io.StringIO(text)))
+        if not rows:
             return ConversionResult(error="CSV 文件为空")
-        header = lines[0]
-        separator = "|".join(["---"] * (header.count(",") + 1))
+        header, data_rows = rows[0], rows[1:]
+        separator = "|".join(["---"] * max(len(header), 1))
         md_lines = [
-            "| " + header.replace(",", " | ") + " |",
+            "| " + " | ".join(header) + " |",
             "| " + separator + " |",
         ]
-        for row in lines[1:]:
-            md_lines.append("| " + row.replace(",", " | ") + " |")
+        for row in data_rows:
+            md_lines.append("| " + " | ".join(row) + " |")
         return ConversionResult(content="\n".join(md_lines))
     except Exception as e:
         return ConversionResult(error=f"CSV 读取失败：{e}")
+
+
+def _read_xls_as_markdown(file_path: str) -> ConversionResult:
+    try:
+        import xlrd
+
+        wb = xlrd.open_workbook(file_path)
+        parts: list[str] = []
+        for sheet in wb.sheets():
+            if sheet.nrows == 0:
+                continue
+            header = [str(sheet.cell_value(0, c)) for c in range(sheet.ncols)]
+            separator = "|".join(["---"] * max(len(header), 1))
+            md_lines = [f"## {sheet.name}", "| " + " | ".join(header) + " |", "| " + separator + " |"]
+            for r in range(1, sheet.nrows):
+                row = [str(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
+                md_lines.append("| " + " | ".join(row) + " |")
+            parts.append("\n".join(md_lines))
+        content = "\n\n".join(parts).strip()
+        if not content:
+            return ConversionResult(error="XLS 文件中没有可提取的数据")
+        return ConversionResult(content=content)
+    except Exception as e:
+        return ConversionResult(error=f"XLS 解析失败：{e}")
+
+
+def _read_xml_as_markdown(file_path: str) -> ConversionResult:
+    try:
+        import xml.etree.ElementTree as ET
+
+        tree = ET.parse(file_path)
+
+        def flatten(elem, depth: int = 0) -> list[str]:
+            lines: list[str] = []
+            text = (elem.text or "").strip()
+            children = list(elem)
+            indent = "  " * depth
+            if not children:
+                if text:
+                    lines.append(f"{indent}{elem.tag}: {text}")
+            else:
+                lines.append(f"{indent}{elem.tag}:")
+                for child in children:
+                    lines.extend(flatten(child, depth + 1))
+            return lines
+
+        content = "\n".join(flatten(tree.getroot())).strip()
+        if not content:
+            return ConversionResult(error="XML 文件中没有可提取的文本")
+        return ConversionResult(content=content)
+    except Exception as e:
+        return ConversionResult(error=f"XML 解析失败：{e}")
+
+
+def _convert_legacy_office(file_path: str, target_ext: str) -> ConversionResult:
+    """Convert legacy binary .doc/.ppt to modern .docx/.pptx via headless
+    LibreOffice, then reuse the existing conversion path for the modern
+    format. Requires `soffice` on PATH — a real runtime dependency, not just
+    a dev-machine convenience."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    soffice = shutil.which("soffice")
+    if not soffice:
+        return ConversionResult(error="旧版 Office 格式转换失败：未安装 LibreOffice（soffice 不可用）")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [soffice, "--headless", "--convert-to", target_ext, "--outdir", tmpdir, file_path],
+                check=True, capture_output=True, timeout=60,
+            )
+            stem = os.path.splitext(os.path.basename(file_path))[0]
+            converted_path = os.path.join(tmpdir, f"{stem}.{target_ext}")
+            if not os.path.exists(converted_path):
+                return ConversionResult(error="旧版 Office 格式转换失败：LibreOffice 未生成输出文件")
+            if target_ext == "docx":
+                return _convert_docx(converted_path)
+            return convert_document(converted_path)
+    except subprocess.TimeoutExpired:
+        return ConversionResult(error="旧版 Office 格式转换失败：LibreOffice 转换超时")
+    except Exception as e:
+        return ConversionResult(error=f"旧版 Office 格式转换失败：{e}")
 
 
 def _convert_docx(file_path: str) -> ConversionResult:
