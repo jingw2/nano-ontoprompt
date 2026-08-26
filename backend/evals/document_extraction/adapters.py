@@ -40,7 +40,10 @@ class DeepSeekExtractionAdapter:
             "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
             "api_base": "https://api.deepseek.com",
         }
-        return extract_ontology(conversion.content, prompt_content, config_dict, self._model_name)
+        result = extract_ontology(conversion.content, prompt_content, config_dict, self._model_name)
+        for key in ("entities", "relations", "logic_rules", "actions", "instances"):
+            result.setdefault(key, [])
+        return result
 
 
 class FakeExtractionAdapter:

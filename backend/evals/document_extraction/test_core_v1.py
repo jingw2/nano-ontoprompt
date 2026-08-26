@@ -14,8 +14,8 @@ EVAL_ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(EVAL_ROOT, "..", "..", ".."))
 
 requires_deepseek_key = pytest.mark.skipif(
-    not os.environ.get("DEEPSEEK_API_KEY"),
-    reason="DEEPSEEK_API_KEY not set — this test makes real DeepSeek API calls",
+    not (os.environ.get("DEEPSEEK_API_KEY") and os.environ.get("RUN_LIVE_EVALS")),
+    reason="Set both DEEPSEEK_API_KEY and RUN_LIVE_EVALS=1 to run this test — it makes real DeepSeek API calls",
 )
 
 

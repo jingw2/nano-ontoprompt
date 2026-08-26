@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.skipif(
-    not os.environ.get("DEEPSEEK_API_KEY"),
-    reason="DEEPSEEK_API_KEY not set — this test makes a real DeepSeek API call",
+    not (os.environ.get("DEEPSEEK_API_KEY") and os.environ.get("RUN_LIVE_EVALS")),
+    reason="Set both DEEPSEEK_API_KEY and RUN_LIVE_EVALS=1 to run this test — it makes a real DeepSeek API call",
 )
 def test_adapter_extracts_a_shape_valid_result_from_a_real_domain_file():
     adapter = DeepSeekExtractionAdapter()

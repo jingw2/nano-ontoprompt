@@ -62,3 +62,49 @@ def test_run_eval_detects_dedup_finding_via_canned_result():
     )
     assert result["summary"]["cases_with_dedup_findings"] == 8
     assert len(result["cases"][0]["dedup_findings"]) == 1
+
+
+class _OneFailingAdapter:
+    """Raises for a single source_file, returns an empty canned result for
+    every other case — proves a single failing case doesn't kill the run."""
+
+    def __init__(self, failing_source_file: str):
+        self._failing_source_file = failing_source_file
+
+    def extract(self, source_file: str) -> dict:
+        if source_file == self._failing_source_file:
+            raise RuntimeError("simulated transient extraction failure")
+        return {"entities": [], "relations": [], "logic_rules": [], "actions": [], "instances": []}
+
+
+def test_run_eval_records_error_for_one_failing_case_without_killing_the_run():
+    manifest_path = str(EVAL_ROOT / "manifest" / "core-v1.json")
+    import json
+    with open(manifest_path, encoding="utf-8") as f:
+        cases = json.load(f)
+    failing_case = cases[0]
+    failing_source_file = str(REPO_ROOT / failing_case["source_file"])
+
+    adapter = _OneFailingAdapter(failing_source_file)
+    result = run_eval(
+        manifest_path=manifest_path,
+        ground_truth_dir=str(EVAL_ROOT / "ground_truth"),
+        adapter=adapter,
+        repo_root=str(REPO_ROOT),
+    )
+
+    assert len(result["cases"]) == 8
+    failing_entry = next(c for c in result["cases"] if c["case_id"] == failing_case["case_id"])
+    assert "error" in failing_entry
+    assert "keyword_recall" not in failing_entry
+
+    other_entries = [c for c in result["cases"] if c["case_id"] != failing_case["case_id"]]
+    assert len(other_entries) == 7
+    for entry in other_entries:
+        assert "keyword_recall" in entry
+        assert "error" not in entry
+
+    # summary aggregation shouldn't crash on the error-only entry
+    assert result["summary"]["total_cases"] == 8
+    assert result["summary"]["cases_with_dedup_findings"] == 0
+    assert result["summary"]["cases_with_leakage_findings"] == 0

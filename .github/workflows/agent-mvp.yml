@@ -106,9 +106,12 @@ jobs:
       - name: Agent evaluation corpus
         run: cd backend && python -m evals.agent_ontology.run --manifest core-v1 --adapter fake --seed 141 --output artifacts/evals/result.json
       - name: Document extraction eval (non-blocking)
+        if: matrix.python-version == '3.12'
         continue-on-error: true
+        timeout-minutes: 20
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          RUN_LIVE_EVALS: "1"
         run: cd backend && python -m evals.document_extraction.run --manifest core-v1 --adapter deepseek --output artifacts/evals/document_extraction_result.json
       - name: Frontend test:ci
         working-directory: frontend

@@ -18,26 +18,34 @@ def run_eval(manifest_path: str, ground_truth_dir: str, adapter, repo_root: str)
             ground_truth = json.load(f)
 
         source_path = os.path.join(repo_root, case["source_file"])
-        extraction_result = adapter.extract(source_path)
-
-        case_results.append({
-            "case_id": case["case_id"],
-            "domain": case["domain"],
-            "keyword_recall": keyword_recall(ground_truth, extraction_result),
-            "dedup_findings": dedup_gate(extraction_result),
-            "leakage_findings": instance_leakage_gate(extraction_result),
-        })
+        try:
+            extraction_result = adapter.extract(source_path)
+            case_entry = {
+                "case_id": case["case_id"],
+                "domain": case["domain"],
+                "keyword_recall": keyword_recall(ground_truth, extraction_result),
+                "dedup_findings": dedup_gate(extraction_result),
+                "leakage_findings": instance_leakage_gate(extraction_result),
+            }
+        except Exception as e:
+            case_entry = {
+                "case_id": case["case_id"],
+                "domain": case["domain"],
+                "error": str(e),
+            }
+        case_results.append(case_entry)
 
     total = len(case_results)
+    recall_cases = [c for c in case_results if "keyword_recall" in c]
     mean_recall = (
-        sum(c["keyword_recall"]["score"] for c in case_results) / total
-        if total else 0.0
+        sum(c["keyword_recall"]["score"] for c in recall_cases) / len(recall_cases)
+        if recall_cases else 0.0
     )
     summary = {
         "total_cases": total,
         "mean_keyword_recall": mean_recall,
-        "cases_with_dedup_findings": sum(1 for c in case_results if c["dedup_findings"]),
-        "cases_with_leakage_findings": sum(1 for c in case_results if c["leakage_findings"]),
+        "cases_with_dedup_findings": sum(1 for c in case_results if c.get("dedup_findings")),
+        "cases_with_leakage_findings": sum(1 for c in case_results if c.get("leakage_findings")),
     }
     return {"cases": case_results, "summary": summary}
 
