@@ -55,19 +55,6 @@ def test_list_resources_finds_the_seeded_table(pg_schema):
     assert "t_customers" in connector.list_resources()
 
 
-@pytest.mark.xfail(
-    reason="Known bug: sql_connector.py:75 calls pd.read_sql(query, "
-    "self._get_engine()) — a raw SQLAlchemy Engine. pandas>=2.2 is "
-    "unpinned in requirements.txt and currently resolves to pandas 3.0.3, "
-    "which no longer recognizes a bare Engine as a SQLAlchemy connectable "
-    "and falls through to a legacy DBAPI2 code path that calls "
-    "engine.cursor() directly, raising "
-    "'Engine' object has no attribute 'cursor'. pull_full() cannot "
-    "execute at all against a real database today. Fix tracked as "
-    "sub-project E (e.g. pass engine.connect() instead of engine, or pin "
-    "pandas<3). This test should start passing once that lands.",
-    strict=True,
-)
 def test_pull_full_returns_all_seeded_rows(pg_schema):
     connector = SQLConnector({"connection_string": pg_schema})
     rows = connector.pull_full("t_customers")
@@ -90,13 +77,6 @@ def test_pull_delta_with_real_watermark_returns_only_newer_rows(pg_schema):
     assert {r["name"] for r in rows} == {"Bob", "Carol"}
 
 
-@pytest.mark.xfail(
-    reason="Same root cause as test_pull_full_returns_all_seeded_rows: "
-    "pull_delta with no watermark_column falls back to pull_full "
-    "(sql_connector.py:81-82), which is currently broken against a real "
-    "engine under pandas 3.0.3.",
-    strict=True,
-)
 def test_pull_delta_without_watermark_falls_back_to_pull_full(pg_schema):
     connector = SQLConnector({"connection_string": pg_schema})
     rows = connector.pull_delta("t_customers", since=None)

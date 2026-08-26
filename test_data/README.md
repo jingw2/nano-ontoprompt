@@ -70,17 +70,17 @@ for the tests that document each one, and sub-project E for the planned fix.
    `_read_csv_as_markdown` naive-splits on every comma character, including
    ones inside quoted values, so `"北京, 上海"` becomes two misaligned table
    cells instead of one.
-4. **`SQLConnector.pull_full()` cannot execute against a real database.**
-   `sql_connector.py:75` passes a raw SQLAlchemy `Engine` to
-   `pd.read_sql()`; `requirements.txt` pins `pandas>=2.2` with no upper
-   bound, which currently resolves to pandas 3.0.3 — a version that no
-   longer accepts a bare `Engine` there and raises `AttributeError:
-   'Engine' object has no attribute 'cursor'`. `pull_delta()` with no
-   `watermark_column` falls back to `pull_full()` and inherits the same
-   break. This was invisible before this task because the only prior
-   coverage (`test_sql_connector.py`) mocks `create_engine` entirely — see
+4. ~~`SQLConnector.pull_full()` cannot execute against a real database.`~~
+   **Fixed (sub-project E).** Root cause wasn't a pandas 3.0 API break —
+   pandas 3.0.3 requires `sqlalchemy>=2.0.36`, `requirements.txt` pinned
+   exactly `2.0.35`, and pandas's `import_optional_dependency` silently
+   treats one-patch-version-short SQLAlchemy as "not installed," falling
+   through to a broken legacy DBAPI2 path that calls `.cursor()` directly.
+   Bumping the pin to `2.0.36` fixed it with no code changes. This was
+   invisible before sub-project B because the only prior coverage
+   (`test_sql_connector.py`) mocks `create_engine` entirely — see
    `backend/tests/v2/connection/test_sql_connector_integration.py` for the
-   real-database tests that caught it.
+   real-database tests that caught and now verify the fix.
 
 ## Hygiene (sub-project A)
 
