@@ -26,7 +26,7 @@
 - Rollback is a new governed action plan. Unknown outcomes create reconciliation cases and are never blindly replayed.
 - Tests use deterministic no-PII fixtures. Existing untracked files under ref/ and test_data/ are read-only inputs and must not be added, rewritten, or deleted. The runtime corpus may use only public test sentinels such as runtime/runtime, vault:runtime-db, and example.invalid; these are not real credentials and must never be used outside test infrastructure.
 - Runtime fixture manifests never contain raw access tokens, refresh tokens, signing keys, private keys, cloud credentials, production URIs, or real email/phone values. Test-only database passwords remain only in the isolated database Compose file and are scanned as the literal public sentinel runtime.
-- The fixture registry is authoritative: every case has layers and at least one listable test target; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, and E2E cases name a Playwright target.
+- The fixture registry is authoritative: every case has layers and at least one syntactically valid test-target descriptor; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, and E2E cases name a Playwright target. Full target collect/list verification is a Task 22 gate after all referenced tests are implemented.
 - Every task follows TDD: add a focused failing test, run the named command and record the failure, implement the smallest change, run the named passing command, then commit only the listed files.
 
 ## File and Interface Map
@@ -91,7 +91,7 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - sdk: a full SDK pytest node ID such as sdk/tests/test_runtime_client.py::test_sdk_injects_delegation_and_decodes_investigation; or
 - playwright: a spec path and exact test title such as frontend/src/test/e2e/runtime-governance.spec.ts::operator approves the exact plan hash and sees the receipt.
 
-registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can run `npx playwright test recorded_spec_path --list` and require that title in the output. The registry is checked against the manifest, not inferred from a vague case runner. target_is_listable uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets.
+registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 22 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; it does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–22 have created those tests.
 
 ### Coverage matrix
 
@@ -104,7 +104,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 | API/SDK/MCP/reference parity | transport_cases.json | Same normalized result and canonical plan_hash, independent of envelopes and tracing IDs |
 | PostgreSQL/MySQL integration | Both SQL seed directories and db/docker-compose.yml | Row update, exact row count, optimistic locking, timeout, binding drift, idempotency, unknown outcome |
 | Playwright E2E | playwright_seed.json plus registry Playwright targets | Investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
-| Case-to-test traceability | manifest.json plus registry.py | Every case has a collectable/listable target, required dialects, required transports, and required Playwright marker |
+| Case-to-test traceability | manifest.json plus registry.py | Task 1 validates descriptor/schema/metadata binding; Task 22 verifies every target is collectable/listable, with required dialects, transports, and Playwright marker |
 
 ### Task 1: Create the runtime test-data inventory and generator
 
@@ -150,9 +150,19 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     def test_no_pii_or_real_secret():
         scan_runtime_corpus(Path("test_data/runtime"))
 
-    def test_every_case_has_a_listable_registered_target():
+    def test_every_case_has_a_valid_registered_target_descriptor():
         for case in load_cases(Path("test_data/runtime/manifest.json")):
             assert_case_registry(case)
+            assert [target.to_dict() for target in targets_for(case["case_id"])] == case["test_targets"]
+
+    def test_case_registry_metadata_is_complete():
+        for case in load_cases(Path("test_data/runtime/manifest.json")):
+            if "database" in case["layers"]:
+                assert set(case["dialects"]) == {"mysql", "postgresql"}
+            if "parity" in case["layers"]:
+                assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
+            if "playwright" in case["layers"]:
+                assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
 - [ ] **Step 2: Run the focused test to verify it fails.**
 
@@ -170,17 +180,18 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT" && python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated)
 
-    python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check
+    (cd "$REPO_ROOT" && python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check)
 
-    python -m pytest test_data/runtime/test_fixture_manifest.py -q
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py -q)
 
-    python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q)
 
-    python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_listable_registered_target -q
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_valid_registered_target_descriptor -q)
 
-    Expected: generation is idempotent, no PII or real-secret pattern is found, and every case has a collectable/listable registered target.
+    Expected: generation is idempotent, no PII or real-secret pattern is found, every manifest case has exactly one registry representation, and every target has valid kind/path/title syntax plus required dialect/transport/E2E metadata. Target collect/list checks intentionally remain in Task 22 after the referenced tests exist.
 
 - [ ] **Step 5: Commit only the runtime corpus.**
 
@@ -219,7 +230,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the stabilization tests to verify the existing failure.**
 
-    Run: cd backend && python -m pytest tests/agent/test_build_manifest.py tests/agent/test_compose_migration_order.py -q
+    Run: (cd backend && python -m pytest tests/agent/test_build_manifest.py tests/agent/test_compose_migration_order.py -q)
 
     Expected: FAIL on the stale 0017_mcp_write_requests expectation and missing v2 migration dependency.
 
@@ -231,7 +242,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/agent/test_build_manifest.py tests/agent/test_compose_migration_order.py -q
+    (cd backend && python -m pytest tests/agent/test_build_manifest.py tests/agent/test_compose_migration_order.py -q)
 
     docker compose -f docker-compose.v2.yml config --quiet
 
@@ -271,7 +282,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused schema tests.**
 
-    Run: cd backend && python -m pytest tests/agent/test_schema_startup.py tests/v2/models/test_v2_schema.py tests/agent/test_current_schema_contract.py -q
+    Run: (cd backend && python -m pytest tests/agent/test_schema_startup.py tests/v2/models/test_v2_schema.py tests/agent/test_current_schema_contract.py -q)
 
     Expected: FAIL where the old static contract or missing loop configuration is observed.
 
@@ -281,7 +292,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run focused schema verification.**
 
-    Run: cd backend && python -m pytest tests/agent/test_schema_startup.py tests/v2/models/test_v2_schema.py tests/agent/test_current_schema_contract.py -q
+    Run: (cd backend && python -m pytest tests/agent/test_schema_startup.py tests/v2/models/test_v2_schema.py tests/agent/test_current_schema_contract.py -q)
 
     Expected: PASS with no stale-head or missing-memory-table failure.
 
@@ -322,9 +333,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd frontend && npm run test:ci
+    (cd frontend && npm run test:ci)
 
-    cd backend && python -m pytest tests/agent/test_ci_contract.py -q
+    (cd backend && python -m pytest tests/agent/test_ci_contract.py -q)
 
     Expected: the current TypeScript build fails on the window.location assignment and the workflow contract reports frontend work inside the matrix.
 
@@ -336,9 +347,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd frontend && npm run test:ci
+    (cd frontend && npm run test:ci)
 
-    cd backend && python -m pytest tests/agent/test_ci_contract.py -q
+    (cd backend && python -m pytest tests/agent/test_ci_contract.py -q)
 
     Expected: TypeScript, lint, unit coverage, and CI structure checks pass.
 
@@ -374,7 +385,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the M1 gate before the documentation fix.**
 
-    Run: cd backend && python -m pytest tests/agent/test_stabilization_gate.py -q
+    Run: (cd backend && python -m pytest tests/agent/test_stabilization_gate.py -q)
 
     Expected: FAIL on version drift or absent migration-first instructions.
 
@@ -386,30 +397,31 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/agent/test_stabilization_gate.py tests/agent/test_build_manifest.py tests/agent/test_schema_startup.py -q
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/agent/test_stabilization_gate.py tests/agent/test_build_manifest.py tests/agent/test_schema_startup.py -q)
 
-    docker compose -f docker-compose.v2.yml config --quiet
+    (cd "$REPO_ROOT" && docker compose -f docker-compose.v2.yml config --quiet)
 
-    docker compose -f docker-compose.agent.yml config --quiet
+    (cd "$REPO_ROOT" && docker compose -f docker-compose.agent.yml config --quiet)
 
     set -e
     SMOKE_PROJECT=ontexus-m1-smoke
     SMOKE_VOLUME_FILTER="label=com.docker.compose.project=$SMOKE_PROJECT"
     cleanup() {
-      docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+      docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
     }
     trap cleanup EXIT
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml up --build -d --wait
-    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps -q migration)"
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" up --build -d --wait
+    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" ps -q migration)"
     test -n "$MIGRATION_ID"
     test "$(docker inspect -f '{{.State.Status}}' "$MIGRATION_ID")" = "exited"
     test "$(docker inspect -f '{{.State.ExitCode}}' "$MIGRATION_ID")" = "0"
     test -n "$(docker volume ls -q --filter "$SMOKE_VOLUME_FILTER")"
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps --status running backend frontend
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" ps --status running backend frontend
     curl -fsS http://127.0.0.1:8000/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
     curl -fsS http://127.0.0.1:5173/ >/dev/null
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
     test -z "$(docker volume ls -q --filter "$SMOKE_VOLUME_FILTER")"
 
     Expected: PASS. The isolated project name prefixes temporary dedicated Compose volumes, the migration exits successfully before dependents, backend health responds with status ok, frontend responds over HTTP, and the final down -v removes every volume carrying that project label.
@@ -471,7 +483,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused schema tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_snapshot_schema.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_snapshot_schema.py -q)
 
     Expected: FAIL because the snapshot model, association table, and migration do not exist.
 
@@ -483,9 +495,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/runtime/test_snapshot_schema.py -q
+    (cd backend && python -m pytest tests/runtime/test_snapshot_schema.py -q)
 
-    cd backend && python scripts/run_migrations.py upgrade head
+    (cd backend && python scripts/run_migrations.py upgrade head)
 
     Expected: PASS, with one new Alembic head and no duplicate input rows.
 
@@ -536,7 +548,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_snapshot_materialization.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_snapshot_materialization.py -q)
 
     Expected: FAIL because lineage collection, canonical hashing, and materialization are absent.
 
@@ -546,7 +558,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run function and database tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_snapshot_materialization.py tests/runtime/test_snapshot_schema.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_snapshot_materialization.py tests/runtime/test_snapshot_schema.py -q)
 
     Expected: PASS for multi-input, reordered-input, incomplete-lineage, and release-state cases; an existing snapshot remains unchanged after a new materialization.
 
@@ -609,7 +621,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused security tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_credentials.py tests/agent/test_oauth_security_properties.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_credentials.py tests/agent/test_oauth_security_properties.py -q)
 
     Expected: FAIL because the current OAuthContext has no actor subject, audience/domain verification, token revocation lookup, or token-exchange credential.
 
@@ -619,7 +631,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run credential, OAuth, and schema tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_credentials.py tests/agent/test_oauth_security_properties.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_credentials.py tests/agent/test_oauth_security_properties.py -q)
 
     Expected: PASS for valid dual-principal access and every missing, malformed, expired, revoked, inactive, scope, audience, and cross-domain case; request-body IDs have no authority.
 
@@ -675,7 +687,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_contracts.py tests/runtime/test_runtime_policy.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_contracts.py tests/runtime/test_runtime_policy.py -q)
 
     Expected: FAIL because the typed runtime contracts and shared intersection evaluator do not exist.
 
@@ -685,7 +697,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run contract and policy tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_contracts.py tests/runtime/test_runtime_policy.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_contracts.py tests/runtime/test_runtime_policy.py -q)
 
     Expected: PASS for allow-with-data, allow-empty, Agent-only denial, user-only denial, policy denial, stale snapshot, and protected-content non-leakage.
 
@@ -749,7 +761,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused service tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_service.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_service.py -q)
 
     Expected: FAIL because RuntimeService, action-plan persistence, snapshot pinning, and non-writing proposal semantics are absent.
 
@@ -759,7 +771,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run service, snapshot, policy, and migration tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_service.py tests/runtime/test_snapshot_materialization.py tests/runtime/test_runtime_policy.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_service.py tests/runtime/test_snapshot_materialization.py tests/runtime/test_runtime_policy.py -q)
 
     Expected: PASS for data and empty investigations, structured denial, immutable read-only/writable proposals, release-only rejection, and zero production connector calls.
 
@@ -814,7 +826,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused API tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_api.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_api.py -q)
 
     Expected: FAIL because /api/v2/runtime is not registered.
 
@@ -824,7 +836,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run API and service tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_api.py tests/runtime/test_runtime_service.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_api.py tests/runtime/test_runtime_service.py -q)
 
     Expected: PASS for valid delegated access, empty ALLOW, structured DENY, no protected-result leakage, immutable plan creation, plan retrieval, and release-only rejection.
 
@@ -854,6 +866,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - HttpTransport is a Protocol with request(method: str, path: str, json: Mapping[str, object] | None, headers: Mapping[str, str]) -> Mapping[str, object].
 - RuntimeClient(base_url: str, credential_provider: CredentialProvider, transport: HttpTransport | None = None) exposes investigate(request: InvestigationRequest) -> InvestigationResult, create_action_plan(request: ActionPlanRequest) -> ActionPlan, get_action_plan(plan_id: str) -> ActionPlan, and get_execution_status(plan_id: str) -> ExecutionStatus.
 - RuntimeClient maps structured server failures to RuntimeDeniedError with decision, reason_code, correlation_id, and semantic_snapshot_id; it never evaluates policy or executes a database write locally.
+- sdk/pyproject.toml declares the SDK's HTTP/model runtime dependencies so `python -m pip install -e sdk` is the single required package-and-runtime-dependency installation before SDK tests.
 
 - [ ] **Step 1: Write failing SDK tests.**
 
@@ -879,9 +892,13 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the SDK tests to verify they fail.**
 
-    Run: python -m pytest sdk/tests/test_runtime_client.py -q
+    Run:
 
-    Expected: FAIL because the SDK package, typed models, and credential provider do not exist.
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT" && python -m pip install -e sdk)
+    (cd "$REPO_ROOT/sdk" && python -m pytest tests/test_runtime_client.py -q)
+
+    Expected: FAIL because the SDK package, typed models, and credential provider do not exist; the editable install or focused test is the intentional red step before implementation.
 
 - [ ] **Step 3: Implement the minimal SDK.**
 
@@ -891,17 +908,20 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    python -m pytest sdk/tests/test_runtime_client.py -q
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT" && python -m pip install -e sdk)
+    (cd "$REPO_ROOT/sdk" && python -m pytest tests/test_runtime_client.py -q)
 
-    cd backend && python -m pytest tests/runtime/test_runtime_api.py -q
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_runtime_api.py -q)
 
     Expected: PASS for all four methods, delegation injection, typed denial, snapshot citations, and absence of local write/policy behavior.
 
 - [ ] **Step 5: Commit SDK v1.**
 
-    git add sdk
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    git -C "$REPO_ROOT" add sdk
 
-    git commit -m "feat: publish semantic runtime Python SDK"
+    git -C "$REPO_ROOT" commit -m "feat: publish semantic runtime Python SDK"
 
 ### Task 13: Route MCP and the built-in Agent through RuntimeService
 
@@ -945,7 +965,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run MCP and Agent tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_mcp_runtime_adapter.py tests/agent/test_mcp_end_to_end.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_mcp_runtime_adapter.py tests/agent/test_mcp_end_to_end.py -q)
 
     Expected: FAIL because MCP currently dispatches directly to ontology_query and the separate write-request flow.
 
@@ -955,7 +975,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run adapter and security tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_mcp_runtime_adapter.py tests/agent/test_mcp_end_to_end.py tests/runtime/test_runtime_credentials.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_mcp_runtime_adapter.py tests/agent/test_mcp_end_to_end.py tests/runtime/test_runtime_credentials.py -q)
 
     Expected: PASS for MCP OAuth delegation, valid investigation/plan calls, identity spoofing rejection, release-only rejection, compatibility reads, and zero direct production writes.
 
@@ -999,7 +1019,10 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the parity tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_transport_parity.py -q
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_transport_parity.py -q)
 
     Expected: FAIL because transports currently expose different envelopes, identifiers, release-only inputs, and hash implementations.
 
@@ -1011,17 +1034,19 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/runtime/test_transport_parity.py tests/runtime/test_runtime_api.py tests/runtime/test_mcp_runtime_adapter.py -q
-
-    python -m pytest sdk/tests/test_runtime_client.py -q
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_transport_parity.py tests/runtime/test_runtime_api.py tests/runtime/test_mcp_runtime_adapter.py -q)
+    (cd "$REPO_ROOT" && python -m pip install -e sdk)
+    (cd "$REPO_ROOT/sdk" && python -m pytest tests/test_runtime_client.py -q)
 
     Expected: PASS for allow, deny, empty-result, and action-plan cases; equivalent plan hashes match across every transport and change on every semantic field.
 
 - [ ] **Step 5: Commit canonical parity.**
 
-    git add backend/app/services/runtime/canonical.py backend/tests/runtime/test_transport_parity.py backend/tests/runtime/test_runtime_api.py backend/tests/runtime/test_mcp_runtime_adapter.py sdk/tests/test_runtime_client.py
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    git -C "$REPO_ROOT" add backend/app/services/runtime/canonical.py backend/tests/runtime/test_transport_parity.py backend/tests/runtime/test_runtime_api.py backend/tests/runtime/test_mcp_runtime_adapter.py sdk/tests/test_runtime_client.py
 
-    git commit -m "feat: enforce transport-neutral runtime parity"
+    git -C "$REPO_ROOT" commit -m "feat: enforce transport-neutral runtime parity"
 
 ### Milestone 3 — Sandbox and governed PostgreSQL/MySQL writeback
 
@@ -1075,7 +1100,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_managed_action_bindings.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_managed_action_bindings.py -q)
 
     Expected: FAIL because managed bindings, fixed target resolution, and binding-aware plan fields are absent.
 
@@ -1085,7 +1110,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run binding and parity tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_managed_action_bindings.py tests/runtime/test_transport_parity.py tests/runtime/test_runtime_service.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_managed_action_bindings.py tests/runtime/test_transport_parity.py tests/runtime/test_runtime_service.py -q)
 
     Expected: PASS for published bindings, draft/revoked/connection drift, target and parameter override rejection, stable target hashes, and changed plan hashes.
 
@@ -1134,7 +1159,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run Sandbox tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_sandbox.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_sandbox.py -q)
 
     Expected: FAIL because the simulation record, snapshot-only evaluator, and diff contract do not exist.
 
@@ -1144,7 +1169,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run Sandbox and action-plan tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_sandbox.py tests/runtime/test_managed_action_bindings.py tests/runtime/test_runtime_service.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_sandbox.py tests/runtime/test_managed_action_bindings.py tests/runtime/test_runtime_service.py -q)
 
     Expected: PASS for normal diff, no-match/zero-impact simulation, immutable result, stale snapshot, draft/revoked binding, and every arbitrary-code/prompt/tool/production-connector boundary.
 
@@ -1192,7 +1217,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run risk tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_risk_policy.py tests/agent/test_approval_state.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_risk_policy.py tests/agent/test_approval_state.py -q)
 
     Expected: FAIL because risk classes do not share the immutable action-plan hash and the existing approval flow does not enforce exact-plan approval.
 
@@ -1202,7 +1227,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 4: Run risk, Sandbox, and policy tests.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_risk_policy.py tests/runtime/test_sandbox.py tests/runtime/test_runtime_policy.py tests/agent/test_approval_state.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_risk_policy.py tests/runtime/test_sandbox.py tests/runtime/test_runtime_policy.py tests/agent/test_approval_state.py -q)
 
     Expected: PASS for automatic, HITL, structured rejection, exact hash mismatch, expiry, identity drift, policy drift, and stale precondition cases.
 
@@ -1248,9 +1273,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run unit and integration tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_postgres_writer.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_postgres_writer.py -q)
 
-    Run with PostgreSQL fixture: cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime python -m pytest tests/runtime/integration/test_postgres_writer_integration.py -q
+    Run with PostgreSQL fixture: (cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime python -m pytest tests/runtime/integration/test_postgres_writer_integration.py -q)
 
     Expected: FAIL because the managed writer and synthetic PostgreSQL fixture are not implemented.
 
@@ -1262,11 +1287,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/runtime/test_postgres_writer.py -q
+    (cd backend && python -m pytest tests/runtime/test_postgres_writer.py -q)
 
     docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait postgres
 
-    cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime python -m pytest tests/runtime/integration/test_postgres_writer_integration.py -q
+    (cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime python -m pytest tests/runtime/integration/test_postgres_writer_integration.py -q)
 
     Expected: PASS for authorized one-row update, version conflict, exact row count, timeout rollback, idempotency input, unsafe SQL rejection, and secret non-disclosure.
 
@@ -1312,9 +1337,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run MySQL unit and integration tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_mysql_writer.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_mysql_writer.py -q)
 
-    Run with MySQL fixture: cd backend && RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration/test_mysql_writer_integration.py -q
+    Run with MySQL fixture: (cd backend && RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration/test_mysql_writer_integration.py -q)
 
     Expected: FAIL because the MySQL adapter and fixture are not implemented.
 
@@ -1328,7 +1353,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait mysql
 
-    cd backend && RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/test_mysql_writer.py tests/runtime/integration/test_mysql_writer_integration.py -q
+    (cd backend && RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/test_mysql_writer.py tests/runtime/integration/test_mysql_writer_integration.py -q)
 
     Expected: PASS for the same normal, edge, negative, security, drift, row-count, lock, timeout, and secret-safety cases as PostgreSQL.
 
@@ -1400,7 +1425,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run execution tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_execution_service.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_execution_service.py -q)
 
     Expected: FAIL because execution receipts, preflight fencing, reconciliation, and rollback-plan creation are absent.
 
@@ -1412,11 +1437,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/runtime/test_execution_service.py tests/runtime/test_risk_policy.py -q
+    (cd backend && python -m pytest tests/runtime/test_execution_service.py tests/runtime/test_risk_policy.py -q)
 
     docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
 
-    cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration/test_execution_dialects.py -q
+    (cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration/test_execution_dialects.py -q)
 
     Expected: PASS for automatic write, exact-plan HITL, stale/unauthorized/policy/binding/connection/target drift, precondition conflict, row-count mismatch, idempotent retry, unknown reconciliation, receipt/audit, and rollback-plan creation in PostgreSQL and MySQL.
 
@@ -1499,7 +1524,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the focused API tests to verify they fail.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py -q
+    Run: (cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py -q)
 
     Expected: FAIL because the runtime router has no Sandbox, approval, execution, reconciliation, or rollback-plan routes.
 
@@ -1511,7 +1536,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py tests/runtime/test_runtime_credentials.py tests/runtime/test_execution_service.py -q
+    (cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py tests/runtime/test_runtime_credentials.py tests/runtime/test_execution_service.py -q)
 
     Expected: PASS for all five endpoints, valid dual-principal context, missing/expired/revoked/cross-domain denial, Agent or user capability denial, exact hash mismatch, stale snapshot, binding drift, no secret leakage, and no caller-supplied target or parameter override.
 
@@ -1598,9 +1623,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run frontend tests to verify they fail.**
 
-    Run: cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
+    Run: (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx)
 
-    Run: cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts
+    Run: (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
     Expected: FAIL because the runtime API methods, pages, routes, and browser fixtures do not exist.
 
@@ -1612,11 +1637,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     Run:
 
-    cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
+    (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx)
 
-    cd frontend && npm run build
+    (cd frontend && npm run build)
 
-    cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts
+    (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
     Expected: PASS for every endpoint mapping, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
 
@@ -1641,8 +1666,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 **Interfaces:**
 
 - test_acceptance_matrix.py loads every case from test_data/runtime/manifest.json and its registered targets from test_data/runtime/registry.py; it never calls an untyped run_case function.
-- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks that every target is collectable/listable, requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, and a Playwright target for E2E layers.
+- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, and a Playwright target descriptor for E2E layers. Task 22 additionally calls target_is_listable for every registered target after Tasks 6–21 have created the referenced pytest, SDK, and Playwright tests.
 - The CI workflow has dedicated steps for fixture generation/check, backend runtime unit tests, PostgreSQL/MySQL integration, SDK tests, frontend test:ci, Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
+- The CI SDK job installs the package and its declared runtime dependencies with `(cd "$REPO_ROOT" && python -m pip install -e sdk)` before running `(cd "$REPO_ROOT/sdk" && python -m pytest tests -q)`; the local release gate uses the same root-anchored install and test commands.
 - Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
 
 - [ ] **Step 1: Write the failing acceptance matrix.**
@@ -1672,64 +1698,77 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 2: Run the matrix before final wiring.**
 
-    Run: cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py -q
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_acceptance_matrix.py -q)
 
     Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/Playwright marker, an expected assertion, or a generated fixture.
 
 - [ ] **Step 3: Wire final checks and document reproducible commands.**
 
-    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, runtime unit/integration/parity tests, SDK tests, frontend test:ci, Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands and synthetic database URLs. The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport, or points to a test target that cannot be collected/listed.
+    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, runtime unit/integration/parity tests, SDK tests, frontend test:ci, Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands and synthetic database URLs. The SDK CI job must install `-e sdk` (including the runtime dependencies declared by sdk/pyproject.toml) before collecting/running its tests. Its commands are:
+
+    REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
+    (cd "$REPO_ROOT" && python -m pip install -e sdk)
+    (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
+
+    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport, or points to a test target that cannot be collected/listed.
 
 - [ ] **Step 4: Run the complete release gate.**
 
     Run:
 
-    python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT" && python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check)
 
-    cd backend && python -m pytest tests/runtime -q
+    (cd "$REPO_ROOT" && python -m pip install -e sdk)
 
-    python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime -q)
 
-    python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_listable_registered_target -q
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q)
 
-    cd backend && docker compose -f ../test_data/runtime/db/docker-compose.yml up -d --wait
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_valid_registered_target_descriptor -q)
 
-    cd backend && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration -q
+    (cd "$REPO_ROOT" && docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait)
 
-    python -m pytest sdk/tests -q
+    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration -q)
 
-    cd frontend && npm run test:ci
+    (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
-    cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts
+    (cd "$REPO_ROOT/frontend" && npm run test:ci)
 
-    docker compose -f docker-compose.v2.yml config --quiet
+    (cd "$REPO_ROOT/frontend" && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
-    docker compose -f docker-compose.agent.yml config --quiet
+    (cd "$REPO_ROOT" && docker compose -f docker-compose.v2.yml config --quiet)
+
+    (cd "$REPO_ROOT" && docker compose -f docker-compose.agent.yml config --quiet)
 
     set -e
     SMOKE_PROJECT=ontexus-final-smoke
     cleanup() {
-      docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+      docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
     }
     trap cleanup EXIT
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml up --build -d --wait
-    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps -q migration)"
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" up --build -d --wait
+    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" ps -q migration)"
     test -n "$MIGRATION_ID"
     test "$(docker inspect -f '{{.State.Status}}' "$MIGRATION_ID")" = "exited"
     test "$(docker inspect -f '{{.State.ExitCode}}' "$MIGRATION_ID")" = "0"
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps --status running backend frontend
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" ps --status running backend frontend
     curl -fsS http://127.0.0.1:8000/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
     curl -fsS http://127.0.0.1:5173/ >/dev/null
-    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
 
     Expected: all M1, Phase 2, and Phase 3 checks pass; every case points to collectable/listable tests; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; and the final isolated volumes are removed.
 
 - [ ] **Step 5: Commit the release gate.**
 
-    git add backend/tests/runtime/test_acceptance_matrix.py .github/workflows/agent-mvp.yml test_data/runtime/README.md README.md README_zh.md
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    git -C "$REPO_ROOT" add backend/tests/runtime/test_acceptance_matrix.py .github/workflows/agent-mvp.yml test_data/runtime/README.md README.md README_zh.md
 
-    git commit -m "ci: add semantic runtime acceptance gates"
+    git -C "$REPO_ROOT" commit -m "ci: add semantic runtime acceptance gates"
 
 ## Spec Coverage and Non-goals Check
 
