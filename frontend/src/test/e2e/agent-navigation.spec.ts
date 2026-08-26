@@ -18,14 +18,20 @@ test('I-FRONTEND red contract', () => {
   const read = (p: string) => readFileSync(resolve(FRONTEND, p), 'utf8')
 
   const app = read('src/App.tsx')
-  for (const route of ['/agents', '/agents/new', '/agents/:id', '/admin/agent-reconciliations']) {
+  for (const route of ['/agents', '/agents/new', '/agents/:id', '/admin/approvals', '/admin/agent-reconciliations', '/mcp/write-requests']) {
     if (!app.includes(`path="${route}"`)) failures.push(`App.tsx missing route ${route}`)
   }
-  if (!app.includes('AgentReconciliationPage')) failures.push('App.tsx missing admin reconciliation page wiring')
+  if (!app.includes('ApprovalsPage')) failures.push('App.tsx missing merged Approvals page wiring')
+
+  // 和解操作 + MCP 待审批 are merged into one admin-only Approvals page (ApprovalsPage.tsx),
+  // not two separate sidebar entries — check the merge, not the pre-merge shape.
+  const approvalsPage = read('src/pages/admin/ApprovalsPage.tsx')
+  if (!approvalsPage.includes('AgentReconciliationPage')) failures.push('ApprovalsPage.tsx missing reconciliation tab wiring')
+  if (!approvalsPage.includes('McpWriteRequestsPage')) failures.push('ApprovalsPage.tsx missing MCP write-requests tab wiring')
 
   const layout = read('src/components/Layout.tsx')
   if (!layout.includes("nav.agents")) failures.push('Layout.tsx missing Agent sidebar entry')
-  if (!layout.includes('agent-reconciliations')) failures.push('Layout.tsx missing admin reconciliation entry')
+  if (!layout.includes('/admin/approvals')) failures.push('Layout.tsx missing merged Approvals entry')
 
   for (const locale of ['en', 'zh']) {
     const i18n = read(`src/i18n/${locale}.json`)

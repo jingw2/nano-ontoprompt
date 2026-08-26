@@ -21,6 +21,10 @@ beforeEach(() => {
       HttpResponse.json({ data: { items: [] }, message: 'ok' })),
     http.get('*/api/v1/agents/a-1/versions/v-1/external-tools', () =>
       HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    http.get('*/api/v1/agents/catalog/skills', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    http.get('*/api/v1/agents/a-1/versions/v-1/skills', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
   )
 })
 
@@ -140,6 +144,10 @@ describe('P2C-TOOLS', () => {
     await pickOntology('Supply Ontology')
     // the ontology is bound with ALL tool categories on by default
     expect(await screen.findByTestId('ontology-tools-o-1')).toBeTruthy()
+    // tool items are collapsed by category by default; expand the ones this test inspects
+    for (const cat of ['query', 'logic', 'action']) {
+      await userEvent.click(await screen.findByTestId(`category-expand-o-1-${cat}`))
+    }
     await waitFor(() => expect(screen.getByText(/Logic 规则 · rule-1/)).toBeTruthy())
     // every category toggle defaults to checked
     for (const cat of ['mcp', 'query', 'write', 'logic', 'action']) {
@@ -181,6 +189,7 @@ describe('P2C-TOOLS', () => {
     await screen.findByTestId('ontology-picker')
     await pickOntology('Supply Ontology')
     await screen.findByTestId('ontology-tools-o-1')
+    await userEvent.click(await screen.findByTestId('category-expand-o-1-logic'))
     await waitFor(() => expect(screen.getByText(/Logic 规则 · rule-1/)).toBeTruthy())
     // disable the Logic category: its tool is removed and becomes read-only
     const logicCategory = screen.getByTestId('category-o-1-logic') as HTMLInputElement
@@ -305,15 +314,50 @@ describe('P2C-TOOLS', () => {
     await waitFor(() => expect(unbound).toBe(true))
   })
 
-  it('keeps the Signed Skills card as a static, unavailable placeholder', async () => {
+  it('lists a bindable Skill catalog entry and binds it', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/skills', () =>
+        HttpResponse.json({ data: { items: [
+          { skill_version_id: 'sv-1', package_id: 'sp-1', version_no: 1, package_name: 'My Skill' },
+        ] }, message: 'ok' })),
+    )
+    let bindBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions/v-1/skills', async ({ request }) => {
+        bindBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { id: 'asb-1', alias: bindBody.alias, skill_version_id: 'sv-1' }, message: 'ok' }, { status: 201 })
+      }),
     )
     renderTab()
-    await waitFor(() => expect(screen.getByTestId('external-tool-cards')).toBeTruthy())
-    expect(screen.getAllByTestId('external-tool-card').length).toBe(1)
-    expect(screen.getByText('后续提供')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('bind-skill-sv-1')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('bind-skill-sv-1'))
+    await waitFor(() => expect(bindBody).not.toBeNull())
+    expect(bindBody).toMatchObject({ skill_version_id: 'sv-1' })
+  })
+
+  it('unbinds a currently bound Skill', async () => {
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/versions/v-1/skills', () =>
+        HttpResponse.json({ data: { items: [
+          { id: 'asb-1', alias: 'my-skill', skill_version_id: 'sv-1', package_id: 'sp-1',
+            version_no: 1, package_name: 'My Skill', approval_status: 'approved' },
+        ] }, message: 'ok' })),
+    )
+    let unbound = false
+    server.use(
+      http.delete('*/api/v1/agents/a-1/versions/v-1/skills/my-skill', () => {
+        unbound = true
+        return HttpResponse.json({ data: { released: true }, message: 'ok' })
+      }),
+    )
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('external-kind-skill')).toBeTruthy())
+    await userEvent.click(await screen.findByText('解绑'))
+    await waitFor(() => expect(unbound).toBe(true))
   })
 
   it('shows the capability intersection drawer', async () => {

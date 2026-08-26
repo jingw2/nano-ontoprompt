@@ -186,3 +186,21 @@ def agent_external_tool_catalog(db: Session) -> list[dict]:
         "ORDER BY tp.name, tc.id"
     )).mappings().all()
     return [dict(r) for r in rows]
+
+
+def agent_skill_catalog(db: Session) -> list[dict]:
+    """Signed Skills an Agent may bind to: the highest-numbered APPROVED
+    version of each active package — matches bind_skill's own approval check
+    (configuration.py:427-431) so nothing shown here can fail to bind."""
+    rows = db.execute(text(
+        "SELECT sv.id AS skill_version_id, sv.package_id, sv.version_no, sp.name AS package_name "
+        "FROM skill_versions sv "
+        "JOIN skill_packages sp ON sp.id = sv.package_id "
+        "WHERE sv.approval_status = 'approved' AND sp.status = 'active' "
+        "AND sv.version_no = ("
+        "  SELECT MAX(sv2.version_no) FROM skill_versions sv2 "
+        "  WHERE sv2.package_id = sv.package_id AND sv2.approval_status = 'approved'"
+        ") "
+        "ORDER BY sp.name"
+    )).mappings().all()
+    return [dict(r) for r in rows]

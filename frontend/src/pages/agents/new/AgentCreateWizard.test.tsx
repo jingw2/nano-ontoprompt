@@ -18,6 +18,8 @@ beforeEach(() => {
       HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
     http.get('*/api/v1/agents/catalog/external-tools', () =>
       HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    http.get('*/api/v1/agents/catalog/skills', () =>
+      HttpResponse.json({ data: { items: [] }, message: 'ok' })),
   )
 })
 

@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { agentDetailApi, type CatalogModel } from '@/api/agentDetail'
 import { agentExternalToolsApi, type ExternalToolCatalogItem } from '@/api/agentExternalTools'
+import { agentSkillsApi, type SkillCatalogItem } from '@/api/agentSkills'
 import { agentToolsApi, type PublishedOntology } from '@/api/agentTools'
 import { useOntologyToolSelection } from '@/pages/agents/shared/useOntologyToolSelection'
 import OntologyToolSelector from '@/pages/agents/shared/OntologyToolSelector'
-import ExternalToolCard, { type BoundExternalTool } from '@/pages/agents/detail/ExternalToolCard'
+import ExternalToolCard, { type BoundExternalTool, type BoundSkill } from '@/pages/agents/detail/ExternalToolCard'
 
 export default function AgentCreateWizard() {
   const { t } = useTranslation()
@@ -20,6 +21,7 @@ export default function AgentCreateWizard() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [pendingExternalTools, setPendingExternalTools] = useState<BoundExternalTool[]>([])
+  const [pendingSkills, setPendingSkills] = useState<BoundSkill[]>([])
   const [bindFailures, setBindFailures] = useState<string[]>([])
   const [createdAgentId, setCreatedAgentId] = useState<string | null>(null)
 
@@ -53,6 +55,16 @@ export default function AgentCreateWizard() {
     setPendingExternalTools(prev => prev.filter(p => p.alias !== alias))
   }, [])
 
+  const bindPendingSkill = useCallback((item: SkillCatalogItem, alias: string) => {
+    setPendingSkills(prev => [...prev, {
+      alias, skill_version_id: item.skill_version_id, package_name: item.package_name,
+    }])
+  }, [])
+
+  const unbindPendingSkill = useCallback((alias: string) => {
+    setPendingSkills(prev => prev.filter(p => p.alias !== alias))
+  }, [])
+
   const submit = useCallback(async (event: React.FormEvent) => {
     event.preventDefault()
     if (createdAgentId) return
@@ -80,6 +92,14 @@ export default function AgentCreateWizard() {
           failures.push(pick.alias)
         }
       }
+      for (const pick of pendingSkills) {
+        try {
+          await agentSkillsApi.bind(result.agent_id, result.version_id,
+            { skill_version_id: pick.skill_version_id, alias: pick.alias })
+        } catch {
+          failures.push(pick.alias)
+        }
+      }
       if (failures.length > 0) {
         setCreatedAgentId(result.agent_id)
         setBindFailures(failures)
@@ -92,7 +112,7 @@ export default function AgentCreateWizard() {
     } finally {
       setSaving(false)
     }
-  }, [name, description, modelId, models, systemPrompt, bindings, pendingExternalTools, navigate, t, createdAgentId])
+  }, [name, description, modelId, models, systemPrompt, bindings, pendingExternalTools, pendingSkills, navigate, t, createdAgentId])
 
   return (
     <div className="max-w-2xl">
@@ -133,7 +153,8 @@ export default function AgentCreateWizard() {
         <div>
           <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.external', '外部工具')}</h3>
           <ExternalToolCard bindings={pendingExternalTools} canEdit
-            onBind={bindPendingExternal} onUnbind={unbindPendingExternal} />
+            onBind={bindPendingExternal} onUnbind={unbindPendingExternal}
+            skillBindings={pendingSkills} onBindSkill={bindPendingSkill} onUnbindSkill={unbindPendingSkill} />
         </div>
         {error && <p className="text-sm text-red-500">{error}</p>}
         {bindFailures.length > 0 && createdAgentId && (

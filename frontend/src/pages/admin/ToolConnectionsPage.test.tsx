@@ -146,6 +146,44 @@ describe('ToolConnectionsPage', () => {
     await waitFor(() => expect(screen.queryByTestId('submit-create-version')).toBeNull())
   })
 
+  it('create-version form only shows fields relevant to the provider kind', async () => {
+    const connection = { id: 'c-2', provider_id: 'p-1', status: 'active', active_version_id: null }
+    server.use(
+      http.get('*/api/v2/tool-providers', () => HttpResponse.json({ data: { items: [PROVIDER] }, message: 'ok' })),
+      http.get('*/api/v2/tool-connections', () => HttpResponse.json({ data: { items: [connection] }, message: 'ok' })),
+      http.get('*/api/v2/tool-connections/c-2/versions', () => HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    )
+    renderPage()
+    await userEvent.click((await screen.findByTestId('provider-card-p-1')).querySelector('button')!)
+    await userEvent.click((await screen.findByTestId('connection-row-c-2')).querySelector('button')!)
+    await userEvent.click(screen.getByTestId('create-version-c-2'))
+    // PROVIDER is kind 'search': endpoint + API-key credential shown, OAuth/domain fields hidden
+    // (no i18next instance in this test file, so t() renders the raw key)
+    expect(screen.getByTestId('version-endpoint-input')).toBeTruthy()
+    expect(screen.getByPlaceholderText('toolConnections.api_key')).toBeTruthy()
+    expect(screen.queryByPlaceholderText('toolConnections.audience')).toBeNull()
+    expect(screen.queryByPlaceholderText('toolConnections.scopes')).toBeNull()
+    expect(screen.queryByPlaceholderText('toolConnections.allowlist_domains')).toBeNull()
+  })
+
+  it('create-version form hides endpoint/credential and shows only domains for playwright', async () => {
+    const pwProvider = { id: 'p-pw', name: 'Playwright', kind: 'playwright', status: 'active' }
+    const connection = { id: 'c-pw', provider_id: 'p-pw', status: 'active', active_version_id: null }
+    server.use(
+      http.get('*/api/v2/tool-providers', () => HttpResponse.json({ data: { items: [pwProvider] }, message: 'ok' })),
+      http.get('*/api/v2/tool-connections', () => HttpResponse.json({ data: { items: [connection] }, message: 'ok' })),
+      http.get('*/api/v2/tool-connections/c-pw/versions', () => HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    )
+    renderPage()
+    await userEvent.click((await screen.findByTestId('provider-card-p-pw')).querySelector('button')!)
+    await userEvent.click((await screen.findByTestId('connection-row-c-pw')).querySelector('button')!)
+    await userEvent.click(screen.getByTestId('create-version-c-pw'))
+    expect(screen.queryByTestId('version-endpoint-input')).toBeNull()
+    expect(screen.queryByPlaceholderText('toolConnections.credential_reference')).toBeNull()
+    expect(screen.queryByPlaceholderText('toolConnections.api_key')).toBeNull()
+    expect(screen.getByPlaceholderText('toolConnections.allowlist_domains')).toBeTruthy()
+  })
+
   it('issue-token form clears and only one is open when switching between versions', async () => {
     const mcpProvider = { id: 'p-mcp', name: 'MCP Provider', kind: 'external_mcp', status: 'active' }
     const connection = { id: 'c-3', provider_id: 'p-mcp', status: 'active', active_version_id: null }

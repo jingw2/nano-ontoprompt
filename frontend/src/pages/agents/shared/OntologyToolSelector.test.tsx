@@ -33,6 +33,22 @@ describe('OntologyToolSelector', () => {
     expect(onToggleCategory).toHaveBeenCalledWith('o-1', 'write', true)
   })
 
+  it('collapses tool items by category by default and expands on click', async () => {
+    const onToggleTool = vi.fn()
+    const binding: OntologyBinding = {
+      ontology_id: 'o-1', capabilities: [], allowlists: {}, selected_tools: [], enabled_categories: ['logic'],
+    }
+    render(<OntologyToolSelector ontologies={ONTOLOGIES} bindings={[binding]}
+      toolsByOntology={{ 'o-1': TOOLS }} canEdit
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={onToggleTool} />)
+    // category header with count is visible, but the item checkbox is not, until expanded
+    expect(screen.getByTestId('category-expand-o-1-logic')).toBeTruthy()
+    expect(screen.getByTestId('category-expand-o-1-logic').textContent).toContain('(1)')
+    expect(screen.queryByText('execute_read_logic')).toBeNull()
+    await userEvent.click(screen.getByTestId('category-expand-o-1-logic'))
+    expect(screen.getByText('execute_read_logic')).toBeTruthy()
+  })
+
   it('disables the picker and unbind button when canEdit is false', () => {
     const binding: OntologyBinding = {
       ontology_id: 'o-1', capabilities: [], allowlists: {}, selected_tools: [], enabled_categories: null,

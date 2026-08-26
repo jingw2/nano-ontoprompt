@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   TOOL_CATEGORIES, TOOL_CAPABILITY_GROUPS,
   type OntologyBinding, type PublishedOntology, type ToolCategory, type ToolDescriptor,
@@ -34,6 +36,10 @@ export default function OntologyToolSelector({
   // one Agent binds at most one Ontology: once bound, the picker is disabled —
   // unbind first to switch to a different published ontology
   const pickable = bindings.length > 0 ? [] : ontologies
+  // per-ontology, per-category expand/collapse; collapsed by default so an
+  // ontology with many Logic rules/Actions doesn't render a wall of checkboxes
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const toggleExpanded = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))
 
   return (
     <div>
@@ -88,24 +94,38 @@ export default function OntologyToolSelector({
                 ))}
               </div>
               <p className="text-xs text-gray-400 mb-2">{t('agent.tools.category_tools_note', '勾选的类别默认全部启用')}</p>
-              {tools.map(d => {
-                const dCat = categoryOf(d)
-                const catOn = cats.includes(dCat)
+              {TOOL_CATEGORIES.map(cat => {
+                const catTools = tools.filter(d => categoryOf(d) === cat)
+                if (catTools.length === 0) return null
+                const catOn = cats.includes(cat)
+                const key = `${binding.ontology_id}:${cat}`
+                const isOpen = !!expanded[key]
                 return (
-                  <label key={d.descriptor_id} className="flex items-start gap-2 py-1.5 text-sm">
-                    <input type="checkbox" disabled={!canEdit || !catOn}
-                      checked={catOn && binding.selected_tools.includes(d.descriptor_id)}
-                      onChange={e => onToggleTool(binding.ontology_id, d.descriptor_id, e.target.checked)}
-                      className="mt-1" />
-                    <span>
-                      <span className="font-medium">
-                        {t(TOOL_CAPABILITY_GROUPS[dCat]?.label ?? 'agent.tools.tool_other',
-                           TOOL_CAPABILITY_GROUPS[dCat]?.fallback ?? d.source_kind)}
-                        {d.source_kind !== 'builtin' && ` · ${d.source_id.slice(0, 8)}`}
-                      </span>
-                      <span className="text-xs text-gray-400 ml-2 font-mono">{d.capability}</span>
-                    </span>
-                  </label>
+                  <div key={cat} className="border-t first:border-t-0 py-1.5">
+                    <button type="button" onClick={() => toggleExpanded(key)}
+                      data-testid={`category-expand-${binding.ontology_id}-${cat}`}
+                      className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 w-full text-left">
+                      {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      {t(CATEGORY_LABELS[cat].label, CATEGORY_LABELS[cat].fallback)}
+                      <span className="text-gray-400">({catTools.length})</span>
+                    </button>
+                    {isOpen && catTools.map(d => (
+                      <label key={d.descriptor_id} className="flex items-start gap-2 py-1.5 pl-5 text-sm">
+                        <input type="checkbox" disabled={!canEdit || !catOn}
+                          checked={catOn && binding.selected_tools.includes(d.descriptor_id)}
+                          onChange={e => onToggleTool(binding.ontology_id, d.descriptor_id, e.target.checked)}
+                          className="mt-1" />
+                        <span>
+                          <span className="font-medium">
+                            {t(TOOL_CAPABILITY_GROUPS[cat]?.label ?? 'agent.tools.tool_other',
+                               TOOL_CAPABILITY_GROUPS[cat]?.fallback ?? d.source_kind)}
+                            {d.source_kind !== 'builtin' && ` · ${d.source_id.slice(0, 8)}`}
+                          </span>
+                          <span className="text-xs text-gray-400 ml-2 font-mono">{d.capability}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 )
               })}
               {tools.length === 0 && (

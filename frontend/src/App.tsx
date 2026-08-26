@@ -28,10 +28,9 @@ import StructuredDataPage from '@/pages/data-management/structured/StructuredDat
 import AgentListPage from '@/pages/agents/list/AgentListPage'
 import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
 import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
-import AgentReconciliationPage from '@/pages/admin/AgentReconciliationPage'
+import ApprovalsPage from '@/pages/admin/ApprovalsPage'
 import ToolConnectionsPage from '@/pages/admin/ToolConnectionsPage'
 import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
-import McpWriteRequestsPage from '@/pages/mcp/McpWriteRequestsPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -122,9 +121,11 @@ export default function App() {
           <Route path="/agents" element={<ProtectedRoute><AgentListPage /></ProtectedRoute>} />
           <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
           <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
-          <Route path="/admin/agent-reconciliations" element={<ProtectedRoute><AdminRoute><AgentReconciliationPage /></AdminRoute></ProtectedRoute>} />
+          <Route path="/admin/approvals" element={<ProtectedRoute><AdminRoute><ApprovalsPage /></AdminRoute></ProtectedRoute>} />
           <Route path="/admin/tool-connections" element={<ProtectedRoute><AdminRoute><ToolConnectionsPage /></AdminRoute></ProtectedRoute>} />
-          <Route path="/mcp/write-requests" element={<ProtectedRoute><McpWriteRequestsPage /></ProtectedRoute>} />
+          {/* Back-compat redirects: 和解操作 + MCP 待审批 merged into one admin-only Approvals menu */}
+          <Route path="/admin/agent-reconciliations" element={<Navigate to="/admin/approvals?tab=reconciliation" replace />} />
+          <Route path="/mcp/write-requests" element={<Navigate to="/admin/approvals?tab=mcp" replace />} />
         </Routes>
         </SessionRestore>
       </BrowserRouter>

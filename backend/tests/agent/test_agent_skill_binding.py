@@ -217,3 +217,130 @@ def test_unbind_missing_alias_rejected(session):
     from app.services.agent.configuration import AgentConfigError, unbind_skill
     with pytest.raises(AgentConfigError):
         unbind_skill(session, actor_id="u-1", agent_version_id="av-1", alias="nope")
+
+
+def test_list_skill_bindings_returns_joined_metadata(session):
+    from app.services.agent.configuration import bind_skill, list_skill_bindings
+    version_id = _approved_skill_version(session)
+    bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+               skill_version_id=version_id, alias="skill")
+    items = list_skill_bindings(session, agent_version_id="av-1")
+    assert len(items) == 1
+    assert items[0]["alias"] == "skill"
+    assert items[0]["skill_version_id"] == version_id
+    assert items[0]["package_name"] == "pkg"
+    assert items[0]["approval_status"] == "approved"
+
+
+def test_list_skill_bindings_empty_for_unbound_version(session):
+    from app.services.agent.configuration import list_skill_bindings
+    assert list_skill_bindings(session, agent_version_id="av-1") == []
+
+
+def test_skill_catalog_lists_only_the_latest_approved_version_per_package():
+    """agent_skill_catalog picks, per package, the highest-numbered APPROVED
+    version — a later still-pending version must not shadow an earlier
+    approved one, and an unapproved package must not appear at all."""
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "p7c_catalog_" + uuid.uuid4().hex
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
+    session = sessionmaker(bind=create_engine(_scoped_url(schema)))()
+    try:
+        session.execute(text(
+            "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+            "VALUES ('u-1','a','a@t.com','h','admin',true,:d,now(),now())"
+        ), {"d": DEFAULT_DOMAIN})
+        session.commit()
+        from app.services.agent.catalog import agent_skill_catalog
+        from app.services.skills.admin import approve_skill_version, create_package, create_skill_version
+        from app.services.skills import manifest_canonical_hash
+
+        def _make_version(package_id, name):
+            key = Ed25519PrivateKey.generate()
+            manifest = {"name": name, "description": "d", "instructions": "i"}
+            signature = key.sign(bytes.fromhex(manifest_canonical_hash(manifest)))
+            return create_skill_version(session, actor_id="u-1", package_id=package_id, manifest=manifest,
+                                        signatures=[{"public_key_hex": key.public_key().public_bytes_raw().hex(),
+                                                     "signature_hex": signature.hex()}])
+
+        approved_pkg = create_package(session, actor_id="u-1", name="approved-pkg")
+        v1 = _make_version(approved_pkg["id"], "v1")
+        approve_skill_version(session, actor_id="u-1", version_id=v1["id"])
+        v2_pending = _make_version(approved_pkg["id"], "v2")  # newer, still pending
+
+        unapproved_pkg = create_package(session, actor_id="u-1", name="unapproved-pkg")
+        _make_version(unapproved_pkg["id"], "v1")
+
+        items = agent_skill_catalog(session)
+        by_package = {i["package_name"]: i for i in items}
+        assert "unapproved-pkg" not in by_package
+        assert by_package["approved-pkg"]["skill_version_id"] == v1["id"]
+        assert by_package["approved-pkg"]["skill_version_id"] != v2_pending["id"]
+    finally:
+        session.close()
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        engine.dispose()
+
+
+def test_list_skills_route_requires_view_config_grant(session):
+    """GET .../skills mirrors the existing external-tools list route: any
+    grant-holder (not just editors) can view current bindings."""
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+    from app.services.agent.configuration import bind_skill
+
+    version_id = _approved_skill_version(session)
+    bind_skill(session, actor_id="u-1", agent_version_id="av-1",
+               skill_version_id=version_id, alias="skill")
+    session.execute(text(
+        "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, status, created_by) "
+        "VALUES ('aag-1', 'ag-1', 'u-1', '[\"view_config\"]'::json, 'active', 'u-1')"
+    ))
+    session.commit()
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.get("/api/v1/agents/ag-1/versions/av-1/skills", headers=headers)
+            assert r.status_code == 200, r.text
+            items = r.json()["data"]["items"]
+            assert len(items) == 1
+            assert items[0]["alias"] == "skill"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_skill_catalog_route_returns_approved_versions(session):
+    from fastapi.testclient import TestClient
+
+    from app.deps import get_db
+    from app.main import app
+    from app.services.auth_service import create_access_token
+
+    version_id = _approved_skill_version(session)
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'admin'})}"}
+            r = client.get("/api/v1/agents/catalog/skills", headers=headers)
+            assert r.status_code == 200, r.text
+            items = r.json()["data"]["items"]
+            assert any(i["skill_version_id"] == version_id for i in items)
+    finally:
+        app.dependency_overrides.clear()

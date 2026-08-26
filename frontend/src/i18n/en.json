@@ -11,7 +11,8 @@
     "settings": "Settings",
     "logout": "Logout",
     "agents": "Agent",
-    "reconciliation": "Reconciliation"
+    "reconciliation": "Reconciliation",
+    "approvals": "Approvals"
   },
   "data": {
     "title": "Data Management",
@@ -499,6 +500,7 @@
       "picker_note": "Each Agent binds at most one published ontology; all tool categories default to enabled after binding — unbind first to switch",
       "unbind": "Unbind",
       "no_external_connections": "No active connections available to bind — configure and activate one in Tool Connections first",
+      "no_skills": "No approved Skills available to bind",
       "bind_failed": "Bind failed (the alias may already be taken, or the selected connection is no longer valid)",
       "unbind_failed": "Unbind failed"
     }
@@ -538,6 +540,7 @@
     "audience": "Audience",
     "scopes": "Scopes (one per line)",
     "credential_reference": "Credential reference",
+    "api_key": "API Key",
     "allowlist_domains": "Allowed domains (one per line)",
     "approval_pending": "Pending approval",
     "approval_approved": "Approved",

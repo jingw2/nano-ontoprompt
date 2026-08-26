@@ -315,11 +315,26 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
 
           {showCreateVersion && (
             <form onSubmit={handleSubmit(d => createVersionMut.mutate(d))} className="space-y-2 mb-3 p-2 bg-gray-50 rounded">
-              <input {...register('endpoint')} placeholder={t('toolConnections.endpoint')} className="w-full border rounded px-2 py-1" data-testid="version-endpoint-input" />
-              <input {...register('audience')} placeholder={t('toolConnections.audience')} className="w-full border rounded px-2 py-1" />
-              <textarea {...register('scopes_str')} placeholder={t('toolConnections.scopes')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
-              <input {...register('credential_reference')} type="password" placeholder={t('toolConnections.credential_reference')} className="w-full border rounded px-2 py-1" />
-              <textarea {...register('domains_str')} placeholder={t('toolConnections.allowlist_domains')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
+              {/* Only external_mcp actually uses every field (OAuth audience/scopes plus a
+                  domain allowlist); search and playwright each use a narrow subset — showing
+                  the full generic set for those kinds is what made this form confusing. */}
+              {providerKind !== 'playwright' && (
+                <input {...register('endpoint')} placeholder={t('toolConnections.endpoint')} className="w-full border rounded px-2 py-1" data-testid="version-endpoint-input" />
+              )}
+              {providerKind === 'external_mcp' && (
+                <>
+                  <input {...register('audience')} placeholder={t('toolConnections.audience')} className="w-full border rounded px-2 py-1" />
+                  <textarea {...register('scopes_str')} placeholder={t('toolConnections.scopes')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
+                </>
+              )}
+              {providerKind !== 'playwright' && (
+                <input {...register('credential_reference')} type="password"
+                  placeholder={providerKind === 'search' ? t('toolConnections.api_key') : t('toolConnections.credential_reference')}
+                  className="w-full border rounded px-2 py-1" />
+              )}
+              {providerKind !== 'search' && (
+                <textarea {...register('domains_str')} placeholder={t('toolConnections.allowlist_domains')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
+              )}
               <button type="submit" disabled={createVersionMut.isPending} className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid="submit-create-version">
                 {t('toolConnections.save')}
               </button>

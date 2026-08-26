@@ -471,3 +471,17 @@ def list_external_tool_bindings(db: Session, *, agent_version_id: str) -> list[d
         "WHERE aetb.agent_version_id = :id ORDER BY aetb.alias"
     ), {"id": agent_version_id}).mappings().all()
     return [dict(r) for r in rows]
+
+
+def list_skill_bindings(db: Session, *, agent_version_id: str) -> list[dict]:
+    """Current Signed Skill bindings for one Agent version, joined with the
+    package/version metadata the UI needs to render them."""
+    rows = db.execute(text(
+        "SELECT asb.id, asb.alias, asb.skill_version_id, sv.package_id, "
+        "sv.version_no, sp.name AS package_name, sv.approval_status "
+        "FROM agent_skill_bindings asb "
+        "JOIN skill_versions sv ON sv.id = asb.skill_version_id "
+        "JOIN skill_packages sp ON sp.id = sv.package_id "
+        "WHERE asb.agent_version_id = :id ORDER BY asb.alias"
+    ), {"id": agent_version_id}).mappings().all()
+    return [dict(r) for r in rows]

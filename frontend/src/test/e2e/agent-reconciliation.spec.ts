@@ -11,8 +11,9 @@ import { loginAsAdmin } from './helpers/ui'
 test('FE-11 reconciliation: admin page renders the case list shell', async ({ page }) => {
   test.skip(!(await hasApi('/api/v1/admin/agent-reconciliations')), 'reconciliation API not registered yet')
   await loginAsAdmin(page)
+  // 和解操作 merged into the admin-only Approvals page; the old URL redirects there
   await page.goto('/admin/agent-reconciliations')
-  await expect(page).toHaveURL(/\/admin\/agent-reconciliations$/)
+  await expect(page).toHaveURL(/\/admin\/approvals\?tab=reconciliation$/)
   // list shell renders (loading, empty, or cases)
   await expect(
     page.locator('[data-testid="reconciliation-loading"], [data-testid="reconciliation-empty"], [data-testid="agent-reconciliation-page"]').first(),

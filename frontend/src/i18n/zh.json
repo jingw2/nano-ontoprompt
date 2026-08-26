@@ -11,7 +11,8 @@
     "settings": "设置",
     "logout": "退出",
     "agents": "智能体",
-    "reconciliation": "和解操作"
+    "reconciliation": "和解操作",
+    "approvals": "审批"
   },
   "data": {
     "title": "数据管理",
@@ -499,6 +500,7 @@
       "picker_note": "每个 Agent 仅能绑定一个已发布本体；绑定后默认启用全部工具类别，如需更换请先解绑",
       "unbind": "解绑",
       "no_external_connections": "暂无可绑定的已激活连接，请先在工具连接管理中配置并激活",
+      "no_skills": "暂无可绑定的已审批 Skill",
       "bind_failed": "绑定失败（别名可能已被占用，或所选连接已失效）",
       "unbind_failed": "解绑失败"
     }
@@ -538,6 +540,7 @@
     "audience": "Audience",
     "scopes": "作用域(每行一个)",
     "credential_reference": "凭证引用",
+    "api_key": "API Key",
     "allowlist_domains": "允许的域名(每行一个)",
     "approval_pending": "待审批",
     "approval_approved": "已审批",
