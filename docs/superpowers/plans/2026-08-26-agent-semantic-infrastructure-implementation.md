@@ -16,7 +16,8 @@
 - Python remains >=3.11; backend CI keeps Python 3.11 and 3.12; frontend CI uses Node 22.14.0 and npm 11.2.0.
 - PostgreSQL 16 remains the primary application database. Phase 3 writer coverage includes PostgreSQL and MySQL 8 with synthetic databases only.
 - Every Runtime entry point calls the same RuntimeService; adapters contain transport mapping only and never implement alternate authorization, policy, hashing, or writes.
-- Enterprise refresh supports only the explicit `RefreshPolicy` values `batch`, `micro_batch`, and `event_driven`; all ingestion is at-least-once, cursor-driven, idempotent, and produces immutable DatasetVersion/PipelineRun lineage before a new SemanticSnapshot.
+- Enterprise refresh supports only the explicit `RefreshPolicy` values `batch`, `micro_batch`, and `event_driven`; all ingestion is at-least-once, cursor/checkpoint-driven, idempotent, and produces immutable DatasetVersion/PipelineRun lineage before a new SemanticSnapshot. A sequence CDC/outbox source must provide both a partition and a monotonically increasing sequence; watermark/opaque sources use their configured cursor and dedupe contract instead.
+- `RefreshSourceState` is the authoritative singleton for each `(source_id, resource)`, and `RefreshPartitionState` is the authoritative singleton for each `(source_id, resource, partition)` when sequence ordering is required. Claims and checkpoint changes are lease/fencing guarded; a stale worker can never advance a cursor or checkpoint.
 - Event-driven refresh is limited to managed webhook, managed outbox, and one external CDC adapter contract with a local test double. This plan is not an arbitrary stream-processing platform and does not implement or accept arbitrary Kafka/broker sources.
 - Production CDC delivery remains conditional on an enterprise-provided CDC producer/broker, network route, credentials, retention, and operational ownership; the repository implements the adapter contract, signature/schema checks, inbox/lease/DLQ/replay behavior, and local tests only.
 - A source cursor advances only after the input DatasetVersion is durable and the associated PipelineRun outcome is recorded; overlap re-reads and retries must not mutate an existing DatasetVersion or SemanticSnapshot.
@@ -30,7 +31,7 @@
 - Rollback is a new governed action plan. Unknown outcomes create reconciliation cases and are never blindly replayed.
 - Tests use deterministic no-PII fixtures. Existing untracked files under ref/ and test_data/ are read-only inputs and must not be added, rewritten, or deleted. The runtime corpus may use only public test sentinels such as runtime/runtime, vault:runtime-db, and example.invalid; these are not real credentials and must never be used outside test infrastructure.
 - Runtime fixture manifests never contain raw access tokens, refresh tokens, signing keys, private keys, cloud credentials, production URIs, or real email/phone values. Test-only database passwords remain only in the isolated database Compose file and are scanned as the literal public sentinel runtime.
-- The fixture registry is authoritative: every case has layers and at least one syntactically valid test-target descriptor; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, refresh cases name their refresh mode and source contract, and E2E cases name a Playwright target. Full target collect/list verification is a Task 28 gate after all referenced tests are implemented.
+- The fixture registry is authoritative: every case has layers and at least one syntactically valid test-target descriptor; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, refresh cases name their refresh mode and source contract (including `sequence_partition` where applicable), and E2E cases name a Playwright target. Full target collect/list verification is a Task 28 gate after all referenced tests are implemented.
 - Every task follows TDD: add a focused failing test, run the named command and record the failure, implement the smallest change, run the named passing command, then commit only the listed files.
 
 ## File and Interface Map
@@ -38,7 +39,7 @@
 | Area | Files | Responsibility |
 | --- | --- | --- |
 | Stabilization | docker-compose.v2.yml, docker-compose.agent.yml, .github/workflows/agent-mvp.yml, backend/scripts/verify_build_manifest.py, backend/pyproject.toml, README files | Current migration source of truth, service ordering, CI matrix, runtime documentation |
-| Enterprise refresh | backend/app/models/v2/refresh.py, backend/app/schemas/refresh.py, backend/app/services/v2/incremental/*, backend/app/services/v2/scheduler/*, backend/app/tasks/v2/refresh_tasks.py, backend/app/routers/v2/refresh.py, backend/tests/v2/incremental/* | Durable source refresh contract, schedules, cursors, polling, bounded event ingestion, retries/DLQ/replay, freshness, and refresh operations |
+| Enterprise refresh | backend/app/models/v2/refresh.py, backend/app/schemas/refresh.py, backend/app/services/v2/incremental/*, backend/app/services/v2/scheduler/*, backend/app/tasks/v2/refresh_tasks.py, backend/app/routers/v2/refresh.py, backend/tests/v2/incremental/* | Durable source/partition refresh state, schedules, cursors/checkpoints, polling, bounded event ingestion, retries/DLQ/replay, freshness, and refresh operations |
 | Semantic foundation | backend/app/models/semantic_snapshot.py, backend/app/services/runtime/snapshots.py, backend/app/services/runtime/lineage.py, backend/app/schemas/runtime_snapshot.py | Immutable snapshot, complete input lineage, quality/evidence summaries, materialization hash |
 | Runtime identity and policy | backend/app/models/runtime_identity.py, backend/app/services/runtime/credentials.py, backend/app/deps/runtime.py, backend/app/services/runtime/policy.py | Registered service identity, token-exchange delegation, verified context, intersection policy |
 | Runtime contracts | backend/app/schemas/runtime.py, backend/app/models/runtime_plan.py, backend/app/services/runtime/service.py, backend/app/services/runtime/canonical.py | Investigation, action-plan, stable denial, canonical semantic results and hashes |
@@ -70,7 +71,7 @@ The current assets do not cover the new contracts. Add a separate runtime corpus
 - Identity cases: valid delegation, missing credential, malformed signature, wrong audience, missing scope, expired token, revoked token, inactive Agent, inactive user, cross-domain token, Agent-only capability, and user-only entitlement.
 - Runtime cases: evidence citations, rule outcomes, ALLOW with data, ALLOW with no matches, structured DENY, policy denial, immutable read-only plan, writable plan binding, expired plan, and stable denial codes.
 - Execution cases: low-risk reversible automatic update, high-risk exact-hash HITL update, ambiguous/rejected plan, binding draft/revoked state, binding version drift, connection-target drift, parameter/selector drift, before-image/version conflict, row-count zero/two, idempotent retry, timeout/unknown outcome, reconciliation, and rollback-plan creation.
-- Refresh cases: normal non-empty batch, empty batch, late event, equal-watermark/different-primary-key, duplicate event, out-of-order event, failed retry, cursor non-advance, DLQ/replay, expired webhook, replay attack, schema drift, T+1 timezone/business-calendar run, bounded backfill, and CDC ordering.
+- Refresh cases: normal non-empty batch, empty batch, late event, equal-watermark/different-primary-key, duplicate event, out-of-order event, failed retry, cursor non-advance, DLQ/replay, expired webhook, replay attack, schema drift, T+1 timezone/business-calendar run, bounded backfill, two independent sequence partitions, N+1 held until N, in-order release, gap timeout to DLQ, replay without checkpoint regression, and CDC ordering.
 - Database cases: identical logical rows and version columns in PostgreSQL and MySQL, plus a second fixture whose target row changes between plan and execution.
 - Transport cases: equivalent REST, SDK, MCP, and reference-Agent requests with different envelopes, request IDs, and presentation metadata.
 
@@ -100,14 +101,15 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - sdk: a full SDK pytest node ID such as sdk/tests/test_runtime_client.py::test_sdk_injects_delegation_and_decodes_investigation; or
 - playwright: a spec path and exact test title such as frontend/src/test/e2e/runtime-governance.spec.ts::operator approves the exact plan hash and sees the receipt.
 
-registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 28 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; refresh cases additionally require `refresh_mode` in `{batch, micro_batch, event_driven}`, a `source_contract`, and an expected cursor/terminal outcome. It does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–27 have created those tests.
+registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 28 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; refresh cases additionally require `refresh_mode` in `{batch, micro_batch, event_driven}`, a `source_contract` in `{watermark_primary_key, opaque_source_cursor, sequence_partition}`, and an expected cursor/terminal outcome. A `sequence_partition` case also declares `sequence_outcome` and `partition`; it does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–27 have created those tests.
 
 ### Coverage matrix
 
 | Test purpose | Fixture source | Required assertions |
 | --- | --- | --- |
 | Normal pipeline and ontology | Existing domain corpus plus snapshots.json | Completed lineage, published release, quality/evidence summaries, reproducible materialization |
-| Source refresh | refresh_cases.json plus synthetic source rows/events and both SQL seeds | Batch/micro-batch/event-driven modes, cursor monotonicity, at-least-once dedupe, schedule/SLA, retry/DLQ/replay, lag and provenance |
+| Source refresh | refresh_cases.json plus synthetic source rows/events and both SQL seeds | Batch/micro-batch/event-driven modes, source cursor and partition checkpoint monotonicity, at-least-once dedupe, schedule/SLA, retry/DLQ/replay, lag and provenance |
+| Sequence CDC/outbox ordering | refresh_cases.json (`two-partitions`, `n-plus-one-held`, `n-arrives-releases`, `gap-timeout`, `replay-no-regress`) plus partitioned event seeds | Unique partition state, inbox-first persistence, expected-next lease consumption, independent partition progress, ordered gap release, timeout DLQ, and replay/fencing non-regression |
 | Edge and boundary | Existing edge_cases/* plus reordered, empty, expired, and multi-input runtime cases | Empty result is allowed, hash is order-independent, limits and expiry are deterministic |
 | Negative and security | identities.json, runtime_cases.json, execution_cases.json | Stable denial codes, no protected data leakage, no caller identity spoofing, no secret/SQL acceptance |
 | Unit and function | JSON cases loaded by backend/tests/runtime/test_*.py and backend/tests/v2/incremental/test_*.py | Pure cursor ordering, envelope normalization, schedule calculation, dedupe, freshness, canonicalization, policy, target freezing, risk classification, and error mapping |
@@ -146,7 +148,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Produces PostgreSQL and MySQL schemas with the same managed_targets logical table, primary key target_id, writable field status, optimistic-lock field row_version, and synthetic refresh_source_rows/refresh_event_log tables containing stable source/resource/cursor/sequence fixtures.
 - Produces test_data/runtime/db/docker-compose.yml with PostgreSQL published on host port 55432 and MySQL published on host port 53306; both use database runtime, user runtime, password runtime, healthchecks, and only synthetic seed rows.
 - Produces a registry entry for every case. Each database case has dialects exactly ["mysql", "postgresql"], each parity case has transports exactly ["mcp", "reference-agent", "rest", "sdk"], each refresh case has at least one exact polling/event/schedule pytest target, and each E2E case has at least one Playwright target.
-- Produces refresh cases with `refresh_mode` in `batch`, `micro_batch`, or `event_driven`, a `source_contract` in `watermark_primary_key` or `opaque_source_cursor`, and an expected `cursor_outcome` in `advanced`, `unchanged`, or `dead_lettered`.
+- Produces refresh cases with `refresh_mode` in `batch`, `micro_batch`, or `event_driven`, a `source_contract` in `watermark_primary_key`, `opaque_source_cursor`, or `sequence_partition`, and an expected `cursor_outcome` in `advanced`, `unchanged`, or `dead_lettered`. `sequence_partition` cases additionally include a partition and `sequence_outcome` in `accepted`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, or `replayed`.
 - Produces test_no_pii_or_real_secret() in test_fixture_manifest.py. Its deterministic scan rejects `-----BEGIN .*PRIVATE KEY-----`, bearer/JWT strings, non-sentinel access_token/refresh_token values, `AKIA[0-9A-Z]{16}` or other cloud-account markers, `postgresql://`/`mysql://` production hosts, cloud-provider URIs, non-`.invalid` email domains, and phone patterns such as `[+]?[0-9][0-9 ()-]{8,}`; runtime/runtime, vault:runtime-db, and example.invalid are explicitly test-only sentinels.
 
 - [ ] **Step 1: Write the failing manifest test.**
@@ -174,8 +176,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
                 assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
             if "refresh" in case["layers"]:
                 assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
-                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor"}
+                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
                 assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
+                if case["source_contract"] == "sequence_partition":
+                    assert case["partition"]
+                    assert case["sequence_outcome"] in {"accepted", "duplicate", "lower", "held_gap", "gap_timeout", "processed", "dead_lettered", "replayed"}
             if "playwright" in case["layers"]:
                 assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
@@ -187,7 +192,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the generator and fixtures.**
 
-    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, refresh, and Playwright case, and no real credential material. `refresh_cases.json` must include stable cases named `normal`, `empty`, `late`, `equal-watermark`, `duplicate`, `out-of-order`, `failed-retry`, `cursor-nonadvance`, `dlq-replay`, `expired-webhook`, `replay-attack`, `schema-drift`, `backfill`, `t1-timezone`, and `cdc-ordering`; `playwright_seed.json` must include schedule/cursor/lag and dead-letter/replay states. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
+    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, refresh, and Playwright case, and no real credential material. `refresh_cases.json` must include stable cases named `normal`, `empty`, `late`, `equal-watermark`, `duplicate`, `out-of-order`, `failed-retry`, `cursor-nonadvance`, `dlq-replay`, `expired-webhook`, `replay-attack`, `schema-drift`, `backfill`, `t1-timezone`, `two-partitions`, `n-plus-one-held`, `n-arrives-releases`, `gap-timeout`, `replay-no-regress`, and `cdc-ordering`; `playwright_seed.json` must include schedule/cursor/per-partition checkpoint/gap/lag and dead-letter/replay states. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
 
     Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, refresh cases with their mode/source-contract/cursor-outcome metadata, and E2E cases with an exact Playwright spec/title. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
 
@@ -453,7 +458,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 ### Task 6: Define durable source refresh contracts and persistence
 
-- [ ] **Deliverable:** A single typed refresh contract persists source policy, cursor, run lease, idempotency, deduplication, durable input lineage, retry state, and dead-letter state for every supported refresh mode.
+- [ ] **Deliverable:** A single typed refresh contract persists source policy, authoritative source/partition cursor state, run leases with fencing, idempotency, deduplication, durable input lineage, retry state, and dead-letter state for every supported refresh mode.
 
 **Files:**
 
@@ -468,20 +473,27 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Create: backend/app/services/v2/incremental/contract.py
 - Create: backend/tests/v2/incremental/test_refresh_contract.py
 
+Migration ownership: `0022_refresh_contract.py` is the single refresh-state migration; it owns `refresh_source_states`, `refresh_partition_states`, refresh runs/inbox/outbox/DLQ, and their unique keys, lease/fencing indexes, and DatasetVersion/PipelineRun lineage references. Later migrations depend on this head and must not recreate or shadow either authoritative state table.
+
 **Interfaces:**
 
-- `RefreshPolicy` is an enum with exactly `batch`, `micro_batch`, and `event_driven`; a connection/resource may select one mode and one cursor contract: `watermark_primary_key` or `opaque_source_cursor`.
-- `SourceCursor` is an immutable value with `source_id`, `resource`, `contract`, `watermark`, `primary_key`, `opaque_value`, and `observed_at`. A watermark cursor compares `(watermark, primary_key)` lexicographically; an opaque cursor compares only the source-provided opaque value.
+- `RefreshPolicy` is an enum with exactly `batch`, `micro_batch`, and `event_driven`; a connection/resource may select one mode and one cursor contract: `watermark_primary_key`, `opaque_source_cursor`, or `sequence_partition`. `sequence_partition` is reserved for the bounded event-driven outbox/CDC adapters; batch and polling use watermark/opaque cursors.
+- `SourceCursor` is an immutable value with `source_id`, `resource`, `contract`, `watermark`, `primary_key`, `opaque_value`, optional `partition`/`sequence`, and `observed_at`. A watermark cursor compares `(watermark, primary_key)` lexicographically; an opaque cursor compares only the source-provided opaque value; a sequence cursor is valid only with both partition and a monotonically increasing sequence and is checkpointed by `RefreshPartitionState`.
+- `RefreshSourceState` is the authoritative mutable singleton for exactly one `(source_id, resource)`. It stores the current cursor, `cursor_contract`, `config_version`, `lease_owner`, `lease_expires_at`, monotonically increasing `fencing_token`, `last_successful_run_id`, and update timestamps. For `sequence_partition`, this source-level cursor is aggregate/provenance state only; the per-partition checkpoint is the ordering authority and cannot be replaced by the aggregate cursor. The database uniqueness constraint on `(source_id, resource)` prevents competing authoritative rows.
+- `RefreshPartitionState` is the authoritative mutable singleton for exactly one `(source_id, resource, partition)` under the `sequence_partition` contract. It stores `expected_next_sequence`, the last contiguous checkpoint, lease owner/expiry, a partition fencing token, gap start/timeout state, last successful run, and timestamps. Non-sequence sources never create or advance partition checkpoints; sequence sources must provide a partition and monotonic sequence.
 - `ChangeEnvelope` is an immutable value with `event_id`, `source_id`, `resource`, `operation` (`upsert` or `delete`), normalized `primary_key`, `payload`, `watermark`, `source_cursor`, `schema_hash`, optional `partition`/`sequence`, `occurred_at`, and `received_at`.
-- `RefreshRun` stores policy, trigger, status (`queued|running|succeeded|failed|dead_lettered`), cursor before/after, input and output DatasetVersion IDs, PipelineRun ID, source provenance, quality summary, lag, duplicate/late counts, retry count, idempotency key, lease owner/expiry, and terminal timestamps. `RefreshInboxEvent`, `RefreshOutboxEvent`, and `RefreshDeadLetter` store durable event identity/hash, processing state, delivery attempts, and replay status.
+- `RefreshRun` stores policy, trigger, status (`queued|running|succeeded|failed|dead_lettered`), cursor before/after, input and output DatasetVersion IDs, PipelineRun ID, source provenance, quality summary, lag, duplicate/late counts, retry count, idempotency key, lease owner/expiry, the issued source/partition fencing token, and terminal timestamps. `RefreshInboxEvent`, `RefreshOutboxEvent`, and `RefreshDeadLetter` store durable event identity/hash, source/resource/partition/sequence when present, processing state, delivery attempts, and replay status; inbox processing states include `received`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, and `replayed`.
 - `PipelineRunInput` is an authoritative association with `pipeline_run_id`, `dataset_version_id`, source cursor/provenance, and input ordinal; it supports multi-source runs while the existing singular `PipelineRun.dataset_version_id` remains a backwards-compatible primary/output pointer and is never the complete lineage set.
 - `RefreshSchedule` stores a source or pipeline target, cron expression, IANA timezone, business-calendar identifier and excluded dates, SLA seconds, retry policy, backfill window, enabled state, next due time, last dispatched run, and a uniqueness key for the target.
 - `normalize_change_envelope(raw: Mapping[str, object], *, source_id: str, resource: str, received_at: datetime) -> ChangeEnvelope` rejects missing event identity, source/resource mismatch, invalid cursor shape, or schema hash drift.
 - `cursor_order(left: SourceCursor, right: SourceCursor) -> int` returns `-1`, `0`, or `1`; `dedupe_key(envelope: ChangeEnvelope) -> str` returns a stable SHA-256 key over source, resource, event identity, cursor, primary key, operation, and canonical payload.
-- `claim_refresh_run(db: Session, *, source_id: str, resource: str, policy: RefreshPolicy, idempotency_key: str, lease_owner: str, now: datetime, lease_seconds: int) -> RefreshRun` atomically reuses an existing idempotent run, rejects an active lease, or creates a queued run with the current cursor.
-- `record_refresh_outcome(db: Session, *, run_id: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str, next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object], now: datetime) -> RefreshRun` records every durable dataset/pipeline input association and advances the cursor in one transaction; failure leaves the cursor unchanged.
+- `claim_refresh_run(db: Session, *, source_id: str, resource: str, policy: RefreshPolicy, idempotency_key: str, lease_owner: str, now: datetime, lease_seconds: int) -> RefreshRun` locks the authoritative `RefreshSourceState` with `SELECT ... FOR UPDATE` (or the dialect-equivalent serializable lock), treats `lease_expires_at > now` as active, atomically reuses an active idempotent run for the same owner or rejects another active lease, and for a new claim increments and returns the state fencing token on the run. A claim may not be granted from a request-body cursor or from a non-authoritative state row.
+- `claim_partition_consumer(db: Session, *, source_id: str, resource: str, partition: str, lease_owner: str, now: datetime, lease_seconds: int) -> RefreshPartitionState` locks the unique partition state, treats `lease_expires_at > now` as active, rejects an active competing lease, increments its partition fencing token for a new claim, and returns the expected-next sequence plus token. It is valid only for `sequence_partition` sources.
+- `record_refresh_outcome(db: Session, *, run_id: str, lease_owner: str, fencing_token: int, input_dataset_version_ids: Sequence[str], pipeline_run_id: str, next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object], now: datetime, partition: str | None = None, partition_fencing_token: int | None = None, completed_sequences: Sequence[int] | None = None) -> RefreshRun` starts one transaction, locks `RefreshSourceState`, validates `lease_expires_at > now` and the exact owner/fencing token, writes the DatasetVersion/PipelineRun and `PipelineRunInput` associations, then CAS-updates the state cursor and `last_successful_run_id` with an owner/token/`run.cursor_before` predicate. A sequence run must also provide the partition, exact active partition fencing token, and a contiguous `completed_sequences` list beginning at `expected_next_sequence`; the transaction locks that `RefreshPartitionState` and advances its checkpoint only for that expected-next contiguous drain. A token mismatch, expired lease, failed CAS, or sequence gap raises a typed fencing/order error and rolls back every association; it never advances either cursor or checkpoint.
 
 - [ ] **Step 1: Write failing contract, uniqueness, lease, and cursor tests.**
+
+    `concurrent_refresh_db` must expose two independent database sessions/workers and synchronize their claim/finish calls with a barrier; the two fencing tests below are concurrency tests, not single-session mocks. Use the same transaction isolation and row-lock path as production for PostgreSQL and the supported MySQL integration fixture. The first test must race the two claim calls and assert exactly one success; the second must retain worker A's old token while worker B claims after expiry and commits a newer cursor before worker A finishes.
 
     def test_watermark_cursor_orders_equal_timestamps_by_primary_key():
         older = SourceCursor(source_id="source-001", resource="orders", contract="watermark_primary_key", watermark="2026-08-26T01:00:00Z", primary_key="100", opaque_value=None, observed_at=FIXED_NOW)
@@ -494,11 +506,32 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
         assert first.id == second.id
         assert count_fixture_inbox_events(db, "evt-001") == 1
 
-    def test_active_lease_and_idempotency_are_fail_closed(db):
-        run = claim_fixture_run(db, idempotency_key="refresh-001", lease_owner="worker-a")
-        assert claim_fixture_run(db, idempotency_key="refresh-001", lease_owner="worker-a").id == run.id
+    def test_second_worker_claim_is_rejected_while_first_lease_is_active(concurrent_refresh_db):
+        first = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-001", lease_owner="worker-a")
+        assert first.fencing_token == read_source_state(concurrent_refresh_db).fencing_token
+        same = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-001", lease_owner="worker-a")
+        assert same.id == first.id
+        assert same.fencing_token == first.fencing_token
         with pytest.raises(RefreshLeaseError):
-            claim_fixture_run(db, idempotency_key="refresh-002", lease_owner="worker-b")
+            claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-002", lease_owner="worker-b")
+
+    def test_expired_worker_late_finish_cannot_overwrite_newer_cursor(concurrent_refresh_db):
+        old = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-old", lease_owner="worker-a", now=FIXED_NOW, lease_seconds=60)
+        new_now = FIXED_NOW + timedelta(minutes=10)
+        new = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-new", lease_owner="worker-b", now=new_now)
+        record_refresh_outcome(concurrent_refresh_db, run_id=new.id, lease_owner="worker-b", fencing_token=new.fencing_token, input_dataset_version_ids=["dataset-version-new"], pipeline_run_id="pipeline-run-new", next_cursor=cursor_fixture("2026-08-26T02:00:00Z", "200"), quality_summary={}, provenance={}, now=new_now)
+        with pytest.raises(RefreshFencingError):
+            record_refresh_outcome(concurrent_refresh_db, run_id=old.id, lease_owner="worker-a", fencing_token=old.fencing_token, input_dataset_version_ids=["dataset-version-old"], pipeline_run_id="pipeline-run-old", next_cursor=cursor_fixture("2026-08-26T01:00:00Z", "199"), quality_summary={}, provenance={}, now=new_now)
+        assert read_fixture_cursor(concurrent_refresh_db).primary_key == "200"
+        assert list_pipeline_inputs(concurrent_refresh_db, "pipeline-run-old") == []
+
+    def test_source_and_partition_state_are_unique(concurrent_refresh_db):
+        persist_fixture_source_state(concurrent_refresh_db, source_id="source-001", resource="orders")
+        with pytest.raises(IntegrityError):
+            persist_fixture_source_state(concurrent_refresh_db, source_id="source-001", resource="orders")
+        persist_fixture_partition_state(concurrent_refresh_db, source_id="source-cdc", resource="orders", partition="p-0")
+        with pytest.raises(IntegrityError):
+            persist_fixture_partition_state(concurrent_refresh_db, source_id="source-cdc", resource="orders", partition="p-0")
 
     def test_pipeline_run_records_all_input_versions(db):
         run = persist_fixture_pipeline_run(db, input_dataset_version_ids=["dataset-version-001", "dataset-version-002"])
@@ -520,7 +553,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the minimum durable contract.**
 
-    Add the typed Pydantic/domain values and SQLAlchemy tables, register all models, and create migration `0022_refresh_contract.py` with `down_revision` set to the current Alembic head resolved by Task 2 (currently `0021_mapping_entity_class_cn` in this checkout). Add uniqueness on `(source_id, resource, event_id)` and idempotency keys, a lease-expiry index, append-only event/run state transitions, and JSON columns for opaque cursors/provenance/quality summaries. Store cursor before/after and input DatasetVersion/PipelineRun references explicitly; never treat a request-body cursor or event ID as trusted identity without source validation.
+    Add the typed Pydantic/domain values and SQLAlchemy tables, register all models, and create migration `0022_refresh_contract.py` with `down_revision` set to the current Alembic head resolved by Task 2 (currently `0021_mapping_entity_class_cn` in this checkout). This migration is the single Phase 2 refresh-state migration and must create `refresh_source_states` with unique `(source_id, resource)` and `refresh_partition_states` with unique `(source_id, resource, partition)`, including cursor/contract/config-version fields, lease owner/expiry, fencing tokens, expected-next/checkpoint sequence fields, gap status, and last-successful-run references. Add uniqueness on `(source_id, resource, event_id)` and idempotency keys, lease/fencing and expiry indexes, append-only event/run state transitions, and JSON columns for opaque cursors/provenance/quality summaries. Store cursor before/after and input DatasetVersion/PipelineRun references explicitly; never treat a request-body cursor or event ID as trusted identity without source validation.
 
 - [ ] **Step 4: Run contract, migration, and model checks.**
 
@@ -531,7 +564,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/models/test_v2_schema.py tests/v2/incremental/test_refresh_contract.py -q)
 
-    Expected: PASS for both cursor contracts, duplicate-event idempotency, active-lease fencing, immutable run state, and cursor non-advance after failure; the migration has one head and registers every refresh table.
+    Expected: PASS for watermark/opaque/sequence cursor contracts, duplicate-event idempotency, unique source/partition state, second-worker claim rejection, expired-worker late-finish fencing, immutable run state, and cursor non-advance after failure; the migration has one head and registers every refresh table.
 
 - [ ] **Step 5: Commit the refresh contract.**
 
@@ -641,7 +674,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - `DeltaPage` contains `envelopes: Sequence[ChangeEnvelope]`, `candidate_cursor: SourceCursor`, `source_observed_at`, and `source_lag_seconds`.
 - `ConnectorBase.pull_delta(resource: str, *, cursor: SourceCursor | None, overlap_window: timedelta) -> DeltaPage` is the only incremental connector interface. SQL requires server-owned `watermark_column` and `primary_key_column`; REST passes the configured delta/cursor parameter; Mongo uses its configured opaque/ObjectId cursor. A connector without a valid cursor contract falls back to an explicit full batch and records `cursor_outcome="unchanged"`, never guessing a watermark.
-- `poll_source(db: Session, *, source_id: str, resource: str, lease_owner: str, now: datetime) -> RefreshRunResult` claims a refresh run, reads the persisted cursor, pulls the overlap window, normalizes and deduplicates envelopes, persists a new DatasetVersion and PipelineRun, and advances the cursor only after those durable records and their success outcome commit.
+- `poll_source(db: Session, *, source_id: str, resource: str, lease_owner: str, now: datetime) -> RefreshRunResult` claims a refresh run, reads the persisted cursor and source fencing token, pulls the overlap window, normalizes and deduplicates envelopes, persists a new DatasetVersion and PipelineRun, and advances the cursor only after those durable records and their success outcome commit using the returned fencing token.
 - `RefreshRunResult` contains run ID, status, input DatasetVersion IDs, PipelineRun ID, cursor before/after, duplicate count, late-event count, retry count, DLQ count, source lag seconds, and provenance.
 - `dedupe_key` is applied before materialization; equal timestamps sort by primary key, late records are included within the overlap window, and out-of-order records do not move the cursor backward. Failed attempts keep the previous cursor, retry with bounded backoff, and move to `RefreshDeadLetter` after the configured maximum; replay creates a new idempotent run rather than mutating the old run.
 - `DatasetService.create_version(..., refresh_run_id: str | None, source_cursor: SourceCursor | None, observed_at: datetime | None) -> DatasetVersion` records refresh provenance. `pipeline_run_task(pipeline_id: str, run_id: str, input_dataset_version_ids: Sequence[str] | None = None)` uses the explicitly pinned input versions, otherwise `Dataset.latest_version_id`/latest approved version, and never calls `preview(dataset_id, 1, ...)` for production refresh.
@@ -654,7 +687,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
         result = run_polling_fixture(case_id, polling_fixture)
         assert result.status == "succeeded"
         assert result.duplicate_count >= 0
-        assert result.cursor_after >= result.cursor_before
+        assert cursor_order(result.cursor_before, result.cursor_after) >= 0
 
     def test_failed_retry_keeps_cursor_until_pipeline_success(polling_fixture):
         result = run_polling_fixture("failed-retry", polling_fixture)
@@ -718,20 +751,29 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 **Interfaces:**
 
 - `ManagedWebhookAdapter.verify_and_normalize(body: bytes, *, source_id: str, signature: str, timestamp: str, secret_ref: str, now: datetime) -> ChangeEnvelope` verifies an HMAC signature, rejects expired timestamps and duplicate event IDs, and records the source schema hash.
-- `ManagedOutboxAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` accepts only the versioned outbox envelope fields and rejects missing event ID, source/resource mismatch, schema drift, or invalid sequence.
-- `ManagedCdcAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` is the sole CDC adapter in v1. It accepts one documented external producer envelope and does not open Kafka, broker, or arbitrary stream connections. The repository supplies `LocalCdcProducerDouble` in tests for deterministic envelopes.
-- `EventIngestService.accept(db: Session, envelope: ChangeEnvelope, *, lease_owner: str, now: datetime) -> IngestReceipt` writes the inbox idempotently, enforces per-source/resource sequence ordering, claims a consumer lease, and schedules the same refresh materialization path used by polling.
+- `ManagedOutboxAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` accepts only the versioned outbox envelope fields and rejects missing event ID, source/resource mismatch, schema drift, or invalid sequence. A sequence outbox must provide both `partition` and a monotonic integer `sequence`; a watermark/opaque outbox uses cursor ordering and dedupe instead.
+- `ManagedCdcAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` is the sole CDC adapter in v1. It accepts one documented external producer envelope with required partition and monotonic sequence, and does not open Kafka, broker, or arbitrary stream connections. The repository supplies `LocalCdcProducerDouble` in tests for deterministic envelopes.
+- `PartitionConsumeStatus` is the closed set `accepted|duplicate|lower|held_gap|gap_timeout|processed|dead_lettered|replayed`. `sequence_partition` envelopes are first persisted to `RefreshInboxEvent` with `received`/`held_gap` status, then consumed under the matching `RefreshPartitionState` lease only when `sequence == expected_next_sequence`. `duplicate` (the same event/dedupe key or a previously processed sequence identity) is acknowledged without changing the checkpoint; a distinct event with a sequence below `expected_next_sequence` is `lower`, retained/audited, and never applied; `held_gap` retains N+1 and does not advance anything; `gap_timeout` is the explicit timeout reason/status that transitions the held item to terminal `dead_lettered`; `processed` advances only after durable DatasetVersion/PipelineRun outcome; `dead_lettered` leaves the last contiguous checkpoint unchanged; `replayed` uses a new run and can only move the checkpoint forward.
+- `EventIngestService.accept(db: Session, envelope: ChangeEnvelope, *, lease_owner: str, now: datetime) -> IngestReceipt` persists the inbox idempotently before any dispatch, then claims the source `RefreshRun`/`RefreshSourceState` fencing token and locks/claims the per-source/resource/partition `RefreshPartitionState` lease before evaluating the expected-next sequence. It drains newly contiguous held events in order, calls `record_refresh_outcome(..., partition=..., partition_fencing_token=..., completed_sequences=[...])`, updates the partition checkpoint and source cursor only after durable materialization and outcome, and returns the explicit `PartitionConsumeStatus`, source/partition fencing tokens, and checkpoint. Watermark/opaque sources bypass partition sequencing and use `RefreshSourceState` cursor/dedupe semantics.
 - `replay_dead_letter(db: Session, *, dead_letter_id: str, operator_id: str, now: datetime) -> RefreshRun` creates a new idempotent run from the stored envelope and retains the original dead-letter record and reason.
 - `POST /api/v2/refresh/events/webhook/{source_id}` verifies the raw signed body before parsing; outbox and CDC adapters are internal ingestion contracts in v1 and are not exposed as arbitrary broker endpoints. The route returns only event/run IDs and status, never source secrets or protected payloads.
-- Durable inbox/outbox state uses one consumer lease per source partition, bounded retries, explicit `dead_lettered` status, and a replay audit record. Equal sequence/event IDs are deduplicated; lower sequence events are held or dead-lettered according to the source contract and never silently applied out of order.
+- Durable inbox/outbox state uses one consumer lease per source partition, bounded retries, explicit `dead_lettered` status, and a replay audit record. The inbox write is durable before a consumer lease is acquired. Equal sequence/event IDs are `duplicate`; lower sequences are `lower` (or `dead_lettered` after the source-defined retention rule) and never silently applied. N+1 before N is `held_gap`; N arrival releases N and any contiguous held events in order. A gap timeout records `gap_timeout`/`GAP_TIMEOUT_DLQ`, transitions the held event to `dead_lettered`, and leaves the checkpoint unchanged. A replay never regresses `expected_next_sequence` or the source cursor, and every checkpoint update is fencing/CAS guarded as defined in Task 6.
 - Production CDC requires an enterprise-provided CDC producer/broker, network route, credential/secret reference, retention, schema compatibility, and on-call ownership. These deployment prerequisites are recorded in `test_data/runtime/README.md`; no producer or broker is claimed to exist in this repository.
 
 - [ ] **Step 1: Write failing webhook, outbox, CDC, replay, and boundary tests.**
 
-    @pytest.mark.parametrize("case_id", ["expired-webhook", "replay-attack", "schema-drift", "duplicate", "out-of-order", "cdc-ordering"])
+    `partitioned_refresh_db` must use two independent sessions/workers and a barrier for the two-partition case; partition `p-0` and `p-1` may be processed concurrently where leases allow, but must retain independent checkpoints and must never be collapsed into one global sequence/checkpoint.
+
+    @pytest.mark.parametrize("case_id", ["expired-webhook", "replay-attack", "schema-drift", "duplicate", "out-of-order", "cdc-ordering", "two-partitions", "n-plus-one-held", "n-arrives-releases", "gap-timeout", "replay-no-regress"])
     def test_event_ingest_rejects_or_deduplicates_invalid_cases(case_id):
         result = run_event_fixture(case_id)
-        assert result.reason_code in {"ACCEPTED", "DUPLICATE_EVENT", "EXPIRED_SIGNATURE", "REPLAY_DETECTED", "SCHEMA_DRIFT", "OUT_OF_ORDER"}
+        assert result.reason_code in {"ACCEPTED", "DUPLICATE_EVENT", "EXPIRED_SIGNATURE", "REPLAY_DETECTED", "SCHEMA_DRIFT", "INVALID_SEQUENCE", "OUT_OF_ORDER", "LOWER_SEQUENCE", "HELD_GAP", "GAP_TIMEOUT_DLQ", "REPLAYED"}
+
+    @pytest.mark.parametrize("record", [{"partition": None, "sequence": 1}, {"partition": "p-0", "sequence": None}, {"partition": "p-0", "sequence": 1.5}])
+    def test_sequence_source_requires_partition_and_monotonic_integer(record):
+        with pytest.raises(EventIngressError) as exc:
+            ManagedCdcAdapter.normalize(cdc_record_fixture("cdc-ordering", **record), source_id="source-cdc", received_at=FIXED_NOW)
+        assert exc.value.reason_code == "INVALID_SEQUENCE"
 
     def test_webhook_signature_is_checked_before_payload_processing():
         with pytest.raises(EventIngressError) as exc:
@@ -748,6 +790,36 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
         assert replay.id != receipt.run_id
         assert original_dead_letter(db, receipt.dead_letter_id).replayed_at is not None
 
+    def test_two_sequence_partitions_advance_independently(db):
+        ingest_fixture_event(db, "two-partitions", partition="p-0", sequence=1)
+        ingest_fixture_event(db, "two-partitions", partition="p-1", sequence=1)
+        assert read_partition_checkpoint(db, "p-0") == 1
+        assert read_partition_checkpoint(db, "p-1") == 1
+
+    def test_n_plus_one_is_held_until_n_arrives_and_then_released_in_order(db):
+        held = ingest_fixture_event(db, "n-plus-one-held", partition="p-0", sequence=2)
+        assert held.status == "held_gap"
+        assert read_partition_checkpoint(db, "p-0") == 0
+        released = ingest_fixture_event(db, "n-arrives-releases", partition="p-0", sequence=1)
+        assert released.status == "processed"
+        assert read_partition_checkpoint(db, "p-0") == 2
+        assert read_processed_sequence_order(db, "p-0") == [1, 2]
+
+    def test_gap_timeout_dead_letters_without_advancing_checkpoint(db):
+        ingest_fixture_event(db, "n-plus-one-held", partition="p-0", sequence=2)
+        result = expire_fixture_gap(db, partition="p-0", now=FIXED_NOW + timedelta(hours=1))
+        assert result.status == "dead_lettered"
+        assert result.reason_code == "GAP_TIMEOUT_DLQ"
+        assert read_partition_checkpoint(db, "p-0") == 0
+
+    def test_replay_never_regresses_partition_checkpoint(db):
+        ingest_fixture_event(db, "n-arrives-releases", partition="p-0", sequence=1)
+        ingest_fixture_event(db, "two-partitions", partition="p-0", sequence=2)
+        checkpoint = read_partition_checkpoint(db, "p-0")
+        replay = replay_dead_letter(db, dead_letter_id=fixture_dead_letter(db, "replay-no-regress"), operator_id="operator-001", now=FIXED_NOW)
+        assert replay.status == "replayed"
+        assert read_partition_checkpoint(db, "p-0") >= checkpoint
+
 - [ ] **Step 2: Run event tests to verify they fail.**
 
     Run from the repository root:
@@ -759,7 +831,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement only the managed event boundary.**
 
-    Normalize all three supported sources into `ChangeEnvelope`, verify webhook signature/timestamp before parsing, enforce source-owned schema/sequence, and write durable inbox/outbox state before dispatch. Use the same dedupe, lease, DatasetVersion, PipelineRun, and cursor advancement services as Task 8. Keep the CDC implementation as a producer-envelope adapter plus `LocalCdcProducerDouble`; do not add a Kafka client, arbitrary broker URL, generic stream topology, or best-effort direct database listener.
+    Normalize all three supported sources into `ChangeEnvelope`, verify webhook signature/timestamp before parsing, enforce source-owned schema and the sequence-partition contract, and persist the inbox before dispatch. For a sequence source, claim the source run/fencing token, lock the unique `RefreshPartitionState` row under its consumer lease/fencing token, accept only the expected-next sequence, hold N+1, drain N plus contiguous held events in order, and persist explicit duplicate/lower/gap/dead-letter/replay statuses. Advance the partition checkpoint and `RefreshSourceState` cursor only in the fenced transaction after durable DatasetVersion/PipelineRun outcome. Use the same dedupe, lease, DatasetVersion, PipelineRun, and cursor advancement services as Task 8. Keep the CDC implementation as a producer-envelope adapter plus `LocalCdcProducerDouble`; do not add a Kafka client, arbitrary broker URL, generic stream topology, or best-effort direct database listener.
 
 - [ ] **Step 4: Run event, API, and migration checks.**
 
@@ -770,7 +842,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
     (cd "$REPO_ROOT" && docker compose -f docker-compose.v2.yml config --quiet)
 
-    Expected: PASS for valid webhook/outbox/CDC envelopes, expired signature, replay attack, duplicate/equal event, out-of-order/CDC ordering, schema drift, lease fencing, DLQ/replay, and no arbitrary broker dependency.
+    Expected: PASS for valid webhook/outbox/CDC envelopes, missing/non-integer sequence rejection, expired signature, replay attack, duplicate/equal event, lower sequence, two independent partitions, N+1 hold and ordered release, gap-timeout DLQ, replay without checkpoint regression, schema drift, source/partition lease fencing, DLQ/replay, and no arbitrary broker dependency.
 
 - [ ] **Step 5: Commit bounded event ingestion.**
 
@@ -779,7 +851,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 ### Task 10: Expose refresh operations and failure/replay status
 
-- [ ] **Deliverable:** Enterprise operators can inspect schedule, cursor, lag, run, failure, and DLQ/replay status and can trigger bounded runs/backfills through authenticated API operations that reuse the refresh services.
+- [ ] **Deliverable:** Enterprise operators can inspect schedule, source cursor, per-partition checkpoint/gap state, lag, run, failure, and DLQ/replay status and can trigger bounded runs/backfills through authenticated API operations that reuse the refresh services.
 
 **Files:**
 
@@ -791,7 +863,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 **Interfaces:**
 
-- `RefreshStatus` contains source ID, resource, `RefreshPolicy`, cursor, cursor observed time, latest run ID/status, input DatasetVersion ID, PipelineRun ID, freshness lag seconds, duplicate/late/retry/DLQ counts, next schedule time, SLA status, and bounded backfill window.
+- `RefreshStatus` contains source ID, resource, `RefreshPolicy`, cursor, cursor observed time, source fencing token (never writable by the caller), per-partition `expected_next_sequence`/checkpoint/gap status when applicable, latest run ID/status, input DatasetVersion ID, PipelineRun ID, freshness lag seconds, duplicate/late/retry/DLQ counts, next schedule time, SLA status, and bounded backfill window.
 - `RefreshTriggerRequest` contains only `mode: RefreshPolicy` and optional `backfill_from`/`backfill_to` instants; the server loads source, resource, cursor, credentials, and connector configuration from the persisted connection contract.
 - `get_refresh_status(db: Session, *, source_id: str, resource: str | None = None) -> RefreshStatus` returns persisted state only and never reconstructs a cursor from request data.
 - `trigger_refresh(db: Session, *, source_id: str, resource: str, mode: RefreshPolicy, backfill_from: datetime | None, backfill_to: datetime | None, operator_id: str, now: datetime) -> RefreshRun` validates the stored source contract and creates a durable idempotent run.
@@ -845,7 +917,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_polling.py tests/v2/incremental/test_event_ingest.py -q)
 
-    Expected: PASS for status, T+1 schedule, lag/cursor visibility, bounded manual trigger/backfill, failed/DLQ replay, authentication, and rejection of caller-supplied cursor/source/broker values.
+    Expected: PASS for status, T+1 schedule, lag/cursor and sequence-partition checkpoint/gap visibility, bounded manual trigger/backfill, failed/DLQ replay, authentication, and rejection of caller-supplied cursor/source/broker values.
 
 - [ ] **Step 5: Commit refresh operations.**
 
@@ -1490,12 +1562,12 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 **Interfaces:**
 
-- `FreshnessState` is `fresh`, `stale`, or `unknown`. `SemanticSnapshot` adds immutable `freshness_state`, `freshness_lag_seconds`, `source_cursor`, and `lineage_summary` fields alongside its existing release, dataset, pipeline, quality, and evidence pins.
+- `FreshnessState` is `fresh`, `stale`, or `unknown`. `SemanticSnapshot` adds immutable `freshness_state`, `freshness_lag_seconds`, `source_cursor`, `partition_checkpoints` (a canonical mapping of sequence source/resource/partition to its contiguous checkpoint), and `lineage_summary` fields alongside its existing release, dataset, pipeline, quality, and evidence pins.
 - `FreshnessPolicy` contains `max_lag_seconds`, optional `hard_deny_after_seconds`, and `stale_action` (`deny` or `human_approved`). A policy may make stale evidence require HITL, but it may never make an unknown or ungoverned snapshot silently fresh.
-- `FreshnessView` contains state, lag seconds, cursor, source IDs, dataset-version IDs, pipeline-run IDs, last successful refresh run, and SLA status. `compute_snapshot_freshness(snapshot: SnapshotView, *, now: datetime, policy: FreshnessPolicy) -> FreshnessView` is pure and does not update the snapshot.
+- `FreshnessView` contains state, lag seconds, source cursor, partition checkpoints, source IDs, dataset-version IDs, pipeline-run IDs, last successful refresh run, and SLA status. `compute_snapshot_freshness(snapshot: SnapshotView, *, now: datetime, policy: FreshnessPolicy) -> FreshnessView` is pure and does not update the snapshot.
 - `materialize_refresh_snapshot(db: Session, *, refresh_run_id: str, ontology_release_id: str, dataset_version_ids: Sequence[str], created_by: str) -> SemanticSnapshot` calls the existing governed materialization path, copies the durable cursor/lag/lineage from the successful RefreshRun, and always inserts a new snapshot.
 - `evaluate_snapshot_freshness(freshness: FreshnessView, policy: FreshnessPolicy) -> FreshnessDecision` returns `ALLOW`, `HUMAN_APPROVED`, or `DENY` with `reason_code` and `lag_seconds`; `investigate` maps DENY to structured `SNAPSHOT_STALE`/`SNAPSHOT_NOT_GOVERNED`, while `create_action_plan` maps a soft stale result to a plan requiring exact-plan HITL and a hard stale/unknown result to DENY.
-- `PolicyDecision` and `InvestigationResult` expose freshness state, lag, cursor, and lineage citations. The stored plan/approval records capture the freshness view at creation/approval; later data does not recalculate or rewrite historical evidence.
+- `PolicyDecision` and `InvestigationResult` expose freshness state, lag, source cursor, partition checkpoints, and lineage citations. The stored plan/approval records capture the freshness view at creation/approval; later data does not recalculate or rewrite historical evidence.
 
 - [ ] **Step 1: Write failing freshness and historical-immutability tests.**
 
@@ -1556,10 +1628,10 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 Phase 2 is acceptable only when the following evidence is present in the generated manifest and CI artifacts:
 
-- One source can run as `batch`, `micro_batch`, or bounded `event_driven`, and every run has a durable cursor/lease/idempotency key, at-least-once dedupe result, source provenance, input DatasetVersion, PipelineRun outcome, quality summary, and source lag.
+- One source can run as `batch`, `micro_batch`, or bounded `event_driven`, and every run has a durable cursor/lease/fencing token/idempotency key, at-least-once dedupe result, source provenance, input DatasetVersion, PipelineRun outcome, quality summary, and source lag. Sequence CDC/outbox runs additionally have a unique per-source/resource/partition state, expected-next checkpoint, and explicit duplicate/lower/held-gap/processed/dead-lettered/replayed outcome.
 - T+1 schedules persist timezone, business calendar, SLA, retry, and bounded backfill policy; the isolated schedule test proves Celery beat dispatches one due run and does not dispatch it twice.
 - Polling proves overlap handling for equal timestamps, late/out-of-order data, failure cursor non-advance, retry, DLQ, replay, and pinned latest/approved Pipeline input on both PostgreSQL and MySQL fixtures.
-- Event-driven support proves signed webhook, managed outbox, and the single external CDC adapter contract with inbox ordering/dedupe/lease/DLQ/replay; no arbitrary broker consumer or repository-owned CDC producer is required.
+- Event-driven support proves signed webhook, managed outbox, and the single external CDC adapter contract with inbox-first persistence, per-partition ordering/dedupe/lease/fencing, N+1 hold and in-order release, gap-timeout DLQ, replay without checkpoint regression, and source lineage; no arbitrary broker consumer or repository-owned CDC producer is required.
 - Each successful refresh produces a new SemanticSnapshot with freshness/lag/cursor/lineage; stale/unknown evidence produces deterministic Runtime DENY or exact-plan HITL, and historical snapshots, plans, approvals, and evidence remain byte/state stable.
 - Operator API and Playwright evidence can show schedule, cursor, lag/SLA, latest failure, DLQ/replay state, and the resulting snapshot lineage without exposing credentials, raw protected event payloads, or arbitrary source/broker configuration.
 
@@ -2063,7 +2135,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
 ### Task 27: Add refresh and Runtime operator surfaces with Playwright governance flows
 
-- [ ] **Deliverable:** The built-in UI exposes refresh schedule/cursor/lag/run/DLQ-replay status plus investigation lineage/evidence, Sandbox diff, risk decision, exact-plan approval, receipt, reconciliation, and rollback-plan state as operator surfaces, without becoming a general Agent Builder.
+- [ ] **Deliverable:** The built-in UI exposes refresh schedule/cursor/per-partition checkpoint/lag/run/DLQ-replay status plus investigation lineage/evidence, Sandbox diff, risk decision, exact-plan approval, receipt, reconciliation, and rollback-plan state as operator surfaces, without becoming a general Agent Builder.
 
 **Files:**
 
@@ -2101,7 +2173,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 - refreshApi.trigger(sourceId: string, request: RefreshTriggerRequest) -> RefreshRun maps to POST /api/v2/refresh/sources/{sourceId}/run; it sends only the persisted policy/mode and bounded backfill window.
 - refreshApi.replay(runId: string, deadLetterId?: string) -> RefreshRun maps to POST /api/v2/refresh/runs/{runId}/replay; it sends no cursor, source URL, credential, broker, or event payload.
 - Every method uses the existing authenticated API client and maps only to its listed endpoint; client code does not evaluate authorization, risk, hashes, or writes.
-- The UI displays refresh policy, schedule timezone/business calendar, next due time, cursor/watermark, source lag/SLA, latest run status, retry count, DLQ/replay state, snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data.
+- The UI displays refresh policy, schedule timezone/business calendar, next due time, cursor/watermark, per-partition checkpoint/expected-next sequence/gap state when present, source lag/SLA, latest run status, retry count, DLQ/replay state, snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data.
 - Protected routes are added under /runtime/refresh/:sourceId, /runtime/investigate, /runtime/action-plans/:planId, /runtime/sandbox/:planId, /runtime/approvals, and /runtime/reconciliation/:planId.
 - Playwright uses test_data/runtime/playwright_seed.json and existing authenticated helpers; it never connects to a production system.
 
@@ -2159,11 +2231,13 @@ Phase 2 is acceptable only when the following evidence is present in the generat
       await expect(page.getByTestId('rollback-execution-state')).toHaveText('PROPOSAL_ONLY')
     })
 
-    test('operator sees T+1 schedule, cursor, lag, and failed replay status', async ({ page }) => {
+    test('operator sees T+1 schedule, cursor, partition checkpoint/lag, and failed replay status', async ({ page }) => {
       await seedRuntimePage(page, 'refresh-dead-lettered')
       await page.goto('/runtime/refresh/source-001')
       await expect(page.getByTestId('refresh-policy')).toHaveText('micro_batch')
       await expect(page.getByTestId('refresh-cursor')).toHaveText('100')
+      await expect(page.getByTestId('refresh-partition-p-0-checkpoint')).toHaveText('10')
+      await expect(page.getByTestId('refresh-partition-p-0-gap-status')).toHaveText('CLEAR')
       await expect(page.getByTestId('refresh-lag-seconds')).toHaveText('120')
       await expect(page.getByTestId('refresh-latest-status')).toHaveText('DEAD_LETTERED')
       await page.getByTestId('replay-refresh-run').click()
@@ -2192,7 +2266,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
     (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
-    Expected: PASS for every refresh/runtime endpoint mapping, T+1 schedule display, cursor and lag display, failed/DLQ replay state, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
+    Expected: PASS for every refresh/runtime endpoint mapping, T+1 schedule display, source cursor and per-partition checkpoint/gap/lag display, failed/DLQ replay state, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
 
 - [ ] **Step 5: Commit operator surfaces.**
 
@@ -2202,7 +2276,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
 ### Task 28: Run the integrated refresh, Runtime, and governed-execution release gates
 
-- [ ] **Deliverable:** M1, Phase 2 refresh/lineage, and Phase 3 acceptance evidence is executable in CI and locally, with batch/micro-batch/event-driven refresh, both database dialects, all four Runtime transports, and operator E2E coverage.
+- [ ] **Deliverable:** M1, Phase 2 refresh/lineage, and Phase 3 acceptance evidence is executable in CI and locally, with batch/micro-batch/event-driven refresh, both database dialects, all four Runtime transports, operator E2E coverage, and fenced source/partition checkpoint evidence for bounded CDC/outbox ordering.
 
 **Files:**
 
@@ -2215,7 +2289,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 **Interfaces:**
 
 - test_acceptance_matrix.py loads every case from test_data/runtime/manifest.json and its registered targets from test_data/runtime/registry.py; it never calls an untyped run_case function.
-- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, `refresh_mode`/`source_contract`/`cursor_outcome` for refresh layers, and a Playwright target descriptor for E2E layers. Task 28 additionally calls target_is_listable for every registered target after Tasks 6–27 have created the referenced pytest, SDK, and Playwright tests.
+- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, `refresh_mode`/`source_contract`/`cursor_outcome` for refresh layers, `source_contract == "sequence_partition"` cases to carry partition and `sequence_outcome`, and a Playwright target descriptor for E2E layers. Task 28 additionally calls target_is_listable for every registered target after Tasks 6–27 have created the referenced pytest, SDK, and Playwright tests.
 - The CI workflow has dedicated steps for fixture generation/check, refresh contract/schedule/polling/event/API tests, backend Runtime unit tests, PostgreSQL/MySQL refresh and writeback integration, SDK tests, frontend test:ci, refresh/runtime Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
 - The CI SDK job installs the package and its declared runtime dependencies with `(cd "$REPO_ROOT" && python -m pip install -e sdk)` before running `(cd "$REPO_ROOT/sdk" && python -m pytest tests -q)`; the local release gate uses the same root-anchored install and test commands.
 - Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
@@ -2238,8 +2312,11 @@ Phase 2 is acceptable only when the following evidence is present in the generat
                 assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
             if "refresh" in case["layers"]:
                 assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
-                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor"}
+                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
                 assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
+                if case["source_contract"] == "sequence_partition":
+                    assert case["partition"]
+                    assert case["sequence_outcome"] in {"accepted", "duplicate", "lower", "held_gap", "gap_timeout", "processed", "dead_lettered", "replayed"}
             if "playwright" in case["layers"]:
                 assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
@@ -2252,7 +2329,14 @@ Phase 2 is acceptable only when the following evidence is present in the generat
     def test_all_supported_refresh_modes_and_cursor_contracts_are_represented():
         refresh_cases = [case for case in load_cases("test_data/runtime/manifest.json") if "refresh" in case["layers"]]
         assert {case["refresh_mode"] for case in refresh_cases} == {"batch", "micro_batch", "event_driven"}
-        assert {case["source_contract"] for case in refresh_cases} >= {"watermark_primary_key", "opaque_source_cursor"}
+        assert {case["source_contract"] for case in refresh_cases} >= {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
+
+    def test_sequence_refresh_cases_cover_partition_ordering_and_checkpoint_safety():
+        refresh_cases = {case["case_id"]: case for case in load_cases("test_data/runtime/manifest.json") if "refresh" in case["layers"]}
+        assert {"two-partitions", "n-plus-one-held", "n-arrives-releases", "gap-timeout", "replay-no-regress"} <= refresh_cases.keys()
+        assert refresh_cases["n-plus-one-held"]["sequence_outcome"] == "held_gap"
+        assert refresh_cases["gap-timeout"]["sequence_outcome"] == "gap_timeout"
+        assert refresh_cases["replay-no-regress"]["sequence_outcome"] == "replayed"
 
 - [ ] **Step 2: Run the matrix before final wiring.**
 
@@ -2271,7 +2355,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
     (cd "$REPO_ROOT" && python -m pip install -e sdk)
     (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
-    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport/refresh mode, points to a test target that cannot be collected/listed, or claims production CDC/broker availability that is not supplied by deployment configuration.
+    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport/refresh mode, omits the `sequence_partition` cases or their `sequence_outcome`/partition metadata, points to a test target that cannot be collected/listed, or claims production CDC/broker availability that is not supplied by deployment configuration.
 
 - [ ] **Step 4: Run the complete release gate.**
 
@@ -2321,7 +2405,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
     curl -fsS http://127.0.0.1:5173/ >/dev/null
     docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
 
-    Expected: all M1, Phase 2 refresh/lineage, and Phase 3 checks pass; every case points to collectable/listable tests; batch, micro-batch, and bounded event-driven cases show cursor/idempotency/lineage/freshness evidence; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; external CDC prerequisites are reported rather than assumed; and the final isolated volumes are removed.
+    Expected: all M1, Phase 2 refresh/lineage, and Phase 3 checks pass; every case points to collectable/listable tests; batch, micro-batch, and bounded event-driven cases show cursor/idempotency/lineage/freshness evidence; sequence cases show independent partition progress, N+1 hold and in-order release, gap-timeout DLQ, fencing, and replay-without-regression; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; external CDC prerequisites are reported rather than assumed; and the final isolated volumes are removed.
 
 - [ ] **Step 5: Commit the release gate.**
 
@@ -2334,7 +2418,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
 The implementation sequence covers the design in this order:
 
-- Product boundary, source refresh policy, durable cursor/lease/idempotency/inbox state, T+1 schedules, bounded polling/event ingestion, retry/DLQ/replay, and refresh status operations: Tasks 1 and 6–10.
+- Product boundary, source refresh policy, authoritative source/partition state, durable cursor/checkpoint lease/fencing/idempotency/inbox state, T+1 schedules, bounded polling/event ingestion, retry/DLQ/replay, and refresh status operations: Tasks 1 and 6–10.
 - Pipeline and semantic foundation, separate immutable release/snapshot contracts, quality/evidence, full dataset-version and pipeline-run lineage: Tasks 1, 11, and 12.
 - Trusted registered Agent/service identity, credential-derived user delegation, audience, scope, TTL, revocation, and same-security-domain checks: Task 13.
 - Effective capability ∩ entitlement ∩ runtime policy, structured ALLOW/DENY, stable reason codes, evidence, rules, empty-result distinction, and snapshot-pinned investigation/action plans: Tasks 14 and 15.
