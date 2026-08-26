@@ -149,3 +149,17 @@ def test_extreme_length_field_is_not_truncated():
     result = convert_document(str(BOUNDARY_FIXTURES / "extreme_length_field.csv"))
     assert result.ok
     assert "x" * 20000 in result.content
+
+
+SEMANTIC_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_cases" / "semantic"
+
+
+@pytest.mark.parametrize("filename", [
+    "missing_required_fields.csv",
+    "conflicting_duplicate_entities.csv",
+    "out_of_range_values.csv",
+])
+def test_semantic_fixture_is_well_formed_csv(filename):
+    result = convert_document(str(SEMANTIC_FIXTURES / filename))
+    assert result.ok
+    assert result.content.startswith("|")
