@@ -1173,6 +1173,17 @@
             "title": "Entity Class",
             "type": "string"
           },
+          "entity_class_cn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Class Cn"
+          },
           "field_mapping": {
             "title": "Field Mapping",
             "type": "object"

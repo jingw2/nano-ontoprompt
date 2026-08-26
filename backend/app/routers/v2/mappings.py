@@ -30,6 +30,7 @@ class SuggestRequest(BaseModel):
 class CreateMappingRequest(BaseModel):
     curated_dataset_id: str
     entity_class: str
+    entity_class_cn: Optional[str] = None
     field_mapping: dict
     primary_key_column: Optional[str] = None
     property_mappings: Optional[list[dict]] = None
@@ -73,6 +74,7 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
             ontology_id=ontology_id,
             curated_dataset_id=body.curated_dataset_id,
             entity_class=body.entity_class,
+            entity_class_cn=body.entity_class_cn,
             field_mapping=field_mapping,
             primary_key_column=body.primary_key_column,
             confidence=body.confidence,

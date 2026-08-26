@@ -337,11 +337,12 @@ def run_extraction(self, task_id: str):
 
         if all_results:
             result = _merge_extraction_results(all_results)
-            # cross-file entity resolution (graph-engineering playbook): the
-            # merge above only catches exact-name duplicates, so a concept
-            # extracted under different surface forms in different files
-            # would otherwise fracture into separate nodes
-            if len(all_results) > 1 and len(result.get("entities") or []) > 1:
+            # cross-file/single-file entity resolution (graph-engineering
+            # playbook): the merge above only catches exact-name duplicates,
+            # so a concept extracted under different surface forms — whether
+            # across files or within one document — would otherwise fracture
+            # into separate nodes
+            if len(result.get("entities") or []) > 1:
                 task.progress = {"stage": "resolving entities", "pct": 58}
                 db.commit()
                 from app.services.llm_service import resolve_entities, apply_entity_resolution

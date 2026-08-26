@@ -204,6 +204,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
       await apiClientV2.post(`/ontologies/${ontologyId}/mappings`, {
         curated_dataset_id: selectedId,
         entity_class: suggestion.entity_class,
+        entity_class_cn: suggestion.entity_class_cn,
         field_mapping: fieldMapping,
         confidence: 0.9,
       })

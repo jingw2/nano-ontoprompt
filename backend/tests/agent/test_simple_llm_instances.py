@@ -162,6 +162,51 @@ def test_simple_llm_tabular_extraction_materializes_instances(schema, monkeypatc
         session.close()
 
 
+def test_single_document_near_duplicate_entities_are_resolved(schema, monkeypatch):
+    """Sub-project E3 bug 1: a single-file extraction with near-duplicate
+    entity names (e.g. "产品研发部" vs "产品研发部门") must still go through
+    entity resolution — previously gated behind len(all_results) > 1, so a
+    single document's duplicates were never merged."""
+    factory, session = _worker(schema)
+    task_id = _seed(session)
+    monkeypatch.setattr("app.database.SessionLocal", factory)
+    import app.tasks.extraction as extraction_task
+
+    monkeypatch.setattr(
+        "app.services.llm_service.extract_ontology",
+        lambda *a, **k: {
+            "entities": [
+                {"name_cn": "产品研发部", "type": "Organization", "description": "负责产品研发", "properties": {}},
+                {"name_cn": "产品研发部门", "type": "Organization", "description": "", "properties": {}},
+            ],
+            "relations": [],
+            "logic_rules": [],
+            "actions": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.llm_service.resolve_entities",
+        lambda entities, config, model_name: {
+            "产品研发部": "产品研发部",
+            "产品研发部门": "产品研发部",
+        },
+    )
+
+    extraction_task.run_extraction(task_id)
+
+    try:
+        status = session.execute(text(
+            "SELECT status, error FROM extraction_tasks WHERE id = :id"
+        ), {"id": task_id}).mappings().one()
+        assert status["status"] == "completed", status["error"]
+        names = session.execute(text(
+            "SELECT name_cn FROM entities WHERE ontology_id = 'o-llm'"
+        )).scalars().all()
+        assert names == ["产品研发部"]
+    finally:
+        session.close()
+
+
 def test_simple_llm_without_instances_still_succeeds(schema, monkeypatch):
     """An LLM result without an instances array must not break extraction —
     entities/relations still land, the task completes."""
