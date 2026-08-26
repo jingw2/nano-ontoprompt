@@ -24,7 +24,9 @@
 - Phase 3 v1 permits only allowlisted, parameterized, single-target row updates. Arbitrary SQL, DDL, multi-target transactions, and destructive deletes are rejected.
 - Automatic execution requires low risk, reversibility, determinism, policy approval, valid dual-principal access, and unchanged preconditions. Other permitted writes require exact-plan HITL approval.
 - Rollback is a new governed action plan. Unknown outcomes create reconciliation cases and are never blindly replayed.
-- Tests use deterministic no-PII fixtures. Existing untracked files under ref/ and test_data/ are read-only inputs and must not be added, rewritten, or deleted.
+- Tests use deterministic no-PII fixtures. Existing untracked files under ref/ and test_data/ are read-only inputs and must not be added, rewritten, or deleted. The runtime corpus may use only public test sentinels such as runtime/runtime, vault:runtime-db, and example.invalid; these are not real credentials and must never be used outside test infrastructure.
+- Runtime fixture manifests never contain raw access tokens, refresh tokens, signing keys, private keys, cloud credentials, production URIs, or real email/phone values. Test-only database passwords remain only in the isolated database Compose file and are scanned as the literal public sentinel runtime.
+- The fixture registry is authoritative: every case has layers and at least one listable test target; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, and E2E cases name a Playwright target.
 - Every task follows TDD: add a focused failing test, run the named command and record the failure, implement the smallest change, run the named passing command, then commit only the listed files.
 
 ## File and Interface Map
@@ -74,6 +76,7 @@ Add these deterministic files; generated output is checked by a manifest and is 
 - test_data/runtime/fixtures/runtime_cases.json
 - test_data/runtime/fixtures/execution_cases.json
 - test_data/runtime/fixtures/transport_cases.json
+- test_data/runtime/registry.py
 - test_data/runtime/playwright_seed.json
 - test_data/runtime/db/docker-compose.yml
 - test_data/runtime/db/postgres/schema.sql
@@ -82,7 +85,13 @@ Add these deterministic files; generated output is checked by a manifest and is 
 - test_data/runtime/db/mysql/seed.sql
 - test_data/runtime/test_fixture_manifest.py
 
-The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI with --seed 20260826, --output, and --check. --check regenerates into a temporary directory and compares canonical bytes and manifest hashes. Every fixture case has a stable case_id, expected decision or error code, expected hash where applicable, and a coverage list naming the contract it exercises.
+The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI with --seed 20260826, --output, and --check. --check regenerates into a temporary directory and compares canonical bytes and manifest hashes. Every fixture case has a stable case_id, expected decision or error code, expected hash where applicable, a layers list, a test_targets list, and a coverage list naming the contract it exercises. A target is one of:
+
+- pytest: a full pytest node ID such as backend/tests/runtime/test_runtime_service.py::test_create_action_plan_is_immutable_and_non_writing;
+- sdk: a full SDK pytest node ID such as sdk/tests/test_runtime_client.py::test_sdk_injects_delegation_and_decodes_investigation; or
+- playwright: a spec path and exact test title such as frontend/src/test/e2e/runtime-governance.spec.ts::operator approves the exact plan hash and sees the receipt.
+
+registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can run `npx playwright test recorded_spec_path --list` and require that title in the output. The registry is checked against the manifest, not inferred from a vague case runner. target_is_listable uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets.
 
 ### Coverage matrix
 
@@ -94,7 +103,8 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 | Unit and function | JSON cases loaded by backend/tests/runtime/test_*.py | Pure canonicalization, policy, target freezing, risk classification, error mapping |
 | API/SDK/MCP/reference parity | transport_cases.json | Same normalized result and canonical plan_hash, independent of envelopes and tracing IDs |
 | PostgreSQL/MySQL integration | Both SQL seed directories and db/docker-compose.yml | Row update, exact row count, optimistic locking, timeout, binding drift, idempotency, unknown outcome |
-| Playwright E2E | playwright_seed.json | Investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
+| Playwright E2E | playwright_seed.json plus registry Playwright targets | Investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
+| Case-to-test traceability | manifest.json plus registry.py | Every case has a collectable/listable target, required dialects, required transports, and required Playwright marker |
 
 ### Task 1: Create the runtime test-data inventory and generator
 
@@ -110,6 +120,7 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - Create: test_data/runtime/fixtures/runtime_cases.json
 - Create: test_data/runtime/fixtures/execution_cases.json
 - Create: test_data/runtime/fixtures/transport_cases.json
+- Create: test_data/runtime/registry.py
 - Create: test_data/runtime/playwright_seed.json
 - Create: test_data/runtime/db/docker-compose.yml
 - Create: test_data/runtime/db/postgres/schema.sql
@@ -121,9 +132,11 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 **Interfaces:**
 
 - Produces generate(seed: int, output_dir: Path) -> dict and validate_manifest(output_dir: Path) -> None.
-- Produces fixture records with case_id, expected, and coverage; uses synthetic tenants tenant-acme and tenant-beta, synthetic users, and synthetic row IDs.
+- Produces fixture records with case_id, expected, coverage, layers, and test_targets; uses synthetic tenants tenant-acme and tenant-beta, synthetic users, and synthetic row IDs.
 - Produces PostgreSQL and MySQL schemas with the same managed_targets logical table, primary key target_id, writable field status, and optimistic-lock field row_version.
 - Produces test_data/runtime/db/docker-compose.yml with PostgreSQL published on host port 55432 and MySQL published on host port 53306; both use database runtime, user runtime, password runtime, healthchecks, and only synthetic seed rows.
+- Produces a registry entry for every case. Each database case has dialects exactly ["mysql", "postgresql"], each parity case has transports exactly ["mcp", "reference-agent", "rest", "sdk"], and each E2E case has at least one Playwright target.
+- Produces test_no_pii_or_real_secret() in test_fixture_manifest.py. Its deterministic scan rejects `-----BEGIN .*PRIVATE KEY-----`, bearer/JWT strings, non-sentinel access_token/refresh_token values, `AKIA[0-9A-Z]{16}` or other cloud-account markers, `postgresql://`/`mysql://` production hosts, cloud-provider URIs, non-`.invalid` email domains, and phone patterns such as `[+]?[0-9][0-9 ()-]{8,}`; runtime/runtime, vault:runtime-db, and example.invalid are explicitly test-only sentinels.
 
 - [ ] **Step 1: Write the failing manifest test.**
 
@@ -134,15 +147,24 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
         assert first["files"] == second["files"]
         validate_manifest(tmp_path / "first")
 
+    def test_no_pii_or_real_secret():
+        scan_runtime_corpus(Path("test_data/runtime"))
+
+    def test_every_case_has_a_listable_registered_target():
+        for case in load_cases(Path("test_data/runtime/manifest.json")):
+            assert_case_registry(case)
+
 - [ ] **Step 2: Run the focused test to verify it fails.**
 
     Run: python -m pytest test_data/runtime/test_fixture_manifest.py -q
 
-    Expected: FAIL because the runtime generator and manifest contract do not exist.
+    Expected: FAIL because the runtime generator, registry, manifest contract, and no-secret checks do not exist.
 
 - [ ] **Step 3: Implement the generator and fixtures.**
 
-    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, and Playwright case, and no token signing keys or database passwords. The generator must fail if a fixture lacks case_id, expected, or coverage.
+    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, and Playwright case, and no real credential material. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
+
+    Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, and E2E cases with an exact Playwright spec/title. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
 
 - [ ] **Step 4: Run generation and the focused test.**
 
@@ -154,7 +176,11 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
     python -m pytest test_data/runtime/test_fixture_manifest.py -q
 
-    Expected: generation is idempotent and the test passes.
+    python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q
+
+    python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_listable_registered_target -q
+
+    Expected: generation is idempotent, no PII or real-secret pattern is found, and every case has a collectable/listable registered target.
 
 - [ ] **Step 5: Commit only the runtime corpus.**
 
@@ -366,7 +392,27 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
     docker compose -f docker-compose.agent.yml config --quiet
 
-    Expected: PASS. The full fresh-database docker compose -f docker-compose.v2.yml up --build smoke is required at the M1 release gate in Task 22.
+    set -e
+    SMOKE_PROJECT=ontexus-m1-smoke
+    SMOKE_VOLUME_FILTER="label=com.docker.compose.project=$SMOKE_PROJECT"
+    cleanup() {
+      docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    }
+    trap cleanup EXIT
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml up --build -d --wait
+    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps -q migration)"
+    test -n "$MIGRATION_ID"
+    test "$(docker inspect -f '{{.State.Status}}' "$MIGRATION_ID")" = "exited"
+    test "$(docker inspect -f '{{.State.ExitCode}}' "$MIGRATION_ID")" = "0"
+    test -n "$(docker volume ls -q --filter "$SMOKE_VOLUME_FILTER")"
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps --status running backend frontend
+    curl -fsS http://127.0.0.1:8000/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
+    curl -fsS http://127.0.0.1:5173/ >/dev/null
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    test -z "$(docker volume ls -q --filter "$SMOKE_VOLUME_FILTER")"
+
+    Expected: PASS. The isolated project name prefixes temporary dedicated Compose volumes, the migration exits successfully before dependents, backend health responds with status ok, frontend responds over HTTP, and the final down -v removes every volume carrying that project label.
 
 - [ ] **Step 5: Commit the stabilization gate.**
 
@@ -1380,6 +1426,101 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
     git commit -m "feat: govern runtime execution and reconciliation"
 
+### Task 20A: Expose governed execution and reconciliation through Runtime REST
+
+- [ ] **Deliverable:** The REST layer exposes every Phase 3 operator operation through RuntimeContext, shared authorization, and structured DENY errors; no route accepts caller-selected credentials, targets, SQL, or parameters.
+
+**Files:**
+
+- Modify: backend/app/routers/v2/runtime.py
+- Modify: backend/app/main.py
+- Create: backend/tests/runtime/test_runtime_execution_api.py
+- Modify: backend/tests/runtime/test_runtime_api.py
+
+**Interfaces:**
+
+- GET /api/v2/runtime/action-plans/{plan_id}/sandbox requires a verified RuntimeContext and returns SandboxResult after shared authorization and snapshot/binding checks.
+- POST /api/v2/runtime/action-plans/{plan_id}/approve accepts only {"plan_hash": string}, requires an approver RuntimeContext, and calls approve_exact_plan.
+- POST /api/v2/runtime/action-plans/{plan_id}/execute accepts only {"plan_hash": string}, requires a RuntimeContext, and calls execute_plan; it never accepts parameters, selector, SQL, identifiers, connection target, or transaction options.
+- GET /api/v2/runtime/reconciliations/{reconciliation_id} requires a verified RuntimeContext and returns ReconciliationCase with no secret or protected row content.
+- POST /api/v2/runtime/executions/{execution_id}/rollback-plans requires a verified RuntimeContext and calls create_rollback_plan, returning a new immutable ActionPlan.
+- Define `RuntimeContext` as the dependency result `get_runtime_context(request: Request, credential: VerifiedCredential = Depends(require_verified_credential)) -> RuntimeContext`, containing verified `agent_id`, `user_id`, tenant/security domain, scopes, credential ID, and correlation ID; no identity field is read from the request body.
+- Define the shared denial response as `StructuredDeny(decision="DENY", reason_code: str, correlation_id: str, semantic_snapshot_id: str | None, result: None)` and have one exception mapper return it for HTTP 403/409 without exposing credentials, SQL, or protected row data.
+- Every endpoint uses the shared RuntimeContext dependency, evaluates Agent capability ∩ user entitlement ∩ runtime policy, and maps access, snapshot, policy, binding, hash, expiry, and precondition failures to decision DENY with reason_code, correlation_id, and semantic_snapshot_id. Body agent_id and user_id are ignored or rejected.
+- app/main.py registers the existing v2 runtime router once; no endpoint creates a second policy or writer path.
+
+- [ ] **Step 1: Write failing API tests for every Phase 3 endpoint and denial shape.**
+
+    def test_sandbox_query_requires_verified_context_and_returns_diff(client, runtime_headers):
+        response = client.get(
+            "/api/v2/runtime/action-plans/plan-auto-001/sandbox",
+            headers=runtime_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["action_plan_id"] == "plan-auto-001"
+        assert response.json()["semantic_snapshot_id"] == "snap-valid-001"
+
+    def test_approve_execute_and_rollback_accept_only_exact_hash_or_execution_id(client, runtime_headers):
+        approve = client.post(
+            "/api/v2/runtime/action-plans/plan-hitl-001/approve",
+            json={"plan_hash": "plan-hash-hitl-001"},
+            headers=runtime_headers,
+        )
+        execute = client.post(
+            "/api/v2/runtime/action-plans/plan-hitl-001/execute",
+            json={"plan_hash": "plan-hash-hitl-001"},
+            headers=runtime_headers,
+        )
+        rollback = client.post(
+            "/api/v2/runtime/executions/execution-001/rollback-plans",
+            json={},
+            headers=runtime_headers,
+        )
+        assert approve.status_code == 200
+        assert execute.status_code == 200
+        assert rollback.status_code == 201
+
+    def test_reconciliation_query_and_denial_are_structured(client, runtime_headers, missing_scope_headers):
+        allowed = client.get(
+            "/api/v2/runtime/reconciliations/recon-001",
+            headers=runtime_headers,
+        )
+        denied = client.post(
+            "/api/v2/runtime/action-plans/plan-hitl-001/execute",
+            json={"plan_hash": "wrong"},
+            headers=missing_scope_headers,
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["status"] == "UNKNOWN"
+        assert denied.status_code == 403
+        assert denied.json()["decision"] == "DENY"
+        assert denied.json()["reason_code"] in {"SCOPE_DENIED", "INVALID_PLAN_HASH"}
+        assert denied.json().get("result") is None
+
+- [ ] **Step 2: Run the focused API tests to verify they fail.**
+
+    Run: cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py -q
+
+    Expected: FAIL because the runtime router has no Sandbox, approval, execution, reconciliation, or rollback-plan routes.
+
+- [ ] **Step 3: Implement the thin Phase 3 REST extension.**
+
+    Add the five routes to backend/app/routers/v2/runtime.py, inject `get_runtime_context(request, credential=Depends(require_verified_credential))` through the same verified-credential dependency used by investigation and action-plan creation, call SandboxService, approve_exact_plan, execute_plan, get_reconciliation, and create_rollback_plan respectively, and map every typed exception through one exception handler to the `StructuredDeny` schema. Ensure app/main.py has exactly one registration of the v2 runtime router; if Task 11 already registered it, add an assertion/test rather than a duplicate.
+
+- [ ] **Step 4: Run API, authorization, and execution tests.**
+
+    Run:
+
+    cd backend && python -m pytest tests/runtime/test_runtime_execution_api.py tests/runtime/test_runtime_api.py tests/runtime/test_runtime_credentials.py tests/runtime/test_execution_service.py -q
+
+    Expected: PASS for all five endpoints, valid dual-principal context, missing/expired/revoked/cross-domain denial, Agent or user capability denial, exact hash mismatch, stale snapshot, binding drift, no secret leakage, and no caller-supplied target or parameter override.
+
+- [ ] **Step 5: Commit the governed REST extension.**
+
+    git add backend/app/routers/v2/runtime.py backend/app/main.py backend/tests/runtime/test_runtime_execution_api.py backend/tests/runtime/test_runtime_api.py
+
+    git commit -m "feat: expose governed execution REST endpoints"
+
 ### Task 21: Add operator surfaces and Playwright governance flows
 
 - [ ] **Deliverable:** The built-in UI exposes investigation lineage/evidence, Sandbox diff, risk decision, exact-plan approval, receipt, reconciliation, and rollback-plan state as operator surfaces, without becoming a general Agent Builder.
@@ -1394,6 +1535,7 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - Create: frontend/src/pages/runtime/ApprovalQueuePage.tsx
 - Create: frontend/src/pages/runtime/ReconciliationPage.tsx
 - Modify: frontend/src/App.tsx
+- Create: frontend/src/api/runtime.test.ts
 - Create: frontend/src/pages/runtime/RuntimeInvestigationPage.test.tsx
 - Create: frontend/src/pages/runtime/ActionPlanPage.test.tsx
 - Create: frontend/src/test/e2e/runtime-governance.spec.ts
@@ -1401,15 +1543,38 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
 **Interfaces:**
 
-- runtimeApi.investigate(request: InvestigationRequest) returns InvestigationResult; runtimeApi.getActionPlan(planId), runtimeApi.getSandbox(planId), runtimeApi.approvePlan(planId, planHash), runtimeApi.getExecutionStatus(planId), and runtimeApi.getReconciliation(planId) map only to REST endpoints.
+- runtimeApi.investigate(request: InvestigationRequest) -> InvestigationResult maps to POST /api/v2/runtime/investigate.
+- runtimeApi.getActionPlan(planId: string) -> ActionPlan maps to GET /api/v2/runtime/action-plans/{planId}.
+- runtimeApi.getSandboxSimulation(planId: string) -> SandboxResult maps to GET /api/v2/runtime/action-plans/{planId}/sandbox.
+- runtimeApi.approveActionPlan(planId: string, planHash: string) -> ApprovalReceipt maps to POST /api/v2/runtime/action-plans/{planId}/approve with body {"plan_hash": planHash}.
+- runtimeApi.executeActionPlan(planId: string, planHash: string) -> ExecutionReceipt maps to POST /api/v2/runtime/action-plans/{planId}/execute with body {"plan_hash": planHash}; it sends no parameters or selector.
+- runtimeApi.getExecutionStatus(planId: string) -> ExecutionReceipt maps to GET /api/v2/runtime/execution-status/{planId}.
+- runtimeApi.getReconciliation(reconciliationId: string) -> ReconciliationCase maps to GET /api/v2/runtime/reconciliations/{reconciliationId}.
+- runtimeApi.createRollbackPlan(executionId: string) -> ActionPlan maps to POST /api/v2/runtime/executions/{executionId}/rollback-plans with an empty body.
+- Every method uses the existing authenticated API client and maps only to its listed endpoint; client code does not evaluate authorization, risk, hashes, or writes.
 - The UI displays snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data.
 - Protected routes are added under /runtime/investigate, /runtime/action-plans/:planId, /runtime/sandbox/:planId, /runtime/approvals, and /runtime/reconciliation/:planId.
 - Playwright uses test_data/runtime/playwright_seed.json and existing authenticated helpers; it never connects to a production system.
 
 - [ ] **Step 1: Write failing component and browser tests.**
 
+    it('maps every governed runtime operation to its REST endpoint', async () => {
+      const get = vi.spyOn(apiClientV2, 'get').mockResolvedValue({ data: {} })
+      const post = vi.spyOn(apiClientV2, 'post').mockResolvedValue({ data: {} })
+      await runtimeApi.getSandboxSimulation('plan-auto-001')
+      await runtimeApi.approveActionPlan('plan-hitl-001', 'plan-hash-hitl-001')
+      await runtimeApi.executeActionPlan('plan-hitl-001', 'plan-hash-hitl-001')
+      await runtimeApi.getReconciliation('recon-001')
+      await runtimeApi.createRollbackPlan('execution-001')
+      expect(get).toHaveBeenCalledWith('/runtime/action-plans/plan-auto-001/sandbox')
+      expect(get).toHaveBeenCalledWith('/runtime/reconciliations/recon-001')
+      expect(post).toHaveBeenCalledWith('/runtime/action-plans/plan-hitl-001/approve', { plan_hash: 'plan-hash-hitl-001' })
+      expect(post).toHaveBeenCalledWith('/runtime/action-plans/plan-hitl-001/execute', { plan_hash: 'plan-hash-hitl-001' })
+      expect(post).toHaveBeenCalledWith('/runtime/executions/execution-001/rollback-plans', {})
+    })
+
     it('shows snapshot evidence and distinguishes denied from empty allowed results', async () => {
-      render(<RuntimeInvestigationPage />)
+      render(RuntimeInvestigationPage)
       expect(await screen.findByTestId('semantic-snapshot-id')).toHaveTextContent('snap-valid-001')
       expect(screen.getByTestId('investigation-decision')).toHaveTextContent('ALLOW')
     })
@@ -1422,29 +1587,38 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
       await expect(page.getByTestId('execution-status')).toHaveText('SUCCEEDED')
     })
 
+    test('operator queries reconciliation and creates a governed rollback plan', async ({ page }) => {
+      await seedRuntimePage(page, 'unknown-outcome')
+      await page.goto('/runtime/reconciliation/recon-001')
+      await expect(page.getByTestId('reconciliation-status')).toHaveText('UNKNOWN')
+      await page.getByTestId('create-rollback-plan').click()
+      await expect(page.getByTestId('rollback-plan-hash')).toBeVisible()
+      await expect(page.getByTestId('rollback-execution-state')).toHaveText('PROPOSAL_ONLY')
+    })
+
 - [ ] **Step 2: Run frontend tests to verify they fail.**
 
-    Run: cd frontend && npm run test:unit -- src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
+    Run: cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
 
     Run: cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts
 
-    Expected: FAIL because the runtime API, pages, routes, and browser fixtures do not exist.
+    Expected: FAIL because the runtime API methods, pages, routes, and browser fixtures do not exist.
 
 - [ ] **Step 3: Implement the operator surface.**
 
-    Use the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls.
+    Implement every runtimeApi method with the exact path/body mapping above using the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Add route handlers and UI controls that invoke Sandbox query, exact-hash approval, exact-hash execution, reconciliation query, and rollback-plan creation. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls.
 
 - [ ] **Step 4: Run component, build, and Playwright tests.**
 
     Run:
 
-    cd frontend && npm run test:unit -- src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
+    cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx
 
     cd frontend && npm run build
 
     cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts
 
-    Expected: PASS for normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation, and rollback-plan display.
+    Expected: PASS for every endpoint mapping, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
 
 - [ ] **Step 5: Commit operator surfaces.**
 
@@ -1466,17 +1640,32 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
 **Interfaces:**
 
-- test_acceptance_matrix.py parametrizes normal, edge, negative, security, drift, rollback, reconciliation, unit, API, SDK, MCP, reference-Agent, PostgreSQL, and MySQL cases from test_data/runtime/manifest.json.
+- test_acceptance_matrix.py loads every case from test_data/runtime/manifest.json and its registered targets from test_data/runtime/registry.py; it never calls an untyped run_case function.
+- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks that every target is collectable/listable, requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, and a Playwright target for E2E layers.
 - The CI workflow has dedicated steps for fixture generation/check, backend runtime unit tests, PostgreSQL/MySQL integration, SDK tests, frontend test:ci, Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
-- Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, and no-secret assertion.
+- Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
 
 - [ ] **Step 1: Write the failing acceptance matrix.**
 
     @pytest.mark.parametrize("case", load_cases("test_data/runtime/manifest.json"))
-    def test_design_case_has_an_executable_assertion(case):
-        assert case["coverage"]
-        assert case["expected"]
-        assert run_case(case["case_id"]) == case["expected"]
+    def test_design_case_has_collectable_registered_targets(case):
+        assert_case_registry(case)
+        targets = targets_for(case["case_id"])
+        assert [target.to_dict() for target in targets] == case["test_targets"]
+        assert all(target_is_listable(target) for target in targets)
+
+    def test_case_layers_require_their_test_dimensions():
+        for case in load_cases("test_data/runtime/manifest.json"):
+            assert case["layers"]
+            if "database" in case["layers"]:
+                assert set(case["dialects"]) == {"mysql", "postgresql"}
+            if "parity" in case["layers"]:
+                assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
+            if "playwright" in case["layers"]:
+                assert any(target["kind"] == "playwright" for target in case["test_targets"])
+
+    def test_runtime_corpus_has_no_pii_or_real_secret():
+        test_no_pii_or_real_secret()
 
     def test_both_dialects_are_required():
         assert {"postgresql", "mysql"} <= set(load_manifest()["dialects"])
@@ -1485,11 +1674,11 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
     Run: cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py -q
 
-    Expected: FAIL for any design case without an implementation/test mapping, missing dialect, absent transport, or ungenerated fixture.
+    Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/Playwright marker, an expected assertion, or a generated fixture.
 
 - [ ] **Step 3: Wire final checks and document reproducible commands.**
 
-    Add fixture generation verification, runtime unit/integration/parity tests, SDK tests, frontend test:ci, Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands and synthetic database URLs. The acceptance matrix must fail closed if a manifest case is removed or lacks an assertion.
+    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, runtime unit/integration/parity tests, SDK tests, frontend test:ci, Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands and synthetic database URLs. The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport, or points to a test target that cannot be collected/listed.
 
 - [ ] **Step 4: Run the complete release gate.**
 
@@ -1498,6 +1687,10 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
     python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check
 
     cd backend && python -m pytest tests/runtime -q
+
+    python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q
+
+    python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_listable_registered_target -q
 
     cd backend && docker compose -f ../test_data/runtime/db/docker-compose.yml up -d --wait
 
@@ -1513,7 +1706,24 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 
     docker compose -f docker-compose.agent.yml config --quiet
 
-    Expected: all M1, Phase 2, and Phase 3 checks pass; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction.
+    set -e
+    SMOKE_PROJECT=ontexus-final-smoke
+    cleanup() {
+      docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    }
+    trap cleanup EXIT
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml up --build -d --wait
+    MIGRATION_ID="$(docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps -q migration)"
+    test -n "$MIGRATION_ID"
+    test "$(docker inspect -f '{{.State.Status}}' "$MIGRATION_ID")" = "exited"
+    test "$(docker inspect -f '{{.State.ExitCode}}' "$MIGRATION_ID")" = "0"
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml ps --status running backend frontend
+    curl -fsS http://127.0.0.1:8000/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
+    curl -fsS http://127.0.0.1:5173/ >/dev/null
+    docker compose -p "$SMOKE_PROJECT" -f docker-compose.v2.yml down -v --remove-orphans
+
+    Expected: all M1, Phase 2, and Phase 3 checks pass; every case points to collectable/listable tests; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; and the final isolated volumes are removed.
 
 - [ ] **Step 5: Commit the release gate.**
 
@@ -1533,6 +1743,7 @@ The implementation sequence covers the design in this order:
 - Managed binding, frozen target/parameters, before-image/version hashes, canonical plan_hash, secret exclusion, and drift rejection: Task 15 and Task 20.
 - Automatic, human-approved, and rejected policy classes; exact-plan HITL; expiry and revalidation: Task 17 and Task 20.
 - PostgreSQL/MySQL parameterized single-target updates, minimum privilege, dialect transactions/timeouts, exact row counts, optimistic locking, idempotency, fencing, audit, reconciliation, and governed rollback plan: Tasks 18–20.
-- Operator lineage/diff/approval/receipt/reconciliation surfaces and full normal/edge/security/Playwright evidence: Tasks 1, 21, and 22.
+- Governed Sandbox/approval/execute/reconciliation/rollback REST endpoints with RuntimeContext and structured DENY responses: Task 20A.
+- Operator lineage/diff/approval/receipt/reconciliation surfaces and full normal/edge/security/Playwright evidence: Tasks 1, 20A, 21, and 22.
 
 The following remain explicit non-goals: generic Agent orchestration, chat UX replacement, separate MCP policy, release-only evidence, arbitrary code/prompt/tool sandboxing, Agent-supplied SQL or secrets, arbitrary SQL/DDL, multi-target transactions, destructive deletes, broad connector expansion, and unrelated refactoring.
