@@ -61,7 +61,11 @@ fi
 
 if [ "$NO_STACK" -eq 1 ]; then
   cd "$FRONTEND"
-  exec npx playwright test --config src/test/e2e/playwright.config.ts "${PLAYWRIGHT_ARGS[@]}"
+  if [ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]; then
+    exec npx playwright test --config src/test/e2e/playwright.config.ts "${PLAYWRIGHT_ARGS[@]}"
+  else
+    exec npx playwright test --config src/test/e2e/playwright.config.ts
+  fi
 fi
 
 if [ -z "${AGENT_E2E_DB_URL:-}" ]; then
@@ -70,11 +74,15 @@ if [ -z "${AGENT_E2E_DB_URL:-}" ]; then
 fi
 
 echo "[run_agent_e2e] starting API on $API_BASE"
-DATABASE_URL="$AGENT_E2E_DB_URL" \
-  REDIS_URL="$REDIS_URL" \
-  FIRST_ADMIN_USER="${AGENT_E2E_ADMIN_USER:-admin}" \
-  FIRST_ADMIN_PASSWORD="${AGENT_E2E_ADMIN_PASSWORD:-admin123}" \
-  "$BACKEND/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+(
+  cd "$BACKEND"
+  exec env \
+    DATABASE_URL="$AGENT_E2E_DB_URL" \
+    REDIS_URL="$REDIS_URL" \
+    FIRST_ADMIN_USER="${AGENT_E2E_ADMIN_USER:-admin}" \
+    FIRST_ADMIN_PASSWORD="${AGENT_E2E_ADMIN_PASSWORD:-admin123}" \
+    .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+) &
 PIDS+=("$!")
 
 echo "[run_agent_e2e] starting Celery worker"
@@ -96,4 +104,8 @@ AGENT_E2E_API_BASE="$API_BASE" node --experimental-vm-modules "$FRONTEND/src/tes
   || echo "[run_agent_e2e] fixture seeding failed (specs self-skip on missing data)"
 
 cd "$FRONTEND"
-exec npx playwright test --config src/test/e2e/playwright.config.ts "${PLAYWRIGHT_ARGS[@]}"
+if [ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]; then
+  exec npx playwright test --config src/test/e2e/playwright.config.ts "${PLAYWRIGHT_ARGS[@]}"
+else
+  exec npx playwright test --config src/test/e2e/playwright.config.ts
+fi

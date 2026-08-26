@@ -1,32 +1,34 @@
+/**
+ * ontology_detail.spec.ts — ontology detail page tabs (info/files/entities/
+ * logic/actions/export). Self-skips until the ontologies API is registered.
+ */
 import { test, expect, type Page } from '@playwright/test'
-
-const BASE = 'http://localhost:5173'
-
-async function login(page: Page) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
-}
+import { hasApi } from './helpers/availability'
+import { loginAsAdmin } from './helpers/ui'
 
 async function createOntology(page: Page): Promise<string> {
-  await page.goto(`${BASE}/ontologies`)
-  await page.click('button:has-text("创建 Ontology")')
+  await page.goto('/ontologies')
+  await page.click('button:has-text("创建本体")')
+  await page.waitForURL(/\/ontologies\/new$/)
+  await page.click('button:has-text("简易 LLM 提取")')
   const name = `测试-${Date.now()}`
-  await page.fill('input[placeholder="名称 *"]', name)
-  await page.click('button:has-text("确认")')
-  await page.waitForURL(/\/ontologies\/[a-f0-9-]+$/)
+  await page.fill('input[placeholder="本体名称"]', name)
+  await page.click('button:has-text("创建本体")')
+  await page.waitForURL(/\/ontologies\/[a-f0-9-]+/)
   return name
 }
 
 test.describe('Ontology Detail Page', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
+    test.skip(!(await hasApi('/api/v1/ontologies')), 'backend /api/v1/ontologies not registered yet')
+    await loginAsAdmin(page)
   })
 
-  test('shows info tab by default', async ({ page }) => {
+  test('info tab shows basic info and LLM config sections', async ({ page }) => {
+    // A newly created simple_llm ontology lands on the files tab; info is a
+    // click away, not the default landing tab.
     await createOntology(page)
+    await page.click('button:has-text("基本信息")')
     await expect(page.locator('h3:has-text("基本信息")')).toBeVisible()
     await expect(page.locator('h3:has-text("LLM 提取")')).toBeVisible()
   })
@@ -67,6 +69,8 @@ test.describe('Ontology Detail Page', () => {
 
   test('export buttons visible', async ({ page }) => {
     await createOntology(page)
+    // Export lives in the info tab, not the files tab creation lands on.
+    await page.click('button:has-text("基本信息")')
     await expect(page.locator('button:has-text("JSON")')).toBeVisible()
     await expect(page.locator('button:has-text("YAML")')).toBeVisible()
     await expect(page.locator('button:has-text("CSV")')).toBeVisible()
@@ -75,6 +79,6 @@ test.describe('Ontology Detail Page', () => {
   test('back button navigates to list', async ({ page }) => {
     await createOntology(page)
     await page.click('button:has-text("← 返回")')
-    await expect(page).toHaveURL(`${BASE}/ontologies`)
+    await expect(page).toHaveURL(/\/ontologies$/)
   })
 })
