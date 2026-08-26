@@ -13,7 +13,7 @@ test('FE-01 list: create affordance navigates to the wizard', async ({ page }) =
   await loginAsAdmin(page)
   await page.goto('/agents')
   await expect(page).toHaveURL(/\/agents$/)
-  const create = page.locator('button:has-text("新建 Agent"), button:has-text("Create Agent")').first()
+  const create = page.locator('button:has-text("新建智能体"), button:has-text("New Agent")').first()
   await expect(create).toBeVisible()
   await create.click()
   await expect(page).toHaveURL(/\/agents\/new$/)

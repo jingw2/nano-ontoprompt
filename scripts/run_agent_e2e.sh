@@ -100,7 +100,7 @@ curl -fsS "$API_BASE/health" >/dev/null || { echo "[run_agent_e2e] API did not b
 echo "[run_agent_e2e] API healthy"
 
 echo "[run_agent_e2e] seeding MVP fixture"
-AGENT_E2E_API_BASE="$API_BASE" node --experimental-vm-modules "$FRONTEND/src/test/e2e/fixtures/agentMvp.ts" \
+AGENT_E2E_API_BASE="$API_BASE" node --experimental-strip-types "$FRONTEND/src/test/e2e/fixtures/agentMvp.ts" \
   || echo "[run_agent_e2e] fixture seeding failed (specs self-skip on missing data)"
 
 cd "$FRONTEND"

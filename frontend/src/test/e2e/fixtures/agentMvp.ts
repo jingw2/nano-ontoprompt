@@ -8,7 +8,7 @@
  * are env-driven; the seeder fails softly (specs self-skip on missing data).
  *
  * Run: AGENT_E2E_DB_URL=... AGENT_E2E_API_BASE=... \
- *        node --experimental-vm-modules frontend/src/test/e2e/fixtures/agentMvp.ts
+ *        node --experimental-strip-types frontend/src/test/e2e/fixtures/agentMvp.ts
  */
 import { execFileSync } from 'node:child_process'
 

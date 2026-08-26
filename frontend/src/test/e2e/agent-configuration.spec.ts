@@ -16,8 +16,18 @@ test('FE-02 detail: five tabs render with the Application tab live', async ({ pa
     test.skip(true, 'no agents seeded')
     return
   }
-  for (const tab of ['Basic', 'System Prompt', 'Tools', 'Memory', 'Agent Application']) {
-    await expect(page.locator(`button:has-text("${tab}")`).first()).toBeVisible()
+  const tabs: [string, string][] = [
+    ['Basic', '基本信息'],
+    ['System Prompt', '系统提示词'],
+    ['Tools', '工具'],
+    ['Memory', '记忆'],
+    ['Agent Application', '智能体应用'],
+  ]
+  for (const [en, zh] of tabs) {
+    await expect(
+      page.locator(`button:has-text("${en}")`).first()
+        .or(page.locator(`button:has-text("${zh}")`).first()),
+    ).toBeVisible()
   }
 })
 
@@ -28,7 +38,7 @@ test('FE-03 prompt generation: draft and provenance surface', async ({ page }) =
     test.skip(true, 'no agents seeded')
     return
   }
-  await page.locator('button:has-text("System Prompt")').first().click()
+  await page.locator('button:has-text("System Prompt"), button:has-text("系统提示词")').first().click()
   await expect(page.locator('textarea').first()).toBeVisible()
   await expect(page.locator('button:has-text("Generate"), button:has-text("生成")').first()).toBeVisible()
 })

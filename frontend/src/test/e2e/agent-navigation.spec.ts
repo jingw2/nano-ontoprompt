@@ -53,8 +53,8 @@ test('agents route, bilingual sidebar entry, server-filtered list shell', async 
   await page.goto('/agents')
   await expect(page).toHaveURL(/\/agents$/)
   await expect(
-    page.locator('button:has-text("新建 Agent")').first()
-      .or(page.locator('button:has-text("Create Agent")').first()),
+    page.locator('button:has-text("新建智能体")').first()
+      .or(page.locator('button:has-text("New Agent")').first()),
   ).toBeVisible()
   await expect(page.locator('th', { hasText: 'ID' }).first()).toBeVisible()
 })
