@@ -4,7 +4,7 @@
 
 **Goal:** Stabilize the current Ontexus release and implement the approved enterprise Agent decision and governance infrastructure: versioned semantic snapshots, one transport-neutral Runtime, trusted delegated access, snapshot-backed simulation, and governed PostgreSQL/MySQL writeback.
 
-**Architecture:** The existing pipeline and ontology release become the data and semantic foundation. A shared RuntimeService owns snapshot-pinned investigation, policy evaluation, action-plan creation, and execution contracts; REST, Python SDK, MCP, and the built-in Agent are adapters to it. Phase 3 adds an immutable managed-action plan, snapshot simulation, risk routing, and a server-side row writer with one exact target and parameter set.
+**Architecture:** The existing pipeline and ontology release become the data and semantic foundation. A durable refresh layer normalizes batch, micro-batch polling, and bounded event-driven changes into versioned DatasetVersion/PipelineRun inputs with cursor and lineage state. A shared RuntimeService owns snapshot-pinned investigation, policy evaluation, action-plan creation, and execution contracts; REST, Python SDK, MCP, and the built-in Agent are adapters to it. Phase 3 adds an immutable managed-action plan, snapshot simulation, risk routing, and a server-side row writer with one exact target and parameter set.
 
 **Tech Stack:** FastAPI, Pydantic, SQLAlchemy, Alembic, PostgreSQL 16, MySQL 8, Redis/Celery, Python 3.11/3.12, React 19, TypeScript 6, Vitest, Playwright 1.60, and the existing OAuth/PKCE implementation.
 
@@ -16,6 +16,10 @@
 - Python remains >=3.11; backend CI keeps Python 3.11 and 3.12; frontend CI uses Node 22.14.0 and npm 11.2.0.
 - PostgreSQL 16 remains the primary application database. Phase 3 writer coverage includes PostgreSQL and MySQL 8 with synthetic databases only.
 - Every Runtime entry point calls the same RuntimeService; adapters contain transport mapping only and never implement alternate authorization, policy, hashing, or writes.
+- Enterprise refresh supports only the explicit `RefreshPolicy` values `batch`, `micro_batch`, and `event_driven`; all ingestion is at-least-once, cursor-driven, idempotent, and produces immutable DatasetVersion/PipelineRun lineage before a new SemanticSnapshot.
+- Event-driven refresh is limited to managed webhook, managed outbox, and one external CDC adapter contract with a local test double. This plan is not an arbitrary stream-processing platform and does not implement or accept arbitrary Kafka/broker sources.
+- Production CDC delivery remains conditional on an enterprise-provided CDC producer/broker, network route, credentials, retention, and operational ownership; the repository implements the adapter contract, signature/schema checks, inbox/lease/DLQ/replay behavior, and local tests only.
+- A source cursor advances only after the input DatasetVersion is durable and the associated PipelineRun outcome is recorded; overlap re-reads and retries must not mutate an existing DatasetVersion or SemanticSnapshot.
 - SemanticSnapshot is immutable and binds one published ontology release, the complete dataset-version set, the complete originating pipeline-run set, quality and evidence summaries, and a canonical materialization hash.
 - Runtime identity is derived only from a verified credential. Request-body, query-string, or MCP agent_id/user_id values never establish authority.
 - Effective access is Agent capability ∩ user entitlement ∩ runtime policy; missing, mismatched, expired, revoked, or cross-security-domain delegation returns a structured denial.
@@ -26,7 +30,7 @@
 - Rollback is a new governed action plan. Unknown outcomes create reconciliation cases and are never blindly replayed.
 - Tests use deterministic no-PII fixtures. Existing untracked files under ref/ and test_data/ are read-only inputs and must not be added, rewritten, or deleted. The runtime corpus may use only public test sentinels such as runtime/runtime, vault:runtime-db, and example.invalid; these are not real credentials and must never be used outside test infrastructure.
 - Runtime fixture manifests never contain raw access tokens, refresh tokens, signing keys, private keys, cloud credentials, production URIs, or real email/phone values. Test-only database passwords remain only in the isolated database Compose file and are scanned as the literal public sentinel runtime.
-- The fixture registry is authoritative: every case has layers and at least one syntactically valid test-target descriptor; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, and E2E cases name a Playwright target. Full target collect/list verification is a Task 22 gate after all referenced tests are implemented.
+- The fixture registry is authoritative: every case has layers and at least one syntactically valid test-target descriptor; database cases name both postgresql and mysql, parity cases name rest, sdk, mcp, and reference-agent, refresh cases name their refresh mode and source contract, and E2E cases name a Playwright target. Full target collect/list verification is a Task 28 gate after all referenced tests are implemented.
 - Every task follows TDD: add a focused failing test, run the named command and record the failure, implement the smallest change, run the named passing command, then commit only the listed files.
 
 ## File and Interface Map
@@ -34,6 +38,7 @@
 | Area | Files | Responsibility |
 | --- | --- | --- |
 | Stabilization | docker-compose.v2.yml, docker-compose.agent.yml, .github/workflows/agent-mvp.yml, backend/scripts/verify_build_manifest.py, backend/pyproject.toml, README files | Current migration source of truth, service ordering, CI matrix, runtime documentation |
+| Enterprise refresh | backend/app/models/v2/refresh.py, backend/app/schemas/refresh.py, backend/app/services/v2/incremental/*, backend/app/services/v2/scheduler/*, backend/app/tasks/v2/refresh_tasks.py, backend/app/routers/v2/refresh.py, backend/tests/v2/incremental/* | Durable source refresh contract, schedules, cursors, polling, bounded event ingestion, retries/DLQ/replay, freshness, and refresh operations |
 | Semantic foundation | backend/app/models/semantic_snapshot.py, backend/app/services/runtime/snapshots.py, backend/app/services/runtime/lineage.py, backend/app/schemas/runtime_snapshot.py | Immutable snapshot, complete input lineage, quality/evidence summaries, materialization hash |
 | Runtime identity and policy | backend/app/models/runtime_identity.py, backend/app/services/runtime/credentials.py, backend/app/deps/runtime.py, backend/app/services/runtime/policy.py | Registered service identity, token-exchange delegation, verified context, intersection policy |
 | Runtime contracts | backend/app/schemas/runtime.py, backend/app/models/runtime_plan.py, backend/app/services/runtime/service.py, backend/app/services/runtime/canonical.py | Investigation, action-plan, stable denial, canonical semantic results and hashes |
@@ -55,6 +60,8 @@ The current corpus is sufficient for data-ingestion and ontology-authoring regre
 - backend/tests/{agent,v2,evals}/ provides backend test fixtures and current migration, pipeline, publication, OAuth, MCP, and evaluation patterns.
 - frontend/src/test/e2e/, frontend/src/test/e2e/fixtures/, frontend/e2e-review/, and frontend/playwright.config.ts provide browser setup, authenticated fixtures, route helpers, and existing operator-flow conventions.
 
+The existing corpus does not contain durable refresh lifecycle state. Its rows and schemas can be reused as source payloads, but refresh tests require a separate generated case file and synthetic source metadata; no existing production-like connection or event stream is treated as a refresh oracle.
+
 ### Required additions
 
 The current assets do not cover the new contracts. Add a separate runtime corpus with synthetic IDs and no real credentials:
@@ -63,6 +70,7 @@ The current assets do not cover the new contracts. Add a separate runtime corpus
 - Identity cases: valid delegation, missing credential, malformed signature, wrong audience, missing scope, expired token, revoked token, inactive Agent, inactive user, cross-domain token, Agent-only capability, and user-only entitlement.
 - Runtime cases: evidence citations, rule outcomes, ALLOW with data, ALLOW with no matches, structured DENY, policy denial, immutable read-only plan, writable plan binding, expired plan, and stable denial codes.
 - Execution cases: low-risk reversible automatic update, high-risk exact-hash HITL update, ambiguous/rejected plan, binding draft/revoked state, binding version drift, connection-target drift, parameter/selector drift, before-image/version conflict, row-count zero/two, idempotent retry, timeout/unknown outcome, reconciliation, and rollback-plan creation.
+- Refresh cases: normal non-empty batch, empty batch, late event, equal-watermark/different-primary-key, duplicate event, out-of-order event, failed retry, cursor non-advance, DLQ/replay, expired webhook, replay attack, schema drift, T+1 timezone/business-calendar run, bounded backfill, and CDC ordering.
 - Database cases: identical logical rows and version columns in PostgreSQL and MySQL, plus a second fixture whose target row changes between plan and execution.
 - Transport cases: equivalent REST, SDK, MCP, and reference-Agent requests with different envelopes, request IDs, and presentation metadata.
 
@@ -76,6 +84,7 @@ Add these deterministic files; generated output is checked by a manifest and is 
 - test_data/runtime/fixtures/runtime_cases.json
 - test_data/runtime/fixtures/execution_cases.json
 - test_data/runtime/fixtures/transport_cases.json
+- test_data/runtime/fixtures/refresh_cases.json
 - test_data/runtime/registry.py
 - test_data/runtime/playwright_seed.json
 - test_data/runtime/db/docker-compose.yml
@@ -91,20 +100,21 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - sdk: a full SDK pytest node ID such as sdk/tests/test_runtime_client.py::test_sdk_injects_delegation_and_decodes_investigation; or
 - playwright: a spec path and exact test title such as frontend/src/test/e2e/runtime-governance.spec.ts::operator approves the exact plan hash and sees the receipt.
 
-registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 22 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; it does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–22 have created those tests.
+registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 28 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; refresh cases additionally require `refresh_mode` in `{batch, micro_batch, event_driven}`, a `source_contract`, and an expected cursor/terminal outcome. It does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–27 have created those tests.
 
 ### Coverage matrix
 
 | Test purpose | Fixture source | Required assertions |
 | --- | --- | --- |
 | Normal pipeline and ontology | Existing domain corpus plus snapshots.json | Completed lineage, published release, quality/evidence summaries, reproducible materialization |
+| Source refresh | refresh_cases.json plus synthetic source rows/events and both SQL seeds | Batch/micro-batch/event-driven modes, cursor monotonicity, at-least-once dedupe, schedule/SLA, retry/DLQ/replay, lag and provenance |
 | Edge and boundary | Existing edge_cases/* plus reordered, empty, expired, and multi-input runtime cases | Empty result is allowed, hash is order-independent, limits and expiry are deterministic |
 | Negative and security | identities.json, runtime_cases.json, execution_cases.json | Stable denial codes, no protected data leakage, no caller identity spoofing, no secret/SQL acceptance |
-| Unit and function | JSON cases loaded by backend/tests/runtime/test_*.py | Pure canonicalization, policy, target freezing, risk classification, error mapping |
+| Unit and function | JSON cases loaded by backend/tests/runtime/test_*.py and backend/tests/v2/incremental/test_*.py | Pure cursor ordering, envelope normalization, schedule calculation, dedupe, freshness, canonicalization, policy, target freezing, risk classification, and error mapping |
 | API/SDK/MCP/reference parity | transport_cases.json | Same normalized result and canonical plan_hash, independent of envelopes and tracing IDs |
 | PostgreSQL/MySQL integration | Both SQL seed directories and db/docker-compose.yml | Row update, exact row count, optimistic locking, timeout, binding drift, idempotency, unknown outcome |
-| Playwright E2E | playwright_seed.json plus registry Playwright targets | Investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
-| Case-to-test traceability | manifest.json plus registry.py | Task 1 validates descriptor/schema/metadata binding; Task 22 verifies every target is collectable/listable, with required dialects, transports, and Playwright marker |
+| Playwright E2E | playwright_seed.json plus registry Playwright targets | Refresh schedule, cursor/lag, failed/DLQ replay status, investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
+| Case-to-test traceability | manifest.json plus registry.py | Task 1 validates descriptor/schema/metadata binding; Task 28 verifies every target is collectable/listable, with required dialects, transports, refresh modes, and Playwright marker |
 
 ### Task 1: Create the runtime test-data inventory and generator
 
@@ -133,9 +143,10 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - Produces generate(seed: int, output_dir: Path) -> dict and validate_manifest(output_dir: Path) -> None.
 - Produces fixture records with case_id, expected, coverage, layers, and test_targets; uses synthetic tenants tenant-acme and tenant-beta, synthetic users, and synthetic row IDs.
-- Produces PostgreSQL and MySQL schemas with the same managed_targets logical table, primary key target_id, writable field status, and optimistic-lock field row_version.
+- Produces PostgreSQL and MySQL schemas with the same managed_targets logical table, primary key target_id, writable field status, optimistic-lock field row_version, and synthetic refresh_source_rows/refresh_event_log tables containing stable source/resource/cursor/sequence fixtures.
 - Produces test_data/runtime/db/docker-compose.yml with PostgreSQL published on host port 55432 and MySQL published on host port 53306; both use database runtime, user runtime, password runtime, healthchecks, and only synthetic seed rows.
-- Produces a registry entry for every case. Each database case has dialects exactly ["mysql", "postgresql"], each parity case has transports exactly ["mcp", "reference-agent", "rest", "sdk"], and each E2E case has at least one Playwright target.
+- Produces a registry entry for every case. Each database case has dialects exactly ["mysql", "postgresql"], each parity case has transports exactly ["mcp", "reference-agent", "rest", "sdk"], each refresh case has at least one exact polling/event/schedule pytest target, and each E2E case has at least one Playwright target.
+- Produces refresh cases with `refresh_mode` in `batch`, `micro_batch`, or `event_driven`, a `source_contract` in `watermark_primary_key` or `opaque_source_cursor`, and an expected `cursor_outcome` in `advanced`, `unchanged`, or `dead_lettered`.
 - Produces test_no_pii_or_real_secret() in test_fixture_manifest.py. Its deterministic scan rejects `-----BEGIN .*PRIVATE KEY-----`, bearer/JWT strings, non-sentinel access_token/refresh_token values, `AKIA[0-9A-Z]{16}` or other cloud-account markers, `postgresql://`/`mysql://` production hosts, cloud-provider URIs, non-`.invalid` email domains, and phone patterns such as `[+]?[0-9][0-9 ()-]{8,}`; runtime/runtime, vault:runtime-db, and example.invalid are explicitly test-only sentinels.
 
 - [ ] **Step 1: Write the failing manifest test.**
@@ -161,6 +172,10 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
                 assert set(case["dialects"]) == {"mysql", "postgresql"}
             if "parity" in case["layers"]:
                 assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
+            if "refresh" in case["layers"]:
+                assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
+                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor"}
+                assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
             if "playwright" in case["layers"]:
                 assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
@@ -172,9 +187,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the generator and fixtures.**
 
-    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, and Playwright case, and no real credential material. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
+    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, refresh, and Playwright case, and no real credential material. `refresh_cases.json` must include stable cases named `normal`, `empty`, `late`, `equal-watermark`, `duplicate`, `out-of-order`, `failed-retry`, `cursor-nonadvance`, `dlq-replay`, `expired-webhook`, `replay-attack`, `schema-drift`, `backfill`, `t1-timezone`, and `cdc-ordering`; `playwright_seed.json` must include schedule/cursor/lag and dead-letter/replay states. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
 
-    Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, and E2E cases with an exact Playwright spec/title. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
+    Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, refresh cases with their mode/source-contract/cursor-outcome metadata, and E2E cases with an exact Playwright spec/title. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
 
 - [ ] **Step 4: Run generation and the focused test.**
 
@@ -191,7 +206,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_valid_registered_target_descriptor -q)
 
-    Expected: generation is idempotent, no PII or real-secret pattern is found, every manifest case has exactly one registry representation, and every target has valid kind/path/title syntax plus required dialect/transport/E2E metadata. Target collect/list checks intentionally remain in Task 22 after the referenced tests exist.
+    Expected: generation is idempotent, no PII or real-secret pattern is found, every manifest case has exactly one registry representation, and every target has valid kind/path/title syntax plus required dialect/transport/E2E/refresh metadata. Target collect/list checks intentionally remain in Task 28 after the referenced tests exist.
 
 - [ ] **Step 5: Commit only the runtime corpus.**
 
@@ -276,7 +291,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - [ ] **Step 1: Add the failing current-schema assertions.**
 
     def test_schema_contract_uses_resolved_head_and_memory_tables():
-        assert resolve_current_head() == "0020_agent_memory_recall_index"
+        assert resolve_current_head() == "0021_mapping_entity_class_cn"
         assert {"agent_turn_checkpoints", "agent_turn_checkpoint_writes"} <= registered_tables()
         assert pytest_config()["asyncio_default_test_loop_scope"] == "function"
 
@@ -432,9 +447,414 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "docs: align runtime startup requirements"
 
-### Milestone 2 — Unified Semantic Runtime
+### Milestone 2 — Enterprise Data Refresh and Unified Semantic Runtime
 
-### Task 6: Add the immutable SemanticSnapshot schema and lineage tables
+### Workstream 2A — Enterprise Data Refresh and Incremental Lineage
+
+### Task 6: Define durable source refresh contracts and persistence
+
+- [ ] **Deliverable:** A single typed refresh contract persists source policy, cursor, run lease, idempotency, deduplication, durable input lineage, retry state, and dead-letter state for every supported refresh mode.
+
+**Files:**
+
+- Create: backend/app/schemas/refresh.py
+- Create: backend/app/models/v2/refresh.py
+- Modify: backend/app/models/v2/connection.py
+- Modify: backend/app/models/v2/dataset.py
+- Modify: backend/app/models/v2/pipeline.py
+- Modify: backend/app/models/v2/__init__.py
+- Modify: backend/app/models/__init__.py
+- Create: backend/alembic/versions/0022_refresh_contract.py
+- Create: backend/app/services/v2/incremental/contract.py
+- Create: backend/tests/v2/incremental/test_refresh_contract.py
+
+**Interfaces:**
+
+- `RefreshPolicy` is an enum with exactly `batch`, `micro_batch`, and `event_driven`; a connection/resource may select one mode and one cursor contract: `watermark_primary_key` or `opaque_source_cursor`.
+- `SourceCursor` is an immutable value with `source_id`, `resource`, `contract`, `watermark`, `primary_key`, `opaque_value`, and `observed_at`. A watermark cursor compares `(watermark, primary_key)` lexicographically; an opaque cursor compares only the source-provided opaque value.
+- `ChangeEnvelope` is an immutable value with `event_id`, `source_id`, `resource`, `operation` (`upsert` or `delete`), normalized `primary_key`, `payload`, `watermark`, `source_cursor`, `schema_hash`, optional `partition`/`sequence`, `occurred_at`, and `received_at`.
+- `RefreshRun` stores policy, trigger, status (`queued|running|succeeded|failed|dead_lettered`), cursor before/after, input and output DatasetVersion IDs, PipelineRun ID, source provenance, quality summary, lag, duplicate/late counts, retry count, idempotency key, lease owner/expiry, and terminal timestamps. `RefreshInboxEvent`, `RefreshOutboxEvent`, and `RefreshDeadLetter` store durable event identity/hash, processing state, delivery attempts, and replay status.
+- `PipelineRunInput` is an authoritative association with `pipeline_run_id`, `dataset_version_id`, source cursor/provenance, and input ordinal; it supports multi-source runs while the existing singular `PipelineRun.dataset_version_id` remains a backwards-compatible primary/output pointer and is never the complete lineage set.
+- `RefreshSchedule` stores a source or pipeline target, cron expression, IANA timezone, business-calendar identifier and excluded dates, SLA seconds, retry policy, backfill window, enabled state, next due time, last dispatched run, and a uniqueness key for the target.
+- `normalize_change_envelope(raw: Mapping[str, object], *, source_id: str, resource: str, received_at: datetime) -> ChangeEnvelope` rejects missing event identity, source/resource mismatch, invalid cursor shape, or schema hash drift.
+- `cursor_order(left: SourceCursor, right: SourceCursor) -> int` returns `-1`, `0`, or `1`; `dedupe_key(envelope: ChangeEnvelope) -> str` returns a stable SHA-256 key over source, resource, event identity, cursor, primary key, operation, and canonical payload.
+- `claim_refresh_run(db: Session, *, source_id: str, resource: str, policy: RefreshPolicy, idempotency_key: str, lease_owner: str, now: datetime, lease_seconds: int) -> RefreshRun` atomically reuses an existing idempotent run, rejects an active lease, or creates a queued run with the current cursor.
+- `record_refresh_outcome(db: Session, *, run_id: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str, next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object], now: datetime) -> RefreshRun` records every durable dataset/pipeline input association and advances the cursor in one transaction; failure leaves the cursor unchanged.
+
+- [ ] **Step 1: Write failing contract, uniqueness, lease, and cursor tests.**
+
+    def test_watermark_cursor_orders_equal_timestamps_by_primary_key():
+        older = SourceCursor(source_id="source-001", resource="orders", contract="watermark_primary_key", watermark="2026-08-26T01:00:00Z", primary_key="100", opaque_value=None, observed_at=FIXED_NOW)
+        newer = SourceCursor(source_id="source-001", resource="orders", contract="watermark_primary_key", watermark="2026-08-26T01:00:00Z", primary_key="101", opaque_value=None, observed_at=FIXED_NOW)
+        assert cursor_order(older, newer) == -1
+
+    def test_duplicate_event_has_one_durable_inbox_identity(db):
+        first = persist_fixture_event(db, event_id="evt-001")
+        second = persist_fixture_event(db, event_id="evt-001")
+        assert first.id == second.id
+        assert count_fixture_inbox_events(db, "evt-001") == 1
+
+    def test_active_lease_and_idempotency_are_fail_closed(db):
+        run = claim_fixture_run(db, idempotency_key="refresh-001", lease_owner="worker-a")
+        assert claim_fixture_run(db, idempotency_key="refresh-001", lease_owner="worker-a").id == run.id
+        with pytest.raises(RefreshLeaseError):
+            claim_fixture_run(db, idempotency_key="refresh-002", lease_owner="worker-b")
+
+    def test_pipeline_run_records_all_input_versions(db):
+        run = persist_fixture_pipeline_run(db, input_dataset_version_ids=["dataset-version-001", "dataset-version-002"])
+        assert list_pipeline_inputs(db, run.id) == ["dataset-version-001", "dataset-version-002"]
+
+    def test_failed_outcome_does_not_advance_source_cursor(db):
+        run = fixture_run_with_cursor(db, watermark="2026-08-26T01:00:00Z", primary_key="100")
+        mark_fixture_failed(db, run.id)
+        assert read_fixture_cursor(db).primary_key == "100"
+
+- [ ] **Step 2: Run the focused tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_contract.py -q)
+
+    Expected: FAIL because the refresh schemas, durable models, migration, and contract service do not exist.
+
+- [ ] **Step 3: Implement the minimum durable contract.**
+
+    Add the typed Pydantic/domain values and SQLAlchemy tables, register all models, and create migration `0022_refresh_contract.py` with `down_revision` set to the current Alembic head resolved by Task 2 (currently `0021_mapping_entity_class_cn` in this checkout). Add uniqueness on `(source_id, resource, event_id)` and idempotency keys, a lease-expiry index, append-only event/run state transitions, and JSON columns for opaque cursors/provenance/quality summaries. Store cursor before/after and input DatasetVersion/PipelineRun references explicitly; never treat a request-body cursor or event ID as trusted identity without source validation.
+
+- [ ] **Step 4: Run contract, migration, and model checks.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_contract.py -q)
+    (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/models/test_v2_schema.py tests/v2/incremental/test_refresh_contract.py -q)
+
+    Expected: PASS for both cursor contracts, duplicate-event idempotency, active-lease fencing, immutable run state, and cursor non-advance after failure; the migration has one head and registers every refresh table.
+
+- [ ] **Step 5: Commit the refresh contract.**
+
+    git add backend/app/schemas/refresh.py backend/app/models/v2/refresh.py backend/app/models/v2/connection.py backend/app/models/v2/dataset.py backend/app/models/v2/pipeline.py backend/app/models/v2/__init__.py backend/app/models/__init__.py backend/alembic/versions/0022_refresh_contract.py backend/app/services/v2/incremental/contract.py backend/tests/v2/incremental/test_refresh_contract.py
+    git commit -m "feat: add durable enterprise refresh contract"
+
+### Task 7: Persist T+1 schedules and dispatch them through Celery beat
+
+- [ ] **Deliverable:** T+1 and other cron schedules are persisted with enterprise timing controls and Celery beat actually dispatches due refresh runs; validation alone never reports a schedule as active.
+
+**Files:**
+
+- Create: backend/app/services/v2/scheduler/schedule_service.py
+- Create: backend/app/tasks/v2/refresh_tasks.py
+- Modify: backend/app/services/v2/scheduler/cron_service.py
+- Modify: backend/app/tasks/v2/connection_sync.py
+- Modify: backend/app/tasks/celery_app.py
+- Modify: backend/app/routers/v2/connections.py
+- Create: backend/tests/v2/incremental/test_refresh_schedule.py
+- Create: backend/tests/v2/incremental/test_refresh_schedule_integration.py
+- Modify: backend/tests/v2/connection/test_scheduler.py
+
+**Interfaces:**
+
+- `ScheduleRequest` contains `target_type` (`connection` or `pipeline`), `target_id`, `cron_expr`, IANA `timezone`, `business_calendar`, `sla_seconds`, `retry_policy`, `backfill_window_seconds`, and `enabled`.
+- `upsert_refresh_schedule(db: Session, request: ScheduleRequest, *, now: datetime) -> RefreshSchedule` validates the five-field cron, timezone, non-negative SLA/backfill, and bounded retry policy, computes the next due instant in UTC, and persists the schedule.
+- `dispatch_due_schedules(db: Session, *, now: datetime, lease_owner: str, send_refresh: Callable[[str, str, str], str]) -> list[str]` claims each due schedule once, skips excluded business-calendar dates, creates an idempotent `RefreshRun`, advances `next_due_at`, stores `last_dispatched_run_id`, and calls `send_refresh(target_type, target_id, run_id)` only after the claim is committed so the task consumes the already-created run.
+- Celery task `refresh.dispatch_due_schedules()` calls `dispatch_due_schedules` with a worker lease owner; `refresh.connection` and `refresh.pipeline` call the durable refresh service. `celery_app.beat_schedule` contains `refresh-schedule-dispatch` at a short fixed interval; dynamic schedules remain in the database rather than being generated as untracked beat entries.
+- `sync_connection(connection_id: str, mode: str = "full") -> dict` and `sync_all_connections() -> list[dict]` remain compatibility wrappers over `refresh_tasks`, never `pass`. The connection sync route imports `app.tasks.v2.refresh_tasks.refresh_connection_task` and never references the nonexistent `sync_tasks` module.
+- `CronService.schedule_connection_sync` and `schedule_pipeline_run` delegate to the persistence service when given a database session; their return value is `status="scheduled"` only after a row is persisted and the next due time is computed.
+
+- [ ] **Step 1: Write failing schedule and beat-dispatch tests.**
+
+    def test_t_plus_one_schedule_persists_timezone_calendar_sla_and_retry(db):
+        schedule = upsert_fixture_schedule(db, cron_expr="0 2 * * *", timezone="Asia/Shanghai", business_calendar=["2026-10-01"], sla_seconds=86400, backfill_window_seconds=172800)
+        assert schedule.timezone == "Asia/Shanghai"
+        assert schedule.business_calendar == ["2026-10-01"]
+        assert schedule.sla_seconds == 86400
+        assert schedule.next_due_at.tzinfo is not None
+
+    def test_due_schedule_is_dispatched_once_after_persistent_claim(db):
+        sent = []
+        ids = dispatch_due_schedules(db, now=FIXED_NOW, lease_owner="beat-a", send_refresh=lambda kind, target, run_id: sent.append((kind, target, run_id)) or run_id)
+        assert ids == ["run-001"]
+        assert sent == [("connection", "source-001", "run-001")]
+        assert dispatch_due_schedules(db, now=FIXED_NOW, lease_owner="beat-b", send_refresh=lambda *_: "run-002") == []
+
+    def test_beat_has_real_refresh_dispatch_entry():
+        assert celery_app.conf.beat_schedule["refresh-schedule-dispatch"]["task"] == "refresh.dispatch_due_schedules"
+
+    def test_schedule_integration_uses_isolated_database_and_no_shared_schedule_rows(isolated_schedule_db):
+        create_fixture_schedule(isolated_schedule_db, target_id="source-isolated")
+        dispatch_due_schedules(isolated_schedule_db, now=FIXED_NOW, lease_owner="isolated-beat", send_refresh=record_sent_run)
+        assert list_schedule_targets(isolated_schedule_db) == ["source-isolated"]
+
+- [ ] **Step 2: Run the focused schedule tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_schedule_integration.py tests/v2/connection/test_scheduler.py -q)
+
+    Expected: FAIL because the current CronService only parses and logs, no schedule row is stored, Celery beat has no refresh entry, and the connection route imports `app.tasks.v2.sync_tasks`.
+
+- [ ] **Step 3: Implement persistent scheduling and task dispatch.**
+
+    Add schedule persistence and timezone/business-calendar calculation with `zoneinfo`, use a database lease/idempotency key for due dispatch, and add retry/backfill/SLA fields without creating an unbounded scheduler. Register the refresh task module in Celery, add the fixed beat dispatcher, replace the connection route's broken import, and make the compatibility wrappers call the same refresh task. Keep schedule dispatch independent of Redis availability by retaining a queued run when publishing fails.
+
+- [ ] **Step 4: Run unit, isolated integration, and Compose task-registration checks.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_schedule_integration.py tests/v2/connection/test_scheduler.py -q)
+    (cd "$REPO_ROOT/backend" && python -c 'from app.tasks.celery_app import celery_app; assert "refresh.dispatch_due_schedules" in {v["task"] for v in celery_app.conf.beat_schedule.values()}')
+
+    Expected: PASS for T+1 timezone and calendar calculation, retry/backfill/SLA persistence, one-shot due dispatch, isolated schedule state, real task registration, and fixed compatibility imports.
+
+- [ ] **Step 5: Commit persistent scheduling.**
+
+    git add backend/app/services/v2/scheduler/schedule_service.py backend/app/tasks/v2/refresh_tasks.py backend/app/services/v2/scheduler/cron_service.py backend/app/tasks/v2/connection_sync.py backend/app/tasks/celery_app.py backend/app/routers/v2/connections.py backend/tests/v2/incremental/test_refresh_schedule.py backend/tests/v2/incremental/test_refresh_schedule_integration.py backend/tests/v2/connection/test_scheduler.py
+    git commit -m "feat: dispatch persisted refresh schedules"
+
+### Task 8: Implement semi-real-time polling with durable cursors and versioned pipeline inputs
+
+- [ ] **Deliverable:** SQL, REST, and Mongo polling use a shared cursor/overlap/dedupe contract, advance only after durable DatasetVersion and PipelineRun outcomes, and expose retry, DLQ, late-data, and lag state; structured Pipeline runs never read hard-coded version 1.
+
+**Files:**
+
+- Create: backend/app/services/v2/incremental/polling.py
+- Modify: backend/app/services/connection/base.py
+- Modify: backend/app/services/connection/sql_connector.py
+- Modify: backend/app/services/connection/rest_connector.py
+- Modify: backend/app/services/connection/mongo_connector.py
+- Modify: backend/app/services/v2/dataset_service.py
+- Modify: backend/app/tasks/v2/pipeline_run.py
+- Modify: backend/app/services/v2/incremental/orchestrator.py
+- Modify: backend/app/tasks/v2/refresh_tasks.py
+- Create: backend/tests/v2/incremental/test_refresh_polling.py
+- Create: backend/tests/v2/incremental/integration/__init__.py
+- Create: backend/tests/v2/incremental/integration/test_refresh_polling_dialects.py
+- Modify: backend/tests/v2/connection/test_sql_connector.py
+- Modify: backend/tests/v2/connection/test_rest.py
+- Modify: backend/tests/v2/connection/test_mongo.py
+
+**Interfaces:**
+
+- `DeltaPage` contains `envelopes: Sequence[ChangeEnvelope]`, `candidate_cursor: SourceCursor`, `source_observed_at`, and `source_lag_seconds`.
+- `ConnectorBase.pull_delta(resource: str, *, cursor: SourceCursor | None, overlap_window: timedelta) -> DeltaPage` is the only incremental connector interface. SQL requires server-owned `watermark_column` and `primary_key_column`; REST passes the configured delta/cursor parameter; Mongo uses its configured opaque/ObjectId cursor. A connector without a valid cursor contract falls back to an explicit full batch and records `cursor_outcome="unchanged"`, never guessing a watermark.
+- `poll_source(db: Session, *, source_id: str, resource: str, lease_owner: str, now: datetime) -> RefreshRunResult` claims a refresh run, reads the persisted cursor, pulls the overlap window, normalizes and deduplicates envelopes, persists a new DatasetVersion and PipelineRun, and advances the cursor only after those durable records and their success outcome commit.
+- `RefreshRunResult` contains run ID, status, input DatasetVersion IDs, PipelineRun ID, cursor before/after, duplicate count, late-event count, retry count, DLQ count, source lag seconds, and provenance.
+- `dedupe_key` is applied before materialization; equal timestamps sort by primary key, late records are included within the overlap window, and out-of-order records do not move the cursor backward. Failed attempts keep the previous cursor, retry with bounded backoff, and move to `RefreshDeadLetter` after the configured maximum; replay creates a new idempotent run rather than mutating the old run.
+- `DatasetService.create_version(..., refresh_run_id: str | None, source_cursor: SourceCursor | None, observed_at: datetime | None) -> DatasetVersion` records refresh provenance. `pipeline_run_task(pipeline_id: str, run_id: str, input_dataset_version_ids: Sequence[str] | None = None)` uses the explicitly pinned input versions, otherwise `Dataset.latest_version_id`/latest approved version, and never calls `preview(dataset_id, 1, ...)` for production refresh.
+- `IncrementalOrchestrator.on_connection_sync` consumes the `RefreshRunResult` and passes its input version/run IDs to the pipeline and later snapshot materialization; it does not create a PipelineRun with only `pipeline_id` and `status`.
+
+- [ ] **Step 1: Write failing polling, cursor, dedupe, retry, DLQ, and version-selection tests.**
+
+    @pytest.mark.parametrize("case_id", ["normal", "empty", "late", "equal-watermark", "duplicate", "out-of-order"])
+    def test_polling_cases_are_deterministic(case_id, polling_fixture):
+        result = run_polling_fixture(case_id, polling_fixture)
+        assert result.status == "succeeded"
+        assert result.duplicate_count >= 0
+        assert result.cursor_after >= result.cursor_before
+
+    def test_failed_retry_keeps_cursor_until_pipeline_success(polling_fixture):
+        result = run_polling_fixture("failed-retry", polling_fixture)
+        assert result.cursor_after == result.cursor_before
+        assert result.retry_count == 1
+
+    def test_dlq_replay_does_not_mutate_failed_run(polling_fixture):
+        failed = run_polling_fixture("dlq-replay", polling_fixture)
+        replay = replay_refresh_fixture(failed.run_id)
+        assert replay.run_id != failed.run_id
+        assert get_refresh_run(failed.run_id).status == "dead_lettered"
+
+    def test_structured_pipeline_uses_pinned_latest_input_not_version_one(pipeline_db):
+        run = run_pipeline_fixture(pipeline_db, input_dataset_version_ids=["dataset-version-002"])
+        assert run.input_dataset_version_ids == ["dataset-version-002"]
+        assert loaded_pipeline_version(pipeline_db) == 2
+
+- [ ] **Step 2: Run polling and connector tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_polling.py tests/v2/connection/test_sql_connector.py tests/v2/connection/test_rest.py tests/v2/connection/test_mongo.py -q)
+
+    Expected: FAIL because connectors accept only a string `since`, no cursor is durable, SQL uses `watermark > since`, failures can fall back to full reads, and structured pipeline code still requests version 1.
+
+- [ ] **Step 3: Implement shared polling and pinned input behavior.**
+
+    Add cursor-aware connector responses and server-owned identifier validation, implement overlap reads with `(watermark, primary_key)` predicates, and apply canonical event dedupe before writing a DatasetVersion. Persist run statistics and source lag, use a lease around each poll, keep the cursor unchanged until the DatasetVersion and PipelineRun succeed, and route exhausted retries to the durable DLQ. Extend DatasetService/PipelineRun metadata and update `_load_source_rows` to accept explicit version IDs or the dataset's latest approved version. Preserve existing full/snapshot connector behavior and compatibility tests.
+
+- [ ] **Step 4: Run unit and both-dialect integration tests.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_polling.py tests/v2/connection/test_sql_connector.py tests/v2/connection/test_rest.py tests/v2/connection/test_mongo.py -q)
+    (cd "$REPO_ROOT" && docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait postgres mysql)
+    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/v2/incremental/integration/test_refresh_polling_dialects.py -q)
+
+    Expected: PASS for normal/empty/late/equal-watermark/duplicate/out-of-order events, cursor non-advance on failure, retry/DLQ/replay, observed lag, pinned latest input, and the same durable refresh semantics against PostgreSQL and MySQL sources.
+
+- [ ] **Step 5: Commit semi-real-time polling.**
+
+    git add backend/app/services/v2/incremental/polling.py backend/app/services/connection/base.py backend/app/services/connection/sql_connector.py backend/app/services/connection/rest_connector.py backend/app/services/connection/mongo_connector.py backend/app/services/v2/dataset_service.py backend/app/tasks/v2/pipeline_run.py backend/app/services/v2/incremental/orchestrator.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_refresh_polling.py backend/tests/v2/incremental/integration/__init__.py backend/tests/v2/incremental/integration/test_refresh_polling_dialects.py backend/tests/v2/connection/test_sql_connector.py backend/tests/v2/connection/test_rest.py backend/tests/v2/connection/test_mongo.py
+    git commit -m "feat: add durable semi-real-time refresh polling"
+
+### Task 9: Add bounded event-driven refresh adapters and inbox/DLQ replay
+
+- [ ] **Deliverable:** Managed webhook, outbox, and one bounded external CDC adapter normalize into the same ChangeEnvelope and durable inbox/lease/DLQ path, with signature/replay/schema/order checks; no arbitrary broker consumer is introduced.
+
+**Files:**
+
+- Create: backend/app/services/v2/incremental/event_adapters.py
+- Create: backend/app/services/v2/incremental/event_ingest.py
+- Create: backend/app/routers/v2/refresh_events.py
+- Modify: backend/app/main.py
+- Modify: backend/app/tasks/v2/refresh_tasks.py
+- Create: backend/tests/v2/incremental/test_event_ingest.py
+- Create: backend/tests/v2/incremental/integration/test_event_ingest_integration.py
+
+**Interfaces:**
+
+- `ManagedWebhookAdapter.verify_and_normalize(body: bytes, *, source_id: str, signature: str, timestamp: str, secret_ref: str, now: datetime) -> ChangeEnvelope` verifies an HMAC signature, rejects expired timestamps and duplicate event IDs, and records the source schema hash.
+- `ManagedOutboxAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` accepts only the versioned outbox envelope fields and rejects missing event ID, source/resource mismatch, schema drift, or invalid sequence.
+- `ManagedCdcAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` is the sole CDC adapter in v1. It accepts one documented external producer envelope and does not open Kafka, broker, or arbitrary stream connections. The repository supplies `LocalCdcProducerDouble` in tests for deterministic envelopes.
+- `EventIngestService.accept(db: Session, envelope: ChangeEnvelope, *, lease_owner: str, now: datetime) -> IngestReceipt` writes the inbox idempotently, enforces per-source/resource sequence ordering, claims a consumer lease, and schedules the same refresh materialization path used by polling.
+- `replay_dead_letter(db: Session, *, dead_letter_id: str, operator_id: str, now: datetime) -> RefreshRun` creates a new idempotent run from the stored envelope and retains the original dead-letter record and reason.
+- `POST /api/v2/refresh/events/webhook/{source_id}` verifies the raw signed body before parsing; outbox and CDC adapters are internal ingestion contracts in v1 and are not exposed as arbitrary broker endpoints. The route returns only event/run IDs and status, never source secrets or protected payloads.
+- Durable inbox/outbox state uses one consumer lease per source partition, bounded retries, explicit `dead_lettered` status, and a replay audit record. Equal sequence/event IDs are deduplicated; lower sequence events are held or dead-lettered according to the source contract and never silently applied out of order.
+- Production CDC requires an enterprise-provided CDC producer/broker, network route, credential/secret reference, retention, schema compatibility, and on-call ownership. These deployment prerequisites are recorded in `test_data/runtime/README.md`; no producer or broker is claimed to exist in this repository.
+
+- [ ] **Step 1: Write failing webhook, outbox, CDC, replay, and boundary tests.**
+
+    @pytest.mark.parametrize("case_id", ["expired-webhook", "replay-attack", "schema-drift", "duplicate", "out-of-order", "cdc-ordering"])
+    def test_event_ingest_rejects_or_deduplicates_invalid_cases(case_id):
+        result = run_event_fixture(case_id)
+        assert result.reason_code in {"ACCEPTED", "DUPLICATE_EVENT", "EXPIRED_SIGNATURE", "REPLAY_DETECTED", "SCHEMA_DRIFT", "OUT_OF_ORDER"}
+
+    def test_webhook_signature_is_checked_before_payload_processing():
+        with pytest.raises(EventIngressError) as exc:
+            ingest_fixture_webhook(signature="wrong", body=fixture_body("normal"))
+        assert exc.value.reason_code == "INVALID_SIGNATURE"
+
+    def test_cdc_adapter_uses_local_contract_without_broker_dependency():
+        envelope = LocalCdcProducerDouble().emit("cdc-ordering")
+        assert ManagedCdcAdapter.normalize(envelope, source_id="source-cdc", received_at=FIXED_NOW).event_id
+
+    def test_dlq_replay_creates_new_run_and_retains_original(db):
+        receipt = ingest_fixture_event(db, "dead-lettered")
+        replay = replay_dead_letter(db, dead_letter_id=receipt.dead_letter_id, operator_id="operator-001", now=FIXED_NOW)
+        assert replay.id != receipt.run_id
+        assert original_dead_letter(db, receipt.dead_letter_id).replayed_at is not None
+
+- [ ] **Step 2: Run event tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_event_ingest.py tests/v2/incremental/integration/test_event_ingest_integration.py -q)
+
+    Expected: FAIL because no signed webhook route, durable inbox/consumer lease, bounded CDC adapter, ordering guard, or DLQ replay service exists.
+
+- [ ] **Step 3: Implement only the managed event boundary.**
+
+    Normalize all three supported sources into `ChangeEnvelope`, verify webhook signature/timestamp before parsing, enforce source-owned schema/sequence, and write durable inbox/outbox state before dispatch. Use the same dedupe, lease, DatasetVersion, PipelineRun, and cursor advancement services as Task 8. Keep the CDC implementation as a producer-envelope adapter plus `LocalCdcProducerDouble`; do not add a Kafka client, arbitrary broker URL, generic stream topology, or best-effort direct database listener.
+
+- [ ] **Step 4: Run event, API, and migration checks.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_event_ingest.py tests/v2/incremental/integration/test_event_ingest_integration.py tests/v2/incremental/test_refresh_polling.py -q)
+    (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
+    (cd "$REPO_ROOT" && docker compose -f docker-compose.v2.yml config --quiet)
+
+    Expected: PASS for valid webhook/outbox/CDC envelopes, expired signature, replay attack, duplicate/equal event, out-of-order/CDC ordering, schema drift, lease fencing, DLQ/replay, and no arbitrary broker dependency.
+
+- [ ] **Step 5: Commit bounded event ingestion.**
+
+    git add backend/app/services/v2/incremental/event_adapters.py backend/app/services/v2/incremental/event_ingest.py backend/app/routers/v2/refresh_events.py backend/app/main.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_event_ingest.py backend/tests/v2/incremental/integration/test_event_ingest_integration.py
+    git commit -m "feat: add bounded event-driven refresh adapters"
+
+### Task 10: Expose refresh operations and failure/replay status
+
+- [ ] **Deliverable:** Enterprise operators can inspect schedule, cursor, lag, run, failure, and DLQ/replay status and can trigger bounded runs/backfills through authenticated API operations that reuse the refresh services.
+
+**Files:**
+
+- Create: backend/app/services/v2/incremental/operations.py
+- Create: backend/app/routers/v2/refresh.py
+- Modify: backend/app/main.py
+- Modify: backend/app/routers/v2/connections.py
+- Create: backend/tests/v2/incremental/test_refresh_api.py
+
+**Interfaces:**
+
+- `RefreshStatus` contains source ID, resource, `RefreshPolicy`, cursor, cursor observed time, latest run ID/status, input DatasetVersion ID, PipelineRun ID, freshness lag seconds, duplicate/late/retry/DLQ counts, next schedule time, SLA status, and bounded backfill window.
+- `RefreshTriggerRequest` contains only `mode: RefreshPolicy` and optional `backfill_from`/`backfill_to` instants; the server loads source, resource, cursor, credentials, and connector configuration from the persisted connection contract.
+- `get_refresh_status(db: Session, *, source_id: str, resource: str | None = None) -> RefreshStatus` returns persisted state only and never reconstructs a cursor from request data.
+- `trigger_refresh(db: Session, *, source_id: str, resource: str, mode: RefreshPolicy, backfill_from: datetime | None, backfill_to: datetime | None, operator_id: str, now: datetime) -> RefreshRun` validates the stored source contract and creates a durable idempotent run.
+- `replay_refresh_run(db: Session, *, run_id: str, dead_letter_id: str | None, operator_id: str, now: datetime) -> RefreshRun` delegates to `replay_dead_letter` or a failed-run retry policy and never edits the original run/cursor.
+- `GET /api/v2/refresh/sources/{source_id}/status`, `POST /api/v2/refresh/sources/{source_id}/run`, `POST /api/v2/refresh/runs/{run_id}/replay`, and `PUT /api/v2/refresh/sources/{source_id}/schedule` use existing editor/operator authorization and return typed `RefreshStatus`/`RefreshRun` values. Backfill is limited to the persisted schedule window; arbitrary source URLs, cursors, credentials, broker addresses, and payloads are rejected.
+
+- [ ] **Step 1: Write failing refresh operation API tests.**
+
+    def test_refresh_status_exposes_cursor_lag_schedule_and_failure(client, operator_headers):
+        response = client.get("/api/v2/refresh/sources/source-001/status", headers=operator_headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cursor"]["primary_key"] == "100"
+        assert body["lag_seconds"] == 120
+        assert body["latest_run"]["status"] == "dead_lettered"
+
+    def test_refresh_trigger_and_replay_are_bounded_and_idempotent(client, operator_headers):
+        triggered = client.post("/api/v2/refresh/sources/source-001/run", json={"mode": "micro_batch"}, headers=operator_headers)
+        replayed = client.post("/api/v2/refresh/runs/run-dead-001/replay", json={}, headers=operator_headers)
+        assert triggered.status_code == 202
+        assert replayed.status_code == 202
+        assert triggered.json()["cursor_before"] == replayed.json()["cursor_before"]
+
+    def test_refresh_schedule_api_persists_timezone_calendar_and_sla(client, operator_headers):
+        response = client.put("/api/v2/refresh/sources/source-001/schedule", json={"cron_expr": "0 2 * * *", "timezone": "Asia/Shanghai", "business_calendar": ["2026-10-01"], "sla_seconds": 86400, "backfill_window_seconds": 172800, "enabled": True}, headers=operator_headers)
+        assert response.status_code == 200
+        assert response.json()["timezone"] == "Asia/Shanghai"
+        assert response.json()["sla_seconds"] == 86400
+
+    def test_refresh_api_rejects_caller_cursor_url_and_broker(client, operator_headers):
+        response = client.post("/api/v2/refresh/sources/source-001/run", json={"cursor": "spoof", "source_url": "https://example.invalid", "broker": "kafka://attacker"}, headers=operator_headers)
+        assert response.status_code == 422
+
+- [ ] **Step 2: Run the focused API tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py -q)
+
+    Expected: FAIL because no normalized refresh status/trigger/replay endpoints exist and the current schedule route stores only a cron string in connection JSON.
+
+- [ ] **Step 3: Implement the thin refresh operations adapter.**
+
+    Add typed request/response models, route all operations to `ScheduleService`, `PollingRefreshService`, and `EventIngestService`, and preserve original run/cursor records on retries/replays. Register the router once, retain the existing connection route as a compatibility delegate, and return no raw event payload, credential, cursor override, or external broker configuration.
+
+- [ ] **Step 4: Run refresh API and end-to-end incremental tests.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_polling.py tests/v2/incremental/test_event_ingest.py -q)
+
+    Expected: PASS for status, T+1 schedule, lag/cursor visibility, bounded manual trigger/backfill, failed/DLQ replay, authentication, and rejection of caller-supplied cursor/source/broker values.
+
+- [ ] **Step 5: Commit refresh operations.**
+
+    git add backend/app/services/v2/incremental/operations.py backend/app/routers/v2/refresh.py backend/app/main.py backend/app/routers/v2/connections.py backend/tests/v2/incremental/test_refresh_api.py
+    git commit -m "feat: expose enterprise refresh operations"
+
+### Workstream 2B — Unified Semantic Runtime
+
+### Task 11: Add the immutable SemanticSnapshot schema and lineage tables
 
 - [ ] **Deliverable:** A database snapshot is a separate immutable contract from OntologyRelease and can represent the complete governed input set.
 
@@ -444,7 +864,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Modify: backend/app/models/ontology_release.py
 - Modify: backend/app/models/v2/pipeline.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0003_semantic_snapshot.py
+- Create: backend/alembic/versions/0023_semantic_snapshot.py
 - Create: backend/tests/runtime/__init__.py
 - Create: backend/tests/runtime/test_snapshot_schema.py
 
@@ -453,7 +873,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - SemanticSnapshot exposes id, ontology_release_id, quality_summary, evidence_summary, materialization_hash, status, created_by, and created_at.
 - SemanticSnapshotInput exposes snapshot_id, dataset_version_id, and pipeline_run_id, with a unique constraint per snapshot/input pair. The association is the authoritative complete set rather than a truncated JSON list.
 - OntologyRelease.status is constrained to draft, published, or revoked; existing release rows are backfilled to their current publication state without changing their schema hash or bytes.
-- PipelineRun exposes governed completion and its dataset-version provenance; a snapshot input can reference only a successful, completed run and its output dataset version.
+- PipelineRun exposes governed completion and its dataset-version provenance through the `PipelineRunInput` association; a snapshot input can reference only a successful, completed run and its output dataset version.
 
 - [ ] **Step 1: Write failing schema and immutability tests.**
 
@@ -489,7 +909,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the model and migration.**
 
-    Register the models in the central loader, add foreign keys and uniqueness constraints, enforce 64-character SHA-256 materialization hashes, add an append-only database trigger or equivalent service-level update guard, and preserve the current release manifest bytes. The migration down revision is 0020_agent_memory_recall_index.
+    Register the models in the central loader, add foreign keys and uniqueness constraints, enforce 64-character SHA-256 materialization hashes, add an append-only database trigger or equivalent service-level update guard, and preserve the current release manifest bytes. The migration down revision is `0022_refresh_contract`.
 
 - [ ] **Step 4: Run migration and schema tests.**
 
@@ -503,11 +923,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit the snapshot schema.**
 
-    git add backend/app/models/semantic_snapshot.py backend/app/models/ontology_release.py backend/app/models/v2/pipeline.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0003_semantic_snapshot.py backend/tests/runtime
+    git add backend/app/models/semantic_snapshot.py backend/app/models/ontology_release.py backend/app/models/v2/pipeline.py backend/app/models/__init__.py backend/alembic/versions/0023_semantic_snapshot.py backend/tests/runtime
 
     git commit -m "feat: add immutable semantic snapshots"
 
-### Task 7: Materialize snapshots and capture complete lineage
+### Task 12: Materialize snapshots and capture complete lineage
 
 - [ ] **Deliverable:** Snapshot creation validates published semantic state and completed pipeline inputs, records quality/evidence summaries, and computes a reproducible materialization hash.
 
@@ -568,7 +988,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: materialize governed semantic snapshots"
 
-### Task 8: Implement trusted delegated credentials and Runtime context
+### Task 13: Implement trusted delegated credentials and Runtime context
 
 - [ ] **Deliverable:** All Runtime requests obtain a verified Agent/service principal and delegated user principal from a short-lived credential, with audience, scope, domain, expiry, and revocation checks.
 
@@ -577,7 +997,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Create: backend/app/models/runtime_identity.py
 - Modify: backend/app/models/oauth.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0004_runtime_identity.py
+- Create: backend/alembic/versions/0024_runtime_identity.py
 - Create: backend/app/services/runtime/credentials.py
 - Create: backend/app/deps/runtime.py
 - Create: backend/tests/runtime/test_runtime_credentials.py
@@ -627,7 +1047,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the shared verification path.**
 
-    Extend the registered OAuth client contract, add a hashed delegated-token record and migration, sign short-lived credentials with the configured issuer key, bind actor and user to the same security domain, and expose one FastAPI dependency that returns RuntimeContext. Map all failures to stable codes such as MISSING_DELEGATION, INVALID_DELEGATION, AUDIENCE_DENIED, SCOPE_DENIED, EXPIRED_DELEGATION, REVOKED_DELEGATION, AGENT_INACTIVE, USER_INACTIVE, and CROSS_SECURITY_DOMAIN.
+    Extend the registered OAuth client contract, add a hashed delegated-token record and migration `0024_runtime_identity.py` with `down_revision="0023_semantic_snapshot"`, sign short-lived credentials with the configured issuer key, bind actor and user to the same security domain, and expose one FastAPI dependency that returns RuntimeContext. Map all failures to stable codes such as MISSING_DELEGATION, INVALID_DELEGATION, AUDIENCE_DENIED, SCOPE_DENIED, EXPIRED_DELEGATION, REVOKED_DELEGATION, AGENT_INACTIVE, USER_INACTIVE, and CROSS_SECURITY_DOMAIN.
 
 - [ ] **Step 4: Run credential, OAuth, and schema tests.**
 
@@ -637,11 +1057,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit trusted delegation.**
 
-    git add backend/app/models/runtime_identity.py backend/app/models/oauth.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0004_runtime_identity.py backend/app/services/runtime/credentials.py backend/app/deps/runtime.py backend/tests/runtime/test_runtime_credentials.py backend/tests/agent/test_oauth_security_properties.py
+    git add backend/app/models/runtime_identity.py backend/app/models/oauth.py backend/app/models/__init__.py backend/alembic/versions/0024_runtime_identity.py backend/app/services/runtime/credentials.py backend/app/deps/runtime.py backend/tests/runtime/test_runtime_credentials.py backend/tests/agent/test_oauth_security_properties.py
 
     git commit -m "feat: add verified delegated runtime access"
 
-### Task 9: Define transport-neutral runtime contracts and intersection policy
+### Task 14: Define transport-neutral runtime contracts and intersection policy
 
 - [ ] **Deliverable:** Runtime code has one typed request/result/error vocabulary for snapshot access, evidence, rules, capabilities, entitlements, and policy decisions.
 
@@ -654,7 +1074,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 **Interfaces:**
 
-- ReasonCode is an enum containing ALLOW, MISSING_DELEGATION, INVALID_DELEGATION, AUDIENCE_DENIED, SCOPE_DENIED, EXPIRED_DELEGATION, REVOKED_DELEGATION, AGENT_CAPABILITY_DENIED, USER_ENTITLEMENT_DENIED, CROSS_SECURITY_DOMAIN, SNAPSHOT_NOT_FOUND, SNAPSHOT_NOT_GOVERNED, SNAPSHOT_STALE, POLICY_DENIED, ACTION_NOT_ELIGIBLE, PLAN_EXPIRED, PRECONDITION_CONFLICT, BINDING_DRIFT, UNSUPPORTED_ACTION, ROW_COUNT_MISMATCH, UNKNOWN_EXECUTION_OUTCOME, and INVALID_PLAN_HASH.
+- ReasonCode is an enum containing ALLOW, MISSING_DELEGATION, INVALID_DELEGATION, AUDIENCE_DENIED, SCOPE_DENIED, EXPIRED_DELEGATION, REVOKED_DELEGATION, AGENT_CAPABILITY_DENIED, USER_ENTITLEMENT_DENIED, CROSS_SECURITY_DOMAIN, SNAPSHOT_NOT_FOUND, SNAPSHOT_NOT_GOVERNED, SNAPSHOT_STALE, SNAPSHOT_FRESHNESS_HITL, POLICY_DENIED, ACTION_NOT_ELIGIBLE, PLAN_EXPIRED, PRECONDITION_CONFLICT, BINDING_DRIFT, UNSUPPORTED_ACTION, ROW_COUNT_MISMATCH, UNKNOWN_EXECUTION_OUTCOME, and INVALID_PLAN_HASH.
 - EvidenceCitation contains source_id, source_type, locator, and content_hash; RuleOutcome contains rule_id, result, and reason_code.
 - InvestigationRequest contains semantic_snapshot_id, query, ontology_id, entity_type, filters, and limit.
 - InvestigationResult contains decision, reason_code, semantic_snapshot_id, ontology_release_id, evidence_citations, rule_outcome, result, and correlation_id. Denials set result to null; authorized no-match queries set result to an empty collection with decision ALLOW.
@@ -707,7 +1127,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: define shared runtime contracts and policy"
 
-### Task 10: Implement snapshot-pinned investigation and immutable action plans
+### Task 15: Implement snapshot-pinned investigation and immutable action plans
 
 - [ ] **Deliverable:** One service performs investigation and proposal creation without production writes, pins snapshot and release provenance, and persists immutable action plans.
 
@@ -715,7 +1135,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - Create: backend/app/models/runtime_plan.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0005_runtime_plans.py
+- Create: backend/alembic/versions/0025_runtime_plans.py
 - Create: backend/app/services/runtime/service.py
 - Create: backend/tests/runtime/test_runtime_service.py
 
@@ -767,7 +1187,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the shared service and immutable plan store.**
 
-    Resolve snapshot to release and lineage, call evaluate_access, query through the existing ontology query primitives with snapshot-scoped data, collect only hashable evidence locators, evaluate domain rules, and serialize protected results only on ALLOW. Store typed plan fields and a canonical plan hash while excluding generated storage IDs, timestamps, correlation IDs, HTTP/MCP envelopes, tracing IDs, and presentation-only fields.
+    Resolve snapshot to release and lineage, call evaluate_access, query through the existing ontology query primitives with snapshot-scoped data, collect only hashable evidence locators, evaluate domain rules, and serialize protected results only on ALLOW. Store typed plan fields and a canonical plan hash while excluding generated storage IDs, timestamps, correlation IDs, HTTP/MCP envelopes, tracing IDs, and presentation-only fields. Set migration `0025_runtime_plans.py` to `down_revision="0024_runtime_identity"` so the refresh, snapshot, identity, and plan schema form one Alembic chain.
 
 - [ ] **Step 4: Run service, snapshot, policy, and migration tests.**
 
@@ -777,11 +1197,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit the shared Runtime service.**
 
-    git add backend/app/models/runtime_plan.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0005_runtime_plans.py backend/app/services/runtime/service.py backend/tests/runtime/test_runtime_service.py
+    git add backend/app/models/runtime_plan.py backend/app/models/__init__.py backend/alembic/versions/0025_runtime_plans.py backend/app/services/runtime/service.py backend/tests/runtime/test_runtime_service.py
 
     git commit -m "feat: add snapshot-pinned runtime service"
 
-### Task 11: Expose the shared Runtime through versioned REST endpoints
+### Task 16: Expose the shared Runtime through versioned REST endpoints
 
 - [ ] **Deliverable:** External enterprise Agents can investigate, create/read action plans, and retrieve execution status through /api/v2/runtime with the same verified context and result contract.
 
@@ -846,7 +1266,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: expose the semantic runtime API"
 
-### Task 12: Publish Python SDK v1 as a transport adapter
+### Task 17: Publish Python SDK v1 as a transport adapter
 
 - [ ] **Deliverable:** An external Agent can call the Runtime through a typed Python SDK that injects delegated credentials and contains no alternate policy or write implementation.
 
@@ -923,7 +1343,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git -C "$REPO_ROOT" commit -m "feat: publish semantic runtime Python SDK"
 
-### Task 13: Route MCP and the built-in Agent through RuntimeService
+### Task 18: Route MCP and the built-in Agent through RuntimeService
 
 - [ ] **Deliverable:** MCP and the built-in Agent are reference adapters to the same investigation and plan methods, while compatibility tools do not bypass snapshot or delegated-access checks.
 
@@ -985,7 +1405,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: unify MCP and reference Agent runtime access"
 
-### Task 14: Make normalized results and plan hashes transport-independent
+### Task 19: Make normalized results and plan hashes transport-independent
 
 - [ ] **Deliverable:** REST, SDK, MCP, and reference-Agent calls produce the same normalized semantic result and canonical plan hash when their verified inputs and policy state are equivalent.
 
@@ -1048,9 +1468,104 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git -C "$REPO_ROOT" commit -m "feat: enforce transport-neutral runtime parity"
 
+### Task 20: Add refresh freshness to snapshots and Runtime policy
+
+- [ ] **Deliverable:** Every new SemanticSnapshot carries source freshness, lag, cursor, and refresh lineage; investigations and action plans make deterministic ALLOW/DENY/HITL decisions from that state, while historical snapshots, plans, and approvals remain unchanged when later refreshes arrive.
+
+**Files:**
+
+- Modify: backend/app/models/semantic_snapshot.py
+- Modify: backend/app/schemas/runtime_snapshot.py
+- Modify: backend/app/schemas/runtime.py
+- Modify: backend/app/services/runtime/lineage.py
+- Modify: backend/app/services/runtime/snapshots.py
+- Modify: backend/app/services/runtime/policy.py
+- Modify: backend/app/services/runtime/service.py
+- Modify: backend/app/services/v2/incremental/operations.py
+- Create: backend/alembic/versions/0026_snapshot_freshness.py
+- Create: backend/tests/runtime/test_snapshot_freshness.py
+- Modify: backend/tests/runtime/test_snapshot_materialization.py
+- Modify: backend/tests/runtime/test_runtime_policy.py
+- Modify: backend/tests/runtime/test_runtime_service.py
+
+**Interfaces:**
+
+- `FreshnessState` is `fresh`, `stale`, or `unknown`. `SemanticSnapshot` adds immutable `freshness_state`, `freshness_lag_seconds`, `source_cursor`, and `lineage_summary` fields alongside its existing release, dataset, pipeline, quality, and evidence pins.
+- `FreshnessPolicy` contains `max_lag_seconds`, optional `hard_deny_after_seconds`, and `stale_action` (`deny` or `human_approved`). A policy may make stale evidence require HITL, but it may never make an unknown or ungoverned snapshot silently fresh.
+- `FreshnessView` contains state, lag seconds, cursor, source IDs, dataset-version IDs, pipeline-run IDs, last successful refresh run, and SLA status. `compute_snapshot_freshness(snapshot: SnapshotView, *, now: datetime, policy: FreshnessPolicy) -> FreshnessView` is pure and does not update the snapshot.
+- `materialize_refresh_snapshot(db: Session, *, refresh_run_id: str, ontology_release_id: str, dataset_version_ids: Sequence[str], created_by: str) -> SemanticSnapshot` calls the existing governed materialization path, copies the durable cursor/lag/lineage from the successful RefreshRun, and always inserts a new snapshot.
+- `evaluate_snapshot_freshness(freshness: FreshnessView, policy: FreshnessPolicy) -> FreshnessDecision` returns `ALLOW`, `HUMAN_APPROVED`, or `DENY` with `reason_code` and `lag_seconds`; `investigate` maps DENY to structured `SNAPSHOT_STALE`/`SNAPSHOT_NOT_GOVERNED`, while `create_action_plan` maps a soft stale result to a plan requiring exact-plan HITL and a hard stale/unknown result to DENY.
+- `PolicyDecision` and `InvestigationResult` expose freshness state, lag, cursor, and lineage citations. The stored plan/approval records capture the freshness view at creation/approval; later data does not recalculate or rewrite historical evidence.
+
+- [ ] **Step 1: Write failing freshness and historical-immutability tests.**
+
+    def test_fresh_snapshot_exposes_cursor_lag_and_lineage(db):
+        snapshot = materialize_refresh_fixture(db, refresh_run_id="refresh-success-001")
+        view = compute_snapshot_freshness(snapshot, now=FIXED_NOW, policy=FreshnessPolicy(max_lag_seconds=300, stale_action="deny"))
+        assert view.state == "fresh"
+        assert view.lag_seconds == 120
+        assert view.cursor.primary_key == "100"
+        assert view.pipeline_run_ids == ["pipeline-run-001"]
+
+    @pytest.mark.parametrize("case_id", ["soft-stale", "hard-stale", "unknown-cursor"])
+    def test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot(case_id, db, runtime_context):
+        snapshot = materialize_refresh_fixture(db, refresh_run_id=case_id)
+        before = snapshot.freshness_lag_seconds
+        result = evaluate_fixture_runtime_freshness(case_id, db, runtime_context)
+        assert result.reason_code in {"ALLOW", "SNAPSHOT_FRESHNESS_HITL", "SNAPSHOT_STALE"}
+        assert snapshot.freshness_lag_seconds == before
+
+    def test_new_refresh_creates_new_snapshot_and_preserves_old_plan_and_approval(db, runtime_context):
+        old_snapshot, old_plan, old_approval = create_approved_fixture(db, runtime_context, "refresh-success-001")
+        new_snapshot = materialize_refresh_fixture(db, refresh_run_id="refresh-success-002")
+        assert new_snapshot.id != old_snapshot.id
+        assert get_snapshot(db, old_snapshot.id).source_cursor == old_snapshot.source_cursor
+        assert get_action_plan(db, old_plan.id).semantic_snapshot_id == old_snapshot.id
+        assert get_approval(db, old_approval.id).plan_hash == old_plan.plan_hash
+
+- [ ] **Step 2: Run freshness tests to verify they fail.**
+
+    Run from the repository root:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_snapshot_freshness.py tests/runtime/test_snapshot_materialization.py tests/runtime/test_runtime_policy.py tests/runtime/test_runtime_service.py -q)
+
+    Expected: FAIL because SemanticSnapshot has no freshness/cursor fields, refresh runs do not materialize new snapshots, and Runtime policy has no stale/lag decision path.
+
+- [ ] **Step 3: Implement immutable freshness propagation and policy.**
+
+    Add the migration after the current runtime-plan migration with `down_revision="0025_runtime_plans"`, calculate lag from the last successful governed RefreshRun/source observation, and persist cursor/lineage only at snapshot creation. Extend the common policy/service contracts so investigations cannot return protected rows from stale/unknown facts, soft-stale action plans carry an explicit HITL requirement, and hard-stale/unknown inputs are denied. Never update an existing snapshot, plan, approval, or evidence record when a later refresh succeeds.
+
+- [ ] **Step 4: Run snapshot, policy, Runtime, and migration checks.**
+
+    Run:
+
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_snapshot_freshness.py tests/runtime/test_snapshot_materialization.py tests/runtime/test_runtime_policy.py tests/runtime/test_runtime_service.py -q)
+    (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
+    (cd "$REPO_ROOT" && python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check)
+
+    Expected: PASS for fresh/soft-stale/hard-stale/unknown decisions, freshness metadata in Runtime responses, new-snapshot creation, immutable historical plan/approval evidence, and a single Alembic head.
+
+- [ ] **Step 5: Commit Runtime freshness.**
+
+    git add backend/app/models/semantic_snapshot.py backend/app/schemas/runtime_snapshot.py backend/app/schemas/runtime.py backend/app/services/runtime/lineage.py backend/app/services/runtime/snapshots.py backend/app/services/runtime/policy.py backend/app/services/runtime/service.py backend/app/services/v2/incremental/operations.py backend/alembic/versions/0026_snapshot_freshness.py backend/tests/runtime/test_snapshot_freshness.py backend/tests/runtime/test_snapshot_materialization.py backend/tests/runtime/test_runtime_policy.py backend/tests/runtime/test_runtime_service.py
+    git commit -m "feat: enforce refresh freshness in runtime decisions"
+
+### Phase 2 release gate
+
+Phase 2 is acceptable only when the following evidence is present in the generated manifest and CI artifacts:
+
+- One source can run as `batch`, `micro_batch`, or bounded `event_driven`, and every run has a durable cursor/lease/idempotency key, at-least-once dedupe result, source provenance, input DatasetVersion, PipelineRun outcome, quality summary, and source lag.
+- T+1 schedules persist timezone, business calendar, SLA, retry, and bounded backfill policy; the isolated schedule test proves Celery beat dispatches one due run and does not dispatch it twice.
+- Polling proves overlap handling for equal timestamps, late/out-of-order data, failure cursor non-advance, retry, DLQ, replay, and pinned latest/approved Pipeline input on both PostgreSQL and MySQL fixtures.
+- Event-driven support proves signed webhook, managed outbox, and the single external CDC adapter contract with inbox ordering/dedupe/lease/DLQ/replay; no arbitrary broker consumer or repository-owned CDC producer is required.
+- Each successful refresh produces a new SemanticSnapshot with freshness/lag/cursor/lineage; stale/unknown evidence produces deterministic Runtime DENY or exact-plan HITL, and historical snapshots, plans, approvals, and evidence remain byte/state stable.
+- Operator API and Playwright evidence can show schedule, cursor, lag/SLA, latest failure, DLQ/replay state, and the resulting snapshot lineage without exposing credentials, raw protected event payloads, or arbitrary source/broker configuration.
+
 ### Milestone 3 — Sandbox and governed PostgreSQL/MySQL writeback
 
-### Task 15: Publish managed action bindings and freeze exact plan targets
+### Task 21: Publish managed action bindings and freeze exact plan targets
 
 - [ ] **Deliverable:** Every writable action has a versioned published binding, and a writable ActionPlan freezes typed parameters, one normalized target, before-image/version hashes, and the binding identity used to execute it.
 
@@ -1059,7 +1574,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Create: backend/app/models/managed_action.py
 - Modify: backend/app/models/runtime_plan.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0006_managed_action_bindings.py
+- Create: backend/alembic/versions/0027_managed_action_bindings.py
 - Create: backend/app/services/runtime/action_bindings.py
 - Modify: backend/app/services/runtime/service.py
 - Modify: backend/app/services/runtime/canonical.py
@@ -1106,7 +1621,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement binding publication and target freezing.**
 
-    Validate all identifier names against the server-owned binding, resolve the selector against the pinned snapshot exactly once, normalize primary-key values in binding column order, hash the selected before image and version, and store the typed parameter schema. Extend canonical plan fields so binding identity/version, frozen parameters, target tuple, and both target hashes affect plan_hash.
+    Validate all identifier names against the server-owned binding, resolve the selector against the pinned snapshot exactly once, normalize primary-key values in binding column order, hash the selected before image and version, and store the typed parameter schema. Set migration `0027_managed_action_bindings.py` to `down_revision="0026_snapshot_freshness"`. Extend canonical plan fields so binding identity/version, frozen parameters, target tuple, and both target hashes affect plan_hash.
 
 - [ ] **Step 4: Run binding and parity tests.**
 
@@ -1116,11 +1631,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit managed bindings.**
 
-    git add backend/app/models/managed_action.py backend/app/models/runtime_plan.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0006_managed_action_bindings.py backend/app/services/runtime/action_bindings.py backend/app/services/runtime/service.py backend/app/services/runtime/canonical.py backend/tests/runtime/test_managed_action_bindings.py
+    git add backend/app/models/managed_action.py backend/app/models/runtime_plan.py backend/app/models/__init__.py backend/alembic/versions/0027_managed_action_bindings.py backend/app/services/runtime/action_bindings.py backend/app/services/runtime/service.py backend/app/services/runtime/canonical.py backend/tests/runtime/test_managed_action_bindings.py
 
     git commit -m "feat: freeze managed action targets"
 
-### Task 16: Implement snapshot-backed Sandbox simulation
+### Task 22: Implement snapshot-backed Sandbox simulation
 
 - [ ] **Deliverable:** Sandbox v1 simulates a published managed action against a pinned SemanticSnapshot and persists an immutable diff without running Agent code, prompts, tools, or production connectors.
 
@@ -1128,7 +1643,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - Create: backend/app/models/sandbox.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0007_sandbox.py
+- Create: backend/alembic/versions/0028_sandbox.py
 - Create: backend/app/services/runtime/sandbox.py
 - Create: backend/tests/runtime/test_sandbox.py
 
@@ -1165,7 +1680,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the bounded simulation.**
 
-    Load the immutable plan and snapshot, evaluate the published action's typed parameters against snapshot state, calculate expected rows and before/after values, capture rule/policy outcomes and precondition hashes, and persist an append-only result. Do not import or call database writer implementations from this module.
+    Load the immutable plan and snapshot, evaluate the published action's typed parameters against snapshot state, calculate expected rows and before/after values, capture rule/policy outcomes and precondition hashes, and persist an append-only result. Set migration `0028_sandbox.py` to `down_revision="0027_managed_action_bindings"`. Do not import or call database writer implementations from this module.
 
 - [ ] **Step 4: Run Sandbox and action-plan tests.**
 
@@ -1175,11 +1690,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit Sandbox v1.**
 
-    git add backend/app/models/sandbox.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0007_sandbox.py backend/app/services/runtime/sandbox.py backend/tests/runtime/test_sandbox.py
+    git add backend/app/models/sandbox.py backend/app/models/__init__.py backend/alembic/versions/0028_sandbox.py backend/app/services/runtime/sandbox.py backend/tests/runtime/test_sandbox.py
 
     git commit -m "feat: add snapshot-backed action simulation"
 
-### Task 17: Evaluate risk and enforce exact-plan HITL
+### Task 23: Evaluate risk and enforce exact-plan HITL
 
 - [ ] **Deliverable:** Runtime policy routes low-risk deterministic reversible plans to automatic execution and all other permitted plans to exact-plan HITL, while stale or invalid plans are rejected.
 
@@ -1237,7 +1752,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: enforce risk-based automatic and HITL routing"
 
-### Task 18: Add the server-side PostgreSQL managed row writer
+### Task 24: Add the server-side PostgreSQL managed row writer
 
 - [ ] **Deliverable:** PostgreSQL execution performs only one allowlisted parameterized row update with server-owned identifiers, minimum-privilege credentials, transaction timeout, exact row count, and optimistic locking.
 
@@ -1301,7 +1816,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: add governed PostgreSQL row writer"
 
-### Task 19: Add the server-side MySQL managed row writer
+### Task 25: Add the server-side MySQL managed row writer
 
 - [ ] **Deliverable:** MySQL has the same managed-binding safety contract and integration coverage as PostgreSQL, with dialect-specific transaction and timeout behavior.
 
@@ -1363,7 +1878,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: add governed MySQL row writer"
 
-### Task 20: Unify automatic/HITL execution, audit, reconciliation, and rollback
+### Task 26: Unify automatic/HITL execution, audit, reconciliation, and rollback
 
 - [ ] **Deliverable:** One execution service revalidates every governance boundary immediately before commit, shares the writer between automatic and HITL paths, records receipts/audit/idempotency, creates reconciliation for unknown outcomes, and represents rollback as a new governed plan.
 
@@ -1371,7 +1886,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - Create: backend/app/models/runtime_execution.py
 - Modify: backend/app/models/__init__.py
-- Create: backend/alembic/versions/2026_08_26_0008_runtime_execution.py
+- Create: backend/alembic/versions/0029_runtime_execution.py
 - Create: backend/app/services/runtime/execution.py
 - Modify: backend/app/services/runtime/reconciliation.py
 - Modify: backend/app/services/idempotency.py
@@ -1431,7 +1946,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement one governed execution path.**
 
-    Resolve the plan and verify the presented hash, then recheck all credential, identity, policy, snapshot, Sandbox, binding, connection, target, and version conditions before opening a transaction. Route AUTOMATIC and approved HUMAN_APPROVED plans to the same writer interface. Persist an idempotency record and execution fence before the write, record exact outcomes and non-secret audit evidence, and convert ambiguous timeout/connection outcomes to UNKNOWN reconciliation without blind replay.
+    Resolve the plan and verify the presented hash, then recheck all credential, identity, policy, snapshot, Sandbox, binding, connection, target, and version conditions before opening a transaction. Set migration `0029_runtime_execution.py` to `down_revision="0028_sandbox"`. Route AUTOMATIC and approved HUMAN_APPROVED plans to the same writer interface. Persist an idempotency record and execution fence before the write, record exact outcomes and non-secret audit evidence, and convert ambiguous timeout/connection outcomes to UNKNOWN reconciliation without blind replay.
 
 - [ ] **Step 4: Run service and both-dialect integration suites.**
 
@@ -1447,11 +1962,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 5: Commit governed execution.**
 
-    git add backend/app/models/runtime_execution.py backend/app/models/__init__.py backend/alembic/versions/2026_08_26_0008_runtime_execution.py backend/app/services/runtime/execution.py backend/app/services/runtime/reconciliation.py backend/app/services/idempotency.py backend/app/models/governance_audit.py backend/tests/runtime/test_execution_service.py backend/tests/runtime/integration/test_execution_dialects.py
+    git add backend/app/models/runtime_execution.py backend/app/models/__init__.py backend/alembic/versions/0029_runtime_execution.py backend/app/services/runtime/execution.py backend/app/services/runtime/reconciliation.py backend/app/services/idempotency.py backend/app/models/governance_audit.py backend/tests/runtime/test_execution_service.py backend/tests/runtime/integration/test_execution_dialects.py
 
     git commit -m "feat: govern runtime execution and reconciliation"
 
-### Task 20A: Expose governed execution and reconciliation through Runtime REST
+### Task 26A: Expose governed execution and reconciliation through Runtime REST
 
 - [ ] **Deliverable:** The REST layer exposes every Phase 3 operator operation through RuntimeContext, shared authorization, and structured DENY errors; no route accepts caller-selected credentials, targets, SQL, or parameters.
 
@@ -1530,7 +2045,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the thin Phase 3 REST extension.**
 
-    Add the five routes to backend/app/routers/v2/runtime.py, inject `get_runtime_context(request, credential=Depends(require_verified_credential))` through the same verified-credential dependency used by investigation and action-plan creation, call SandboxService, approve_exact_plan, execute_plan, get_reconciliation, and create_rollback_plan respectively, and map every typed exception through one exception handler to the `StructuredDeny` schema. Ensure app/main.py has exactly one registration of the v2 runtime router; if Task 11 already registered it, add an assertion/test rather than a duplicate.
+    Add the five routes to backend/app/routers/v2/runtime.py, inject `get_runtime_context(request, credential=Depends(require_verified_credential))` through the same verified-credential dependency used by investigation and action-plan creation, call SandboxService, approve_exact_plan, execute_plan, get_reconciliation, and create_rollback_plan respectively, and map every typed exception through one exception handler to the `StructuredDeny` schema. Ensure app/main.py has exactly one registration of the v2 runtime router; if Task 16 already registered it, add an assertion/test rather than a duplicate.
 
 - [ ] **Step 4: Run API, authorization, and execution tests.**
 
@@ -1546,23 +2061,28 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     git commit -m "feat: expose governed execution REST endpoints"
 
-### Task 21: Add operator surfaces and Playwright governance flows
+### Task 27: Add refresh and Runtime operator surfaces with Playwright governance flows
 
-- [ ] **Deliverable:** The built-in UI exposes investigation lineage/evidence, Sandbox diff, risk decision, exact-plan approval, receipt, reconciliation, and rollback-plan state as operator surfaces, without becoming a general Agent Builder.
+- [ ] **Deliverable:** The built-in UI exposes refresh schedule/cursor/lag/run/DLQ-replay status plus investigation lineage/evidence, Sandbox diff, risk decision, exact-plan approval, receipt, reconciliation, and rollback-plan state as operator surfaces, without becoming a general Agent Builder.
 
 **Files:**
 
 - Create: frontend/src/api/runtime.ts
+- Create: frontend/src/api/refresh.ts
 - Create: frontend/src/types/runtime.ts
+- Create: frontend/src/types/refresh.ts
 - Create: frontend/src/pages/runtime/RuntimeInvestigationPage.tsx
 - Create: frontend/src/pages/runtime/ActionPlanPage.tsx
 - Create: frontend/src/pages/runtime/SandboxPage.tsx
 - Create: frontend/src/pages/runtime/ApprovalQueuePage.tsx
 - Create: frontend/src/pages/runtime/ReconciliationPage.tsx
+- Create: frontend/src/pages/runtime/RefreshOperationsPage.tsx
 - Modify: frontend/src/App.tsx
 - Create: frontend/src/api/runtime.test.ts
+- Create: frontend/src/api/refresh.test.ts
 - Create: frontend/src/pages/runtime/RuntimeInvestigationPage.test.tsx
 - Create: frontend/src/pages/runtime/ActionPlanPage.test.tsx
+- Create: frontend/src/pages/runtime/RefreshOperationsPage.test.tsx
 - Create: frontend/src/test/e2e/runtime-governance.spec.ts
 - Create: frontend/src/test/e2e/helpers/runtime.ts
 
@@ -1576,9 +2096,13 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - runtimeApi.getExecutionStatus(planId: string) -> ExecutionReceipt maps to GET /api/v2/runtime/execution-status/{planId}.
 - runtimeApi.getReconciliation(reconciliationId: string) -> ReconciliationCase maps to GET /api/v2/runtime/reconciliations/{reconciliationId}.
 - runtimeApi.createRollbackPlan(executionId: string) -> ActionPlan maps to POST /api/v2/runtime/executions/{executionId}/rollback-plans with an empty body.
+- refreshApi.getStatus(sourceId: string) -> RefreshStatus maps to GET /api/v2/refresh/sources/{sourceId}/status.
+- refreshApi.setSchedule(sourceId: string, request: ScheduleRequest) -> RefreshSchedule maps to PUT /api/v2/refresh/sources/{sourceId}/schedule.
+- refreshApi.trigger(sourceId: string, request: RefreshTriggerRequest) -> RefreshRun maps to POST /api/v2/refresh/sources/{sourceId}/run; it sends only the persisted policy/mode and bounded backfill window.
+- refreshApi.replay(runId: string, deadLetterId?: string) -> RefreshRun maps to POST /api/v2/refresh/runs/{runId}/replay; it sends no cursor, source URL, credential, broker, or event payload.
 - Every method uses the existing authenticated API client and maps only to its listed endpoint; client code does not evaluate authorization, risk, hashes, or writes.
-- The UI displays snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data.
-- Protected routes are added under /runtime/investigate, /runtime/action-plans/:planId, /runtime/sandbox/:planId, /runtime/approvals, and /runtime/reconciliation/:planId.
+- The UI displays refresh policy, schedule timezone/business calendar, next due time, cursor/watermark, source lag/SLA, latest run status, retry count, DLQ/replay state, snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data.
+- Protected routes are added under /runtime/refresh/:sourceId, /runtime/investigate, /runtime/action-plans/:planId, /runtime/sandbox/:planId, /runtime/approvals, and /runtime/reconciliation/:planId.
 - Playwright uses test_data/runtime/playwright_seed.json and existing authenticated helpers; it never connects to a production system.
 
 - [ ] **Step 1: Write failing component and browser tests.**
@@ -1596,6 +2120,20 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
       expect(post).toHaveBeenCalledWith('/runtime/action-plans/plan-hitl-001/approve', { plan_hash: 'plan-hash-hitl-001' })
       expect(post).toHaveBeenCalledWith('/runtime/action-plans/plan-hitl-001/execute', { plan_hash: 'plan-hash-hitl-001' })
       expect(post).toHaveBeenCalledWith('/runtime/executions/execution-001/rollback-plans', {})
+    })
+
+    it('maps refresh status, schedule, trigger, and replay without accepting cursor or broker data', async () => {
+      const get = vi.spyOn(apiClientV2, 'get').mockResolvedValue({ data: {} })
+      const put = vi.spyOn(apiClientV2, 'put').mockResolvedValue({ data: {} })
+      const post = vi.spyOn(apiClientV2, 'post').mockResolvedValue({ data: {} })
+      await refreshApi.getStatus('source-001')
+      await refreshApi.setSchedule('source-001', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
+      await refreshApi.trigger('source-001', { mode: 'micro_batch' })
+      await refreshApi.replay('run-dead-001', 'dlq-001')
+      expect(get).toHaveBeenCalledWith('/refresh/sources/source-001/status')
+      expect(put).toHaveBeenCalledWith('/refresh/sources/source-001/schedule', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
+      expect(post).toHaveBeenCalledWith('/refresh/sources/source-001/run', { mode: 'micro_batch' })
+      expect(post).toHaveBeenCalledWith('/refresh/runs/run-dead-001/replay', { dead_letter_id: 'dlq-001' })
     })
 
     it('shows snapshot evidence and distinguishes denied from empty allowed results', async () => {
@@ -1621,39 +2159,50 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
       await expect(page.getByTestId('rollback-execution-state')).toHaveText('PROPOSAL_ONLY')
     })
 
+    test('operator sees T+1 schedule, cursor, lag, and failed replay status', async ({ page }) => {
+      await seedRuntimePage(page, 'refresh-dead-lettered')
+      await page.goto('/runtime/refresh/source-001')
+      await expect(page.getByTestId('refresh-policy')).toHaveText('micro_batch')
+      await expect(page.getByTestId('refresh-cursor')).toHaveText('100')
+      await expect(page.getByTestId('refresh-lag-seconds')).toHaveText('120')
+      await expect(page.getByTestId('refresh-latest-status')).toHaveText('DEAD_LETTERED')
+      await page.getByTestId('replay-refresh-run').click()
+      await expect(page.getByTestId('refresh-replay-status')).toHaveText('QUEUED')
+    })
+
 - [ ] **Step 2: Run frontend tests to verify they fail.**
 
-    Run: (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx)
+    Run: (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/api/refresh.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx src/pages/runtime/RefreshOperationsPage.test.tsx)
 
     Run: (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
-    Expected: FAIL because the runtime API methods, pages, routes, and browser fixtures do not exist.
+    Expected: FAIL because the runtime/refresh API methods, pages, routes, and browser fixtures do not exist.
 
 - [ ] **Step 3: Implement the operator surface.**
 
-    Implement every runtimeApi method with the exact path/body mapping above using the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Add route handlers and UI controls that invoke Sandbox query, exact-hash approval, exact-hash execution, reconciliation query, and rollback-plan creation. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls.
+    Implement every runtimeApi and refreshApi method with the exact path/body mapping above using the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Add route handlers and UI controls for schedule update, refresh trigger, lag/cursor/status display, bounded DLQ replay, Sandbox query, exact-hash approval, exact-hash execution, reconciliation query, and rollback-plan creation. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls; the UI never constructs a cursor, SQL, broker, credential, or write target.
 
 - [ ] **Step 4: Run component, build, and Playwright tests.**
 
     Run:
 
-    (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx)
+    (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/api/refresh.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx src/pages/runtime/RefreshOperationsPage.test.tsx)
 
     (cd frontend && npm run build)
 
     (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
-    Expected: PASS for every endpoint mapping, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
+    Expected: PASS for every refresh/runtime endpoint mapping, T+1 schedule display, cursor and lag display, failed/DLQ replay state, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
 
 - [ ] **Step 5: Commit operator surfaces.**
 
-    git add frontend/src/api/runtime.ts frontend/src/types/runtime.ts frontend/src/pages/runtime frontend/src/App.tsx frontend/src/test/e2e/runtime-governance.spec.ts frontend/src/test/e2e/helpers/runtime.ts
+    git add frontend/src/api/runtime.ts frontend/src/api/refresh.ts frontend/src/types/runtime.ts frontend/src/types/refresh.ts frontend/src/pages/runtime frontend/src/App.tsx frontend/src/test/e2e/runtime-governance.spec.ts frontend/src/test/e2e/helpers/runtime.ts
 
-    git commit -m "feat: add runtime governance operator surfaces"
+    git commit -m "feat: add refresh and runtime governance operator surfaces"
 
-### Task 22: Run the integrated release gates and acceptance matrix
+### Task 28: Run the integrated refresh, Runtime, and governed-execution release gates
 
-- [ ] **Deliverable:** M1, Phase 2, and Phase 3 acceptance evidence is executable in CI and locally, with both database dialects and all four Runtime transports covered.
+- [ ] **Deliverable:** M1, Phase 2 refresh/lineage, and Phase 3 acceptance evidence is executable in CI and locally, with batch/micro-batch/event-driven refresh, both database dialects, all four Runtime transports, and operator E2E coverage.
 
 **Files:**
 
@@ -1666,8 +2215,8 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 **Interfaces:**
 
 - test_acceptance_matrix.py loads every case from test_data/runtime/manifest.json and its registered targets from test_data/runtime/registry.py; it never calls an untyped run_case function.
-- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, and a Playwright target descriptor for E2E layers. Task 22 additionally calls target_is_listable for every registered target after Tasks 6–21 have created the referenced pytest, SDK, and Playwright tests.
-- The CI workflow has dedicated steps for fixture generation/check, backend runtime unit tests, PostgreSQL/MySQL integration, SDK tests, frontend test:ci, Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
+- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, `refresh_mode`/`source_contract`/`cursor_outcome` for refresh layers, and a Playwright target descriptor for E2E layers. Task 28 additionally calls target_is_listable for every registered target after Tasks 6–27 have created the referenced pytest, SDK, and Playwright tests.
+- The CI workflow has dedicated steps for fixture generation/check, refresh contract/schedule/polling/event/API tests, backend Runtime unit tests, PostgreSQL/MySQL refresh and writeback integration, SDK tests, frontend test:ci, refresh/runtime Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
 - The CI SDK job installs the package and its declared runtime dependencies with `(cd "$REPO_ROOT" && python -m pip install -e sdk)` before running `(cd "$REPO_ROOT/sdk" && python -m pytest tests -q)`; the local release gate uses the same root-anchored install and test commands.
 - Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
 
@@ -1687,6 +2236,10 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
                 assert set(case["dialects"]) == {"mysql", "postgresql"}
             if "parity" in case["layers"]:
                 assert set(case["transports"]) == {"mcp", "reference-agent", "rest", "sdk"}
+            if "refresh" in case["layers"]:
+                assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
+                assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor"}
+                assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
             if "playwright" in case["layers"]:
                 assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
@@ -1696,6 +2249,11 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     def test_both_dialects_are_required():
         assert {"postgresql", "mysql"} <= set(load_manifest()["dialects"])
 
+    def test_all_supported_refresh_modes_and_cursor_contracts_are_represented():
+        refresh_cases = [case for case in load_cases("test_data/runtime/manifest.json") if "refresh" in case["layers"]]
+        assert {case["refresh_mode"] for case in refresh_cases} == {"batch", "micro_batch", "event_driven"}
+        assert {case["source_contract"] for case in refresh_cases} >= {"watermark_primary_key", "opaque_source_cursor"}
+
 - [ ] **Step 2: Run the matrix before final wiring.**
 
     Run:
@@ -1703,17 +2261,17 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_acceptance_matrix.py -q)
 
-    Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/Playwright marker, an expected assertion, or a generated fixture.
+    Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/refresh/Playwright marker, an expected assertion, or a generated fixture.
 
 - [ ] **Step 3: Wire final checks and document reproducible commands.**
 
-    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, runtime unit/integration/parity tests, SDK tests, frontend test:ci, Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands and synthetic database URLs. The SDK CI job must install `-e sdk` (including the runtime dependencies declared by sdk/pyproject.toml) before collecting/running its tests. Its commands are:
+    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, refresh contract/schedule/polling/event/API tests, Runtime unit/integration/parity tests, SDK tests, frontend test:ci, refresh/runtime Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands, synthetic database URLs, and the external CDC producer/broker/network/credential prerequisites. The SDK CI job must install `-e sdk` (including the runtime dependencies declared by sdk/pyproject.toml) before collecting/running its tests. Its commands are:
 
     REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
     (cd "$REPO_ROOT" && python -m pip install -e sdk)
     (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
-    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport, or points to a test target that cannot be collected/listed.
+    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport/refresh mode, points to a test target that cannot be collected/listed, or claims production CDC/broker availability that is not supplied by deployment configuration.
 
 - [ ] **Step 4: Run the complete release gate.**
 
@@ -1726,13 +2284,15 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
     (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime -q)
 
-    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_no_pii_or_real_secret -q)
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental -q)
 
-    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py::test_every_case_has_a_valid_registered_target_descriptor -q)
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_acceptance_matrix.py -q)
+
+    (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py -q)
 
     (cd "$REPO_ROOT" && docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait)
 
-    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/runtime/integration -q)
+    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/v2/incremental/integration tests/runtime/integration -q)
 
     (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
@@ -1761,7 +2321,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     curl -fsS http://127.0.0.1:5173/ >/dev/null
     docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
 
-    Expected: all M1, Phase 2, and Phase 3 checks pass; every case points to collectable/listable tests; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; and the final isolated volumes are removed.
+    Expected: all M1, Phase 2 refresh/lineage, and Phase 3 checks pass; every case points to collectable/listable tests; batch, micro-batch, and bounded event-driven cases show cursor/idempotency/lineage/freshness evidence; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; external CDC prerequisites are reported rather than assumed; and the final isolated volumes are removed.
 
 - [ ] **Step 5: Commit the release gate.**
 
@@ -1774,15 +2334,17 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 The implementation sequence covers the design in this order:
 
-- Product boundary, pipeline and semantic foundation, separate immutable release/snapshot contracts, quality/evidence, full dataset-version and pipeline-run lineage: Tasks 1, 6, and 7.
-- Trusted registered Agent/service identity, credential-derived user delegation, audience, scope, TTL, revocation, and same-security-domain checks: Task 8.
-- Effective capability ∩ entitlement ∩ runtime policy, structured ALLOW/DENY, stable reason codes, evidence, rules, empty-result distinction, and snapshot-pinned investigation/action plans: Tasks 9 and 10.
-- Versioned REST/API, Python SDK v1, MCP OAuth adapters, built-in reference Agent, compatibility paths, and transport normalization/hash parity: Tasks 11–14.
-- Snapshot-backed Sandbox boundary and immutable simulation output: Task 16.
-- Managed binding, frozen target/parameters, before-image/version hashes, canonical plan_hash, secret exclusion, and drift rejection: Task 15 and Task 20.
-- Automatic, human-approved, and rejected policy classes; exact-plan HITL; expiry and revalidation: Task 17 and Task 20.
-- PostgreSQL/MySQL parameterized single-target updates, minimum privilege, dialect transactions/timeouts, exact row counts, optimistic locking, idempotency, fencing, audit, reconciliation, and governed rollback plan: Tasks 18–20.
-- Governed Sandbox/approval/execute/reconciliation/rollback REST endpoints with RuntimeContext and structured DENY responses: Task 20A.
-- Operator lineage/diff/approval/receipt/reconciliation surfaces and full normal/edge/security/Playwright evidence: Tasks 1, 20A, 21, and 22.
+- Product boundary, source refresh policy, durable cursor/lease/idempotency/inbox state, T+1 schedules, bounded polling/event ingestion, retry/DLQ/replay, and refresh status operations: Tasks 1 and 6–10.
+- Pipeline and semantic foundation, separate immutable release/snapshot contracts, quality/evidence, full dataset-version and pipeline-run lineage: Tasks 1, 11, and 12.
+- Trusted registered Agent/service identity, credential-derived user delegation, audience, scope, TTL, revocation, and same-security-domain checks: Task 13.
+- Effective capability ∩ entitlement ∩ runtime policy, structured ALLOW/DENY, stable reason codes, evidence, rules, empty-result distinction, and snapshot-pinned investigation/action plans: Tasks 14 and 15.
+- Versioned REST/API, Python SDK v1, MCP OAuth adapters, built-in reference Agent, compatibility paths, and transport normalization/hash parity: Tasks 16–19.
+- Refresh freshness/lag/cursor/lineage propagation, stale/unknown ALLOW/DENY/HITL routing, and historical evidence immutability: Task 20.
+- Snapshot-backed Sandbox boundary and immutable simulation output: Task 22.
+- Managed binding, frozen target/parameters, before-image/version hashes, canonical plan_hash, secret exclusion, and drift rejection: Tasks 21 and 26.
+- Automatic, human-approved, and rejected policy classes; exact-plan HITL; expiry and revalidation: Tasks 23 and 26.
+- PostgreSQL/MySQL parameterized single-target updates, minimum privilege, dialect transactions/timeouts, exact row counts, optimistic locking, idempotency, fencing, audit, reconciliation, and governed rollback plan: Tasks 24–26.
+- Governed Sandbox/approval/execute/reconciliation/rollback REST endpoints with RuntimeContext and structured DENY responses: Task 26A.
+- Operator refresh/runtime lineage, diff/approval/receipt/reconciliation surfaces, and full normal/edge/security/Playwright evidence: Tasks 1, 10, 26A, 27, and 28.
 
-The following remain explicit non-goals: generic Agent orchestration, chat UX replacement, separate MCP policy, release-only evidence, arbitrary code/prompt/tool sandboxing, Agent-supplied SQL or secrets, arbitrary SQL/DDL, multi-target transactions, destructive deletes, broad connector expansion, and unrelated refactoring.
+The following remain explicit non-goals: generic Agent orchestration, chat UX replacement, separate MCP policy, release-only evidence, arbitrary code/prompt/tool sandboxing, Agent-supplied SQL or secrets, arbitrary SQL/DDL, multi-target transactions, destructive deletes, arbitrary Kafka/broker sources or a general stream-processing platform, a repository-owned CDC producer/broker, broad connector expansion, and unrelated refactoring. Production CDC is gated on enterprise source availability, network, credentials, retention, schema compatibility, and operations ownership.
