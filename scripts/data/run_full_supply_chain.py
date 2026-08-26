@@ -9,7 +9,7 @@ import json, sys, os, time
 import httpx
 
 BASE_URL = "http://localhost:8000"
-DATA_DIR = os.path.join(os.path.dirname(__file__), "test_data", "供应链")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "test_data", "供应链")
 
 # 文件列表及处理策略
 FILES = [

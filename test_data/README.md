@@ -33,6 +33,22 @@
   requires `pip install xlwt` once, and `generate_legacy_office.py` requires
   LibreOffice (`soffice`) on `PATH` once — neither is a runtime dependency of
   the committed fixtures.
+- `generate_all_domains.py`, `generate_legal_hr_v2.py`, `generate_supply_chain.py`
+  — the original generator scripts that produced the domain fixture content
+  above (same category as `信贷/generate_credit_data.py`). Kept for
+  provenance/regeneration, not run automatically.
+- `test_reproducibility.py` — a manual regression check for a real,
+  previously-fixed non-determinism bug (LLM auto-selection in the Pipeline
+  Mapping `md_to_structured` step). Runs 5x against both the simple-LLM and
+  Pipeline Mapping paths and diffs the extracted ontology across runs.
+  Requires a running backend plus `mock_llm_server.py` (below).
+- `mock_llm_server.py` — a local mock LLM server (port 8123) that
+  `test_reproducibility.py` depends on for deterministic extraction output.
+- `api/`, `db/`, `documents/` — reserved for the Agent Semantic
+  Infrastructure implementation plan
+  (`docs/superpowers/specs/2026-08-26-agent-semantic-infrastructure-design.md`),
+  which lists these as reusable test assets. Not orphaned — do not remove
+  without checking that plan first.
 
 ## Known issues found while building this fixture set
 
@@ -66,8 +82,15 @@ for the tests that document each one, and sub-project E for the planned fix.
    `backend/tests/v2/connection/test_sql_connector_integration.py` for the
    real-database tests that caught it.
 
-## Orphaned content
+## Hygiene (sub-project A)
 
-`test_data/api/`, `db/`, `frontend/`, `documents/`, and most of the loose
-root-level scripts are not referenced by any current code path. Cleaning
-these up is sub-project A, not addressed here.
+25 redundant, ad-hoc manual E2E/capture/debug scripts (heavily duplicated
+variations of the same "run the app end-to-end and screenshot it" idea —
+`e2e_full_flow.py`, `full_e2e_final.py`, `run_final_e2e.py`, `verify_e2e.py`,
+etc.), plus `frontend/`, `prompts/`, and `screenshots/` (zero references
+anywhere in the codebase, including from each other's scripts) were removed.
+Two misplaced files unrelated to test fixtures (`供应链/ontology-agent-faq-*.md`,
+a blog article) were also removed. `scripts/data/run_full_supply_chain.py`
+and `run_supply_chain_pipeline.py` had a broken-path bug (`DATA_DIR` resolved
+relative to `scripts/data/` instead of the repo root) — fixed, not deleted,
+since both are legitimate, non-duplicated manual Pipeline-testing tools.
