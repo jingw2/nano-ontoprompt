@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["高血压"]},
+  {"category": "entity", "required_keywords": ["血压"]},
+  {"category": "logic_rule", "required_keywords": ["治疗"]}
+]

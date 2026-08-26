@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["客户"]},
+  {"category": "entity", "required_keywords": ["ARR"]},
+  {"category": "entity", "required_keywords": ["健康度"]}
+]

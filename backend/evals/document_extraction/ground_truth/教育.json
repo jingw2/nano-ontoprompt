@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["学分"]},
+  {"category": "logic_rule", "required_keywords": ["毕业"]},
+  {"category": "logic_rule", "required_keywords": ["GPA"]}
+]

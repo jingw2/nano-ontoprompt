@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["合同"]},
+  {"category": "entity", "required_keywords": ["争议解决"]},
+  {"category": "entity", "required_keywords": ["仲裁"]}
+]
