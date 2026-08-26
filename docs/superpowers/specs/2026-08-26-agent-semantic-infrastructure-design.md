@@ -236,6 +236,10 @@ PostgreSQL and MySQL. The writer must enforce:
   parameters, with rejection when either caller parameters differ or the
   target's before-image or version hash no longer matches; runtime Agent
   parameters must never reselect the target row;
+- execution only when the plan's `managed_action_binding_id` and binding
+  version still resolve to the same published, non-revoked binding and
+  connection target; any binding or connection drift is rejected before a
+  transaction begins;
 - idempotency and execution fencing shared by automatic and HITL paths; and
 - rejection of arbitrary SQL, DDL, multi-target transactions, and destructive
   deletes.
@@ -410,6 +414,11 @@ Phase 3 acceptance:
   unknown-outcome reconciliation, rollback-plan creation, and rejection when
   action parameters or selector resolution drift from the plan-frozen target
   primary-key tuple or its before-image/version hashes.
+- For both database dialects, integration tests must reject execution before
+  any transaction when the plan's `managed_action_binding_id` or binding
+  version drifts, the binding changes from published to draft or revoked, or
+  the fixed connection binding/target drifts; the tests must verify that no
+  target row is changed and that the rejection is structured.
 - Security tests prove an Agent cannot supply SQL, identifiers, connection
   targets, or secrets, and no production write bypasses snapshot-backed
   Sandbox, dual-principal policy evaluation, idempotency, or audit.
