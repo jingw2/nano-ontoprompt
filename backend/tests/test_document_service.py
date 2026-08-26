@@ -163,3 +163,33 @@ def test_semantic_fixture_is_well_formed_csv(filename):
     result = convert_document(str(SEMANTIC_FIXTURES / filename))
     assert result.ok
     assert result.content.startswith("|")
+
+
+DOMAINS = ["信贷", "供应链", "教育", "医疗", "财务", "法律", "营销", "HR"]
+TEST_DATA_ROOT = Path(__file__).resolve().parents[2] / "test_data"
+
+
+@pytest.mark.parametrize("domain", DOMAINS)
+def test_xls_sample_fixture_exists(domain):
+    assert (TEST_DATA_ROOT / domain / f"{domain}_sample.xls").exists()
+
+
+@pytest.mark.parametrize("domain", DOMAINS)
+def test_xml_sample_fixture_exists(domain):
+    assert (TEST_DATA_ROOT / domain / f"{domain}_sample.xml").exists()
+
+
+def test_xls_is_currently_unsupported_by_convert_document():
+    # Known gap: .xls is in app.config.allowed_upload_extensions, but
+    # MarkItDown has no .xls converter and convert_document has no special
+    # case for it, so every .xls upload fails conversion outright. Tracked
+    # as a finding for sub-project E.
+    result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.xls"))
+    assert not result.ok
+
+
+def test_xml_is_currently_unsupported_by_convert_document():
+    # Same gap as .xls: .xml is an allowed upload extension with no working
+    # conversion path today.
+    result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.xml"))
+    assert not result.ok
