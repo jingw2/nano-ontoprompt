@@ -122,3 +122,30 @@ def test_gbk_encoded_txt_decodes_correctly():
     assert result.ok
     assert "张三" in result.content
     assert "�" not in result.content
+
+
+BOUNDARY_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_cases" / "boundary"
+
+
+def test_empty_file_csv_fails_with_clear_error():
+    result = convert_document(str(BOUNDARY_FIXTURES / "empty_file.csv"))
+    assert not result.ok
+    assert result.error == "CSV 文件为空"
+
+
+def test_single_row_csv_converts():
+    result = convert_document(str(BOUNDARY_FIXTURES / "single_row.csv"))
+    assert result.ok
+    assert len(result.content.splitlines()) == 3  # header + separator + 1 data row
+
+
+def test_large_10k_row_csv_converts_without_truncation():
+    result = convert_document(str(BOUNDARY_FIXTURES / "large_10k_rows.csv"))
+    assert result.ok
+    assert len(result.content.splitlines()) == 10002  # header + separator + 10000 rows
+
+
+def test_extreme_length_field_is_not_truncated():
+    result = convert_document(str(BOUNDARY_FIXTURES / "extreme_length_field.csv"))
+    assert result.ok
+    assert "x" * 20000 in result.content
