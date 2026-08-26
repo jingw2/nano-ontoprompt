@@ -68,6 +68,12 @@ def test_empty_cells_csv_preserves_column_count():
         assert line.count("|") - 1 == header_cols
 
 
+def test_duplicate_columns_csv_converts():
+    result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "duplicate_columns.csv"))
+    assert result.ok
+    assert result.content.splitlines()[0].count("|") == 4  # 客户ID, 金额, 金额 (duplicate header preserved as-is)
+
+
 def test_quote_escaped_without_comma_is_not_corrupted():
     # No embedded comma inside the escaped-quote field, so the naive
     # converter happens to produce the right column count.
@@ -92,9 +98,6 @@ def test_embedded_comma_in_quotes_does_not_corrupt_columns():
     assert data_line.count("|") - 1 == header_cols
 
 
-NON_UTF8_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_cases" / "malformed"
-
-
 @pytest.mark.xfail(
     reason="Known bug: document_service.py:_read_plain_text and "
     "_read_csv_as_markdown always decode with encoding='utf-8', "
@@ -106,7 +109,7 @@ NON_UTF8_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_ca
     strict=True,
 )
 def test_gbk_encoded_csv_decodes_correctly():
-    result = convert_document(str(NON_UTF8_FIXTURES / "non_utf8.csv"))
+    result = convert_document(str(FIXTURES / "non_utf8.csv"))
     assert result.ok
     assert "张三" in result.content
     assert "�" not in result.content
@@ -118,7 +121,7 @@ def test_gbk_encoded_csv_decodes_correctly():
     strict=True,
 )
 def test_gbk_encoded_txt_decodes_correctly():
-    result = convert_document(str(NON_UTF8_FIXTURES / "non_utf8.txt"))
+    result = convert_document(str(FIXTURES / "non_utf8.txt"))
     assert result.ok
     assert "张三" in result.content
     assert "�" not in result.content

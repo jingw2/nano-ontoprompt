@@ -50,28 +50,6 @@ def test_collect_sources_returns_both_connector_node_files(db, two_datasets):
     assert {s["filename"] for s in sources} == {"customers_v1.csv", "customers_v2_conflicting.csv"}
 
 
-def test_multi_source_flag_is_true_for_two_sources(db, two_datasets):
-    ds_a, ds_b = two_datasets
-    pl = SimpleNamespace(
-        definition={
-            "nodes": [{
-                "type": "connector",
-                "config": {"files": [
-                    {"dataset_id": ds_a.id, "name": "a.csv"},
-                    {"dataset_id": ds_b.id, "name": "b.csv"},
-                ]},
-            }]
-        },
-        source_dataset_id=None,
-        route=None,
-    )
-
-    sources = _collect_sources(db, pl)
-    multi_source = len(sources) > 1
-
-    assert multi_source is True
-
-
 def test_single_source_is_not_multi_source(db, two_datasets):
     ds_a, _ = two_datasets
     pl = SimpleNamespace(

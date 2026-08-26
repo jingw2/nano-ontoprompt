@@ -23,8 +23,11 @@
   judgment, not the file parser; there is no pass/fail assertion for them
   here (see the extraction-quality eval harness, sub-project D).
 - `edge_cases/multi_source/` — two customer files with a conflicting shared
-  ID, and two order files with mismatched column schemas, feeding
-  `pipeline_run.py`'s multi-source ingestion path.
+  ID, and two order files with mismatched column schemas. Their filenames
+  prove `pipeline_run.py`'s `_collect_sources()` correctly gathers multiple
+  dataset references as separate pipeline sources; the CSV content itself is
+  realistic but not read or parsed by that test (see the extraction-quality
+  eval harness, sub-project D, for a future consumer of the actual content).
 - `generators/` — deterministic Python scripts that produce every file above.
   Regenerating is idempotent (same seed data every run); `generate_missing_formats.py`
   requires `pip install xlwt` once, and `generate_legacy_office.py` requires
