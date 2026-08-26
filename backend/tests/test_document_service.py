@@ -2,6 +2,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from app.services.document_service import convert_document, is_usable_converted_text
 
 
@@ -46,3 +48,77 @@ def test_corrupted_xlsx_fixture_is_not_usable():
 def test_truncated_pdf_fixture_fails_gracefully():
     result = convert_document(str(FIXTURES / "truncated.pdf"))
     assert not result.ok
+
+
+CSV_STRUCTURAL_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_cases" / "csv_structural"
+
+
+def test_header_only_csv_succeeds_with_zero_data_rows():
+    result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "header_only.csv"))
+    assert result.ok
+    lines = (result.content or "").splitlines()
+    assert len(lines) == 2  # header row + separator row, no data rows
+
+
+def test_empty_cells_csv_preserves_column_count():
+    result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "empty_cells.csv"))
+    assert result.ok
+    header_cols = result.content.splitlines()[0].count("|") - 1
+    for line in result.content.splitlines()[2:]:
+        assert line.count("|") - 1 == header_cols
+
+
+def test_quote_escaped_without_comma_is_not_corrupted():
+    # No embedded comma inside the escaped-quote field, so the naive
+    # converter happens to produce the right column count.
+    result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "embedded_quote_escaped.csv"))
+    assert result.ok
+    assert result.content.splitlines()[0].count("|") == result.content.splitlines()[2].count("|")
+
+
+@pytest.mark.xfail(
+    reason="Known bug: document_service.py:_read_csv_as_markdown naive-splits "
+    "on every comma, including ones inside quoted fields, corrupting column "
+    "alignment for any CSV with a comma-containing quoted value. Fix tracked "
+    "as sub-project E; this test should start passing (and the xfail marker "
+    "should be removed) once _read_csv_as_markdown uses the csv module.",
+    strict=True,
+)
+def test_embedded_comma_in_quotes_does_not_corrupt_columns():
+    result = convert_document(str(CSV_STRUCTURAL_FIXTURES / "embedded_comma_quoted.csv"))
+    assert result.ok
+    header_cols = result.content.splitlines()[0].count("|") - 1
+    data_line = result.content.splitlines()[2]  # "1,"北京, 上海"" row
+    assert data_line.count("|") - 1 == header_cols
+
+
+NON_UTF8_FIXTURES = Path(__file__).resolve().parents[2] / "test_data" / "edge_cases" / "malformed"
+
+
+@pytest.mark.xfail(
+    reason="Known bug: document_service.py:_read_plain_text and "
+    "_read_csv_as_markdown always decode with encoding='utf-8', "
+    "errors='replace', so a real-world GBK-encoded Chinese file silently "
+    "decodes to mojibake (U+FFFD replacement characters) with ok=True and "
+    "no error surfaced. Fix tracked as sub-project E (e.g. encoding "
+    "detection via chardet, or explicit GBK fallback); this test should "
+    "start passing once that lands.",
+    strict=True,
+)
+def test_gbk_encoded_csv_decodes_correctly():
+    result = convert_document(str(NON_UTF8_FIXTURES / "non_utf8.csv"))
+    assert result.ok
+    assert "张三" in result.content
+    assert "�" not in result.content
+
+
+@pytest.mark.xfail(
+    reason="Same root cause as test_gbk_encoded_csv_decodes_correctly, via "
+    "_read_plain_text instead of _read_csv_as_markdown.",
+    strict=True,
+)
+def test_gbk_encoded_txt_decodes_correctly():
+    result = convert_document(str(NON_UTF8_FIXTURES / "non_utf8.txt"))
+    assert result.ok
+    assert "张三" in result.content
+    assert "�" not in result.content
