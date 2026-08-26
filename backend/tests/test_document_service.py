@@ -193,3 +193,26 @@ def test_xml_is_currently_unsupported_by_convert_document():
     # conversion path today.
     result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.xml"))
     assert not result.ok
+
+
+@pytest.mark.parametrize("domain", DOMAINS)
+def test_doc_sample_fixture_exists(domain):
+    assert (TEST_DATA_ROOT / domain / f"{domain}_sample.doc").exists()
+
+
+@pytest.mark.parametrize("domain", DOMAINS)
+def test_ppt_sample_fixture_exists(domain):
+    assert (TEST_DATA_ROOT / domain / f"{domain}_sample.ppt").exists()
+
+
+def test_doc_is_currently_unsupported_by_convert_document():
+    # Known gap, same shape as .xls/.xml: legacy .doc is an allowed upload
+    # extension with no working conversion path today (MarkItDown lists it
+    # under unsupported formats). Tracked for sub-project E.
+    result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.doc"))
+    assert not result.ok
+
+
+def test_ppt_is_currently_unsupported_by_convert_document():
+    result = convert_document(str(TEST_DATA_ROOT / "信贷" / "信贷_sample.ppt"))
+    assert not result.ok
