@@ -172,11 +172,15 @@ omit that reference. The plan includes:
 - the semantic snapshot and ontology release pin;
 - Agent and delegated-user principals derived from the verified credential;
 - input facts, evidence citations, and rule outcomes used for the proposal;
-- the managed action binding, typed parameters, predicted diff, and impact
-  scope;
+- the immutable `managed_action_binding_id` and binding version, frozen typed
+  parameters, normalized target primary-key tuple (or the final result of
+  resolving a selector), the target's `before_image_hash` and `version_hash`,
+  predicted diff, and impact scope;
 - risk classification, policy decision, precondition hashes, expiry, and an
   idempotency key; and
-- a canonical `plan_hash` over semantic plan fields.
+- a canonical `plan_hash` over semantic plan fields, including the binding
+  identity/version, frozen typed parameters, normalized target, and target
+  before-image/version hashes.
 
 An action plan is the unit of approval for one exact immutable proposal, not
 ongoing write authority. It contains no database passwords, tokens, or other
@@ -208,11 +212,17 @@ this roadmap.
 #### Managed action binding and database safety
 
 Every writable action is published with a fixed, versioned binding. The
-binding fixes the connection target identity, SQL dialect, table, primary-key
-columns, writable columns, and version/precondition column or expression.
-Only typed business parameters may be supplied at Runtime. Agents cannot
-provide SQL, table/column identifiers, connection targets, or transaction
-options.
+binding fixes the `managed_action_binding_id`, connection target identity, SQL
+dialect, table, primary-key columns, writable columns, and version/precondition
+column or expression. During plan creation, a target selector is resolved
+against the pinned snapshot and its normalized final primary-key tuple is
+frozen in the plan; a plan must always carry that tuple (or an equivalent
+frozen selector result) and the target's before-image/version hashes. Only
+typed business parameters may be supplied when creating the plan. Execution
+accepts only the plan identity/hash and uses its frozen parameters and target;
+an override is rejected. Agents cannot provide SQL, table/column identifiers,
+connection targets, transaction options, or a replacement target selector for
+execution.
 
 Phase 3 v1 supports allowlisted, parameterized, single-target row updates in
 PostgreSQL and MySQL. The writer must enforce:
@@ -222,6 +232,10 @@ PostgreSQL and MySQL. The writer must enforce:
 - dialect-specific transactions, statement timeouts, and exact row-count
   checks;
 - optimistic locking against the published version precondition;
+- execution only against the plan-frozen primary-key tuple and frozen typed
+  parameters, with rejection when either caller parameters differ or the
+  target's before-image or version hash no longer matches; runtime Agent
+  parameters must never reselect the target row;
 - idempotency and execution fencing shared by automatic and HITL paths; and
 - rejection of arbitrary SQL, DDL, multi-target transactions, and destructive
   deletes.
@@ -393,7 +407,9 @@ Phase 3 acceptance:
 - PostgreSQL and MySQL integration tests cover authorized automatic update,
   HITL update, exact-plan approval, stale-plan rejection, policy/identity/
   snapshot drift, precondition conflict, row-count mismatch, idempotent retry,
-  unknown-outcome reconciliation, and rollback-plan creation.
+  unknown-outcome reconciliation, rollback-plan creation, and rejection when
+  action parameters or selector resolution drift from the plan-frozen target
+  primary-key tuple or its before-image/version hashes.
 - Security tests prove an Agent cannot supply SQL, identifiers, connection
   targets, or secrets, and no production write bypasses snapshot-backed
   Sandbox, dual-principal policy evaluation, idempotency, or audit.
