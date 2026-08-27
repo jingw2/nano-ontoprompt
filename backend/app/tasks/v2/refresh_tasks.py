@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from celery.exceptions import SoftTimeLimitExceeded, WorkerShutdown
 
 from app.tasks.celery_app import celery_app
-from app.tasks.topology import QUEUE_REFRESH_EVENT, QUEUE_REFRESH_POLL, enqueue_refresh_run
+from app.tasks.topology import QUEUE_REFRESH_POLL, enqueue_refresh_run
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,11 @@ def _send_refresh_via_celery(message) -> str:
     return enqueue_refresh_run(message=message, send_task=_celery_send_task)
 
 
+def _send_event_via_celery(run_id: str):
+    """Publish only a durable event run ID during inbox reconciliation."""
+    return refresh_event_task.delay(run_id)
+
+
 @celery_app.task(name="refresh.dispatch_due_schedules")
 def dispatch_due_schedules_task() -> list[str]:
     """Beat-driven: publish every due persisted schedule's run to the broker.
@@ -51,10 +56,20 @@ def dispatch_due_schedules_task() -> list[str]:
 
     db = SessionLocal()
     try:
-        return dispatch_due_schedules(
+        schedule_run_ids = dispatch_due_schedules(
             db, now=datetime.now(timezone.utc), lease_owner="beat",
             send_refresh=_send_refresh_via_celery,
         )
+        # Beat is also the durable recovery loop for managed events.  This
+        # scans rows accepted while the broker/source lease was unavailable;
+        # each callback still carries only the run ID to refresh.event.
+        from app.services.v2.incremental.event_ingest import EventIngestService
+
+        EventIngestService().drain_pending(
+            db, dispatch=_send_event_via_celery, lease_owner="event-dispatcher:beat",
+            now=datetime.now(timezone.utc),
+        )
+        return schedule_run_ids
     finally:
         db.close()
 

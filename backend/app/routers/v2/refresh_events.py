@@ -54,15 +54,25 @@ async def receive_webhook(source_id: str, request: Request, db: Session = Depend
         status = 401 if exc.reason_code in {"INVALID_SIGNATURE", "EXPIRED_SIGNATURE", "REPLAY_DETECTED"} else 400
         raise HTTPException(status_code=status, detail=exc.reason_code) from exc
 
-    # The inbox/run transaction is already durable.  Dispatch failures do not
-    # erase it; the persisted received row remains replayable by run ID.
-    if receipt.run_id and receipt.status in {"received", "duplicate"}:
-        try:
-            from app.tasks.v2.refresh_tasks import refresh_event_task
+    # The inbox/run transaction is already durable.  Dispatch failures are
+    # recorded on the run and remain eligible for a later SQL-backed drain.
+    from app.tasks.v2.refresh_tasks import refresh_event_task
 
-            refresh_event_task.delay(receipt.run_id)
-        except Exception:
-            pass
+    # A duplicate is already an acknowledgement.  Its run may still be
+    # pending in the durable reconciler, but redelivery must not publish a
+    # second worker message or change the duplicate status/cursor response.
+    if receipt.run_id and receipt.status == "received":
+        receipt = EventIngestService().dispatch_pending(
+            db, run_id=receipt.run_id, dispatch=refresh_event_task.delay,
+            now=datetime.now(timezone.utc),
+        )
+    elif receipt.run_id is None:
+        drained = EventIngestService().drain_pending(
+            db, dispatch=refresh_event_task.delay, lease_owner=f"webhook:{source_id}",
+            source_id=source_id, resource=envelope.resource, now=datetime.now(timezone.utc), limit=1,
+        )
+        if drained and drained[0].event_id == receipt.event_id:
+            receipt = drained[0]
     return {
         "event_id": receipt.event_id,
         "run_id": receipt.run_id,

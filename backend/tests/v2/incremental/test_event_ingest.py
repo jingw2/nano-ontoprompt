@@ -13,6 +13,8 @@ from app.models.v2.dataset import DatasetVersion
 from app.models.v2.pipeline import PipelineRunInput
 from app.models.v2.refresh import RefreshInboxEvent, RefreshRun, RefreshSourceState
 from app.schemas.refresh import ChangeEnvelope, RefreshLeaseError
+from app.services.v2.incremental import event_ingest
+from app.services.v2.incremental.contract import update_source_configuration
 from app.services.v2.incremental.event_adapters import (
     EventIngressError,
     ManagedOutboxAdapter,
@@ -195,14 +197,19 @@ def test_event_accept_recovers_when_claim_fails_after_inbox_commit(db, monkeypat
         return original_claim(*args, **kwargs)
 
     monkeypatch.setattr(event_ingest, "claim_refresh_run", fail_once)
-    with pytest.raises(RefreshLeaseError):
-        service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    first = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert first.status == "received"
+    assert first.run_id is None
 
     durable = db.query(RefreshInboxEvent).one()
     assert durable.state == "received"
     assert durable.run_id is None
 
-    recovered = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    duplicate = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert duplicate.status == "duplicate"
+    recovered = service.drain_pending(
+        db, dispatch=lambda _run_id: None, lease_owner="event-worker-001", now=FIXED_NOW,
+    )[0]
     assert recovered.status == "received"
     assert recovered.run_id is not None
     assert db.query(RefreshRun).count() == 1
@@ -226,6 +233,108 @@ def test_event_accept_uses_the_connection_cursor_contract_when_provisioning_stat
         EventIngestService().accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
     assert exc.value.reason_code == "SCHEMA_DRIFT"
     assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-opaque").count() == 0
+
+
+def test_broker_failure_is_reconciled_from_the_durable_inbox(db):
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+
+    failed = service.dispatch_pending(
+        db, run_id=receipt.run_id, dispatch=lambda _run_id: (_ for _ in ()).throw(RuntimeError("broker down")),
+        now=FIXED_NOW,
+    )
+
+    assert failed.status == "publish_failed"
+    assert db.query(RefreshInboxEvent).one().state == "received"
+    assert db.get(RefreshRun, receipt.run_id).dispatch_state == "publish_failed"
+
+    dispatched: list[str] = []
+    recovered = service.drain_pending(
+        db, dispatch=lambda run_id: dispatched.append(run_id),
+        lease_owner="event-dispatcher", now=FIXED_NOW + timedelta(minutes=1),
+    )
+
+    assert dispatched == [receipt.run_id]
+    assert recovered[0].run_id == receipt.run_id
+    assert db.get(RefreshRun, receipt.run_id).dispatch_state == "dispatched"
+    assert service.process(db, run_id=receipt.run_id, lease_owner="event-worker-001", now=FIXED_NOW).status == "succeeded"
+
+
+def test_second_event_waits_for_source_lease_then_drains(db):
+    _source(db)
+    service = EventIngestService()
+    first = ManagedOutboxAdapter.normalize(_record(event_id="evt-first"), source_id="source-001", received_at=FIXED_NOW)
+    second = ManagedOutboxAdapter.normalize(_record(event_id="evt-second", watermark="2026-08-26T02:00:00Z"), source_id="source-001", received_at=FIXED_NOW)
+
+    first_receipt = service.accept(db, first, lease_owner="event-worker-001", now=FIXED_NOW)
+    second_receipt = service.accept(db, second, lease_owner="event-worker-002", now=FIXED_NOW)
+
+    assert second_receipt.status == "received"
+    assert second_receipt.run_id is None
+    assert db.query(RefreshInboxEvent).filter(RefreshInboxEvent.event_id == "evt-second").one().state == "received"
+
+    service.process(db, run_id=first_receipt.run_id, lease_owner="event-worker-001", now=FIXED_NOW)
+    dispatched: list[str] = []
+    recovered = service.drain_pending(
+        db, dispatch=lambda run_id: dispatched.append(run_id),
+        lease_owner="event-dispatcher", now=FIXED_NOW + timedelta(minutes=1),
+    )
+
+    assert dispatched and recovered[0].event_id == "evt-second"
+    second_run_id = recovered[0].run_id
+    assert second_run_id is not None
+    assert service.process(db, run_id=second_run_id, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(minutes=1)).status == "succeeded"
+
+
+def test_dlq_replay_recovers_a_run_persisted_before_crash(db, monkeypatch):
+    _source(db)
+    service = EventIngestService(max_attempts=1)
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    service.dead_letter(db, run_id=receipt.run_id, reason="fixture failure", now=FIXED_NOW)
+    dead_letter_id = db.query(service.dead_letter_model).one().id
+    original_claim = event_ingest.claim_refresh_run
+
+    def claim_then_crash(*args, **kwargs):
+        original_claim(*args, **kwargs)
+        raise RuntimeError("crash after replay run commit")
+
+    monkeypatch.setattr(event_ingest, "claim_refresh_run", claim_then_crash)
+    with pytest.raises(RuntimeError):
+        service.replay_dead_letter(db, dead_letter_id=dead_letter_id, operator_id="operator-001", now=FIXED_NOW)
+
+    monkeypatch.setattr(event_ingest, "claim_refresh_run", original_claim)
+    recovered = service.replay_dead_letter(
+        db, dead_letter_id=dead_letter_id, operator_id="operator-002", now=FIXED_NOW + timedelta(minutes=1),
+    )
+
+    assert db.query(RefreshRun).filter(RefreshRun.idempotency_key == f"replay:event:{dead_letter_id}").count() == 1
+    assert db.get(service.dead_letter_model, dead_letter_id).replay_run_id == recovered.id
+    assert recovered.trigger == "replay"
+
+
+def test_duplicate_redelivery_bypasses_new_schema_revision_but_new_event_does_not(db):
+    _source(db, schema_hash="schema-v1")
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    first = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    update_source_configuration(
+        db, source_id="source-001", resource="orders", cursor_contract="watermark_primary_key",
+        configuration={"schema_hash": "schema-v2"}, now=FIXED_NOW + timedelta(seconds=1),
+    )
+
+    duplicate = service.accept(db, envelope, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(seconds=2))
+
+    assert duplicate.status == "duplicate"
+    assert duplicate.run_id == first.run_id
+    new_event = ManagedOutboxAdapter.normalize(
+        _record(event_id="evt-new"), source_id="source-001", received_at=FIXED_NOW,
+    )
+    with pytest.raises(EventIngressError) as exc:
+        service.accept(db, new_event, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(seconds=2))
+    assert exc.value.reason_code == "SCHEMA_DRIFT"
 
 
 def test_event_worker_materializes_lineage_and_advances_cursor(db):
@@ -304,6 +413,65 @@ def test_webhook_route_returns_only_event_run_and_status(client, db, monkeypatch
     assert set(response.json()) == {"event_id", "run_id", "status"}
     assert response.json()["event_id"] == "evt-001"
     assert response.json()["status"] == "received"
+
+
+def test_webhook_route_reports_durable_publish_failure_for_later_drain(client, db, monkeypatch):
+    _source(db)
+    db.get(Connection, "source-001").config = {
+        "cursor_contract": "watermark_primary_key", "webhook_secret_ref": SECRET,
+    }
+    db.commit()
+    from app.tasks.v2 import refresh_tasks
+
+    def broker_down(_run_id):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(refresh_tasks.refresh_event_task, "delay", broker_down)
+    body = _body(event_id="evt-broker-down")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    response = client.post(
+        "/api/v2/refresh/events/webhook/source-001",
+        content=body,
+        headers={"X-Webhook-Signature": _signature(body, timestamp=timestamp), "X-Webhook-Timestamp": timestamp},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "publish_failed"
+    run = db.query(RefreshRun).one()
+    assert run.dispatch_state == "publish_failed"
+    assert db.query(RefreshInboxEvent).one().state == "received"
+
+
+def test_webhook_duplicate_acknowledgement_precedes_schema_validation(client, db, monkeypatch):
+    _source(db)
+    db.get(Connection, "source-001").config = {
+        "cursor_contract": "watermark_primary_key", "webhook_secret_ref": SECRET,
+    }
+    db.commit()
+    from app.tasks.v2 import refresh_tasks
+
+    published: list[str] = []
+    monkeypatch.setattr(refresh_tasks.refresh_event_task, "delay", published.append)
+    body = _body(event_id="evt-route-duplicate")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    headers = {
+        "X-Webhook-Signature": _signature(body, timestamp=timestamp),
+        "X-Webhook-Timestamp": timestamp,
+    }
+    first = client.post("/api/v2/refresh/events/webhook/source-001", content=body, headers=headers)
+    assert first.status_code == 200
+
+    update_source_configuration(
+        db, source_id="source-001", resource="orders", cursor_contract="watermark_primary_key",
+        configuration={"schema_hash": "schema-v2", "webhook_secret_ref": SECRET},
+        now=FIXED_NOW + timedelta(seconds=1),
+    )
+    duplicate = client.post("/api/v2/refresh/events/webhook/source-001", content=body, headers=headers)
+
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "duplicate"
+    assert duplicate.json()["run_id"] == first.json()["run_id"]
+    assert published == [first.json()["run_id"]]
 
 
 def test_dlq_replay_creates_new_run_and_retains_original(db):

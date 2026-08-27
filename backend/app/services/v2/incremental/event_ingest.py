@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from typing import Callable, Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,6 +50,10 @@ def _event_contract(envelope: ChangeEnvelope) -> str:
     if envelope.source_cursor is not None:
         return "opaque_source_cursor"
     return "watermark_primary_key"
+
+
+def _event_idempotency_key(*, source_id: str, resource: str, event_id: str) -> str:
+    return f"event:{source_id}:{resource}:{event_id}"
 
 
 def _envelope_to_json(envelope: ChangeEnvelope) -> dict[str, object]:
@@ -177,6 +181,35 @@ class EventIngestService:
             raise EventIngressError("INVALID_CHANGE_ENVELOPE", "source, resource, and event identity are required")
         event_hash = dedupe_key(envelope)
 
+        # Identity and immutable hash are the first lookup.  A retry of an
+        # already accepted event must remain an acknowledgement even when the
+        # mutable source/schema revision has since changed.
+        row = db.execute(
+            select(RefreshInboxEvent).where(
+                RefreshInboxEvent.source_id == envelope.source_id,
+                RefreshInboxEvent.resource == envelope.resource,
+                RefreshInboxEvent.event_id == envelope.event_id,
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if row is not None:
+            if row.event_hash and row.event_hash != event_hash:
+                db.rollback()
+                raise EventIngressError("REPLAY_DETECTED", "event identity was reused with a different payload")
+            if row.event_hash is None:
+                row.event_hash = event_hash
+            if row.state == "dead_lettered":
+                status = "dead_lettered"
+                reason_code = "DEAD_LETTERED"
+            elif row.state == "processed":
+                status = "processed"
+                reason_code = "DUPLICATE_EVENT"
+            else:
+                row.state = "duplicate"
+                status = "duplicate"
+                reason_code = "DUPLICATE_EVENT"
+            db.commit()
+            return _receipt(db, row, status=status, reason_code=reason_code)
+
         connection = db.get(Connection, envelope.source_id)
         connection_config = dict(connection.config or {}) if connection is not None else {}
         configured_contract = (
@@ -206,56 +239,6 @@ class EventIngestService:
             state.configuration = {"schema_hash": connection_config["schema_hash"]}
         self._validate_source_contract(db, state=state, envelope=envelope)
 
-        row = db.execute(
-            select(RefreshInboxEvent).where(
-                RefreshInboxEvent.source_id == envelope.source_id,
-                RefreshInboxEvent.resource == envelope.resource,
-                RefreshInboxEvent.event_id == envelope.event_id,
-            ).with_for_update()
-        ).scalar_one_or_none()
-        if row is not None:
-            if row.event_hash and row.event_hash != event_hash:
-                db.rollback()
-                raise EventIngressError("REPLAY_DETECTED", "event identity was reused with a different payload")
-            if row.run_id is None:
-                existing_run = db.execute(
-                    select(RefreshRun).where(
-                        RefreshRun.source_id == envelope.source_id,
-                        RefreshRun.resource == envelope.resource,
-                        RefreshRun.idempotency_key == f"event:{envelope.source_id}:{envelope.resource}:{envelope.event_id}",
-                    ).order_by(RefreshRun.created_at.desc())
-                ).scalars().first()
-                if existing_run is not None:
-                    row.run_id = existing_run.id
-                    db.commit()
-                    db.refresh(row)
-                    return _receipt(db, row, status="received")
-                run = claim_refresh_run(
-                    db, source_id=envelope.source_id, resource=envelope.resource,
-                    policy=RefreshPolicy.EVENT_DRIVEN,
-                    idempotency_key=f"event:{envelope.source_id}:{envelope.resource}:{envelope.event_id}",
-                    lease_owner=lease_owner, now=now, default_cursor_contract=state.cursor_contract,
-                )
-                run.trigger = "event"
-                run.dispatch_queue = QUEUE_REFRESH_EVENT
-                db.commit()
-                row.run_id = run.id
-                db.commit()
-                db.refresh(row)
-                return _receipt(db, row, status="received")
-            if row.state == "dead_lettered":
-                status = "dead_lettered"
-            elif row.state == "processed":
-                status = "processed"
-            else:
-                status = "duplicate"
-                row.state = "duplicate"
-            db.commit()
-            return _receipt(
-                db, row, status=status,
-                reason_code="DUPLICATE_EVENT" if status in {"duplicate", "processed"} else "DEAD_LETTERED",
-            )
-
         row = RefreshInboxEvent(
             id=str(uuid.uuid4()), source_id=envelope.source_id, resource=envelope.resource,
             event_id=envelope.event_id, event_hash=event_hash, state="received",
@@ -267,11 +250,22 @@ class EventIngestService:
         db.commit()
         db.refresh(row)
 
-        run = claim_refresh_run(
-            db, source_id=envelope.source_id, resource=envelope.resource,
-            policy=RefreshPolicy.EVENT_DRIVEN, idempotency_key=f"event:{envelope.source_id}:{envelope.resource}:{envelope.event_id}",
-            lease_owner=lease_owner, now=now, default_cursor_contract=state.cursor_contract,
-        )
+        try:
+            run = claim_refresh_run(
+                db, source_id=envelope.source_id, resource=envelope.resource,
+                policy=RefreshPolicy.EVENT_DRIVEN,
+                idempotency_key=_event_idempotency_key(
+                    source_id=envelope.source_id, resource=envelope.resource, event_id=envelope.event_id,
+                ),
+                lease_owner=lease_owner, now=now, default_cursor_contract=state.cursor_contract,
+            )
+        except RefreshLeaseError:
+            # The inbox commit is durable even when another event currently
+            # owns this source lease.  A later drain will claim this row after
+            # the owner finishes or its lease expires.
+            db.rollback()
+            row = db.get(RefreshInboxEvent, row.id)
+            return _receipt(db, row, status="received", reason_code="PENDING_LEASE")
         run.trigger = "event"
         run.dispatch_queue = QUEUE_REFRESH_EVENT
         db.commit()
@@ -348,6 +342,188 @@ class EventIngestService:
             inbox.delivery_attempts += 1
         current = mark_refresh_retryable(db, run_id=run_id, reason=reason, now=now)
         return polling._result(db, current, error_code="RETRYABLE")
+
+    def dispatch_pending(
+        self,
+        db: Session,
+        *,
+        run_id: str,
+        dispatch: Callable[[str], object],
+        now: datetime,
+    ) -> IngestReceipt:
+        """Publish one durable event run, recording broker outcome in SQL.
+
+        The callback receives only the durable run ID.  A short SQL claim
+        prevents concurrent drainers from publishing the same pending run;
+        an expired claim is deliberately recoverable for at-least-once
+        delivery after a dispatcher crash.
+        """
+        now = _as_utc(now)
+        run = db.execute(
+            select(RefreshRun).where(RefreshRun.id == run_id).with_for_update()
+        ).scalar_one_or_none()
+        if run is None:
+            raise RefreshError("REFRESH_RUN_NOT_FOUND", f"no RefreshRun {run_id}")
+        row = db.execute(
+            select(RefreshInboxEvent).where(RefreshInboxEvent.run_id == run.id).with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            db.rollback()
+            raise RefreshError("INBOX_EVENT_NOT_FOUND", f"no durable inbox event for run {run_id}")
+        if run.status in {"succeeded", "failed", "dead_lettered", "cancelled"}:
+            db.commit()
+            status = "dead_lettered" if run.status == "dead_lettered" else "processed" if run.status == "succeeded" else run.status
+            return _receipt(db, row, status=status, reason_code="DEAD_LETTERED" if status == "dead_lettered" else "DUPLICATE_EVENT")
+
+        retry_at = run.dispatch_retry_at
+        if retry_at is not None and _as_utc(retry_at) > now:
+            db.commit()
+            return _receipt(db, row, status="pending", reason_code="PUBLISH_RETRY_WAIT")
+
+        claim_owner = f"event-dispatcher:{uuid.uuid4()}"
+        claim_expires_at = now + timedelta(seconds=60)
+        existing_claim = run.dispatch_claim_expires_at
+        if (
+            run.dispatch_claim_owner is not None
+            and existing_claim is not None
+            and _as_utc(existing_claim) > now
+        ):
+            db.commit()
+            return _receipt(db, row, status="pending", reason_code="PUBLISH_IN_FLIGHT")
+        run.dispatch_claim_owner = claim_owner
+        run.dispatch_claim_expires_at = claim_expires_at
+        db.commit()
+
+        try:
+            # No event body, source URL, or credential crosses this callback.
+            dispatch(run.id)
+        except Exception:
+            db.rollback()
+            current = db.execute(
+                select(RefreshRun).where(RefreshRun.id == run.id).with_for_update()
+            ).scalar_one()
+            current_row = db.execute(
+                select(RefreshInboxEvent).where(RefreshInboxEvent.run_id == current.id).with_for_update()
+            ).scalar_one()
+            if current.dispatch_claim_owner == claim_owner:
+                current.dispatch_state = "publish_failed"
+                current.dispatch_reason = "PUBLISH_FAILED"
+                current.dispatch_retry_at = now + timedelta(seconds=15)
+                current.dispatch_claim_owner = None
+                current.dispatch_claim_expires_at = None
+                current_row.delivery_attempts += 1
+            db.commit()
+            return _receipt(db, current_row, status="publish_failed", reason_code="PUBLISH_FAILED")
+
+        db.rollback()
+        current = db.execute(
+            select(RefreshRun).where(RefreshRun.id == run.id).with_for_update()
+        ).scalar_one()
+        current_row = db.execute(
+            select(RefreshInboxEvent).where(RefreshInboxEvent.run_id == current.id).with_for_update()
+        ).scalar_one()
+        if current.dispatch_claim_owner != claim_owner:
+            db.commit()
+            return _receipt(db, current_row, status="pending", reason_code="PUBLISH_IN_FLIGHT")
+        current.dispatch_state = "dispatched"
+        current.dispatch_reason = None
+        current.dispatch_retry_at = None
+        current.dispatch_claim_owner = None
+        current.dispatch_claim_expires_at = None
+        db.commit()
+        return _receipt(db, current_row, status="received")
+
+    def drain_pending(
+        self,
+        db: Session,
+        *,
+        dispatch: Callable[[str], object],
+        lease_owner: str,
+        now: datetime,
+        source_id: str | None = None,
+        resource: str | None = None,
+        limit: int = 100,
+    ) -> list[IngestReceipt]:
+        """Recover accepted inbox rows after lease/broker interruption.
+
+        Rows are selected from SQL rather than an in-memory queue.  If the
+        source lease is busy, the row remains `received` and is retried on a
+        later drain; no request is allowed to turn that expected contention
+        into a 500 response.
+        """
+        now = _as_utc(now)
+        statement = select(RefreshInboxEvent).where(
+            RefreshInboxEvent.state.in_(("received", "duplicate")),
+            RefreshInboxEvent.envelope_json.is_not(None),
+        )
+        if source_id is not None:
+            statement = statement.where(RefreshInboxEvent.source_id == source_id)
+        if resource is not None:
+            statement = statement.where(RefreshInboxEvent.resource == resource)
+        rows = db.execute(
+            statement.order_by(RefreshInboxEvent.created_at).limit(max(1, min(500, int(limit))))
+        ).scalars().all()
+        receipts: list[IngestReceipt] = []
+        for candidate in rows:
+            db.rollback()
+            row = db.execute(
+                select(RefreshInboxEvent).where(RefreshInboxEvent.id == candidate.id).with_for_update()
+            ).scalar_one_or_none()
+            if row is None or row.state not in {"received", "duplicate"} or not row.envelope_json:
+                continue
+
+            run = db.get(RefreshRun, row.run_id) if row.run_id else None
+            if run is None:
+                try:
+                    envelope = _envelope_from_json(row.envelope_json, received_at=row.received_at)
+                    state = db.execute(
+                        select(RefreshSourceState).where(
+                            RefreshSourceState.source_id == row.source_id,
+                            RefreshSourceState.resource == row.resource,
+                        ).with_for_update()
+                    ).scalar_one_or_none()
+                    if state is None:
+                        db.rollback()
+                        continue
+                    self._validate_source_contract(db, state=state, envelope=envelope)
+                except (EventIngressError, RefreshError):
+                    # The original acceptance remains durable and auditable;
+                    # a current config/schema change must not erase it.  A
+                    # future operator replay can decide whether to resend.
+                    db.rollback()
+                    receipts.append(_receipt(db, db.get(RefreshInboxEvent, row.id), status="received", reason_code="SCHEMA_DRIFT"))
+                    continue
+
+                existing = db.execute(
+                    select(RefreshRun).where(
+                        RefreshRun.source_id == row.source_id,
+                        RefreshRun.resource == row.resource,
+                        RefreshRun.idempotency_key == _event_idempotency_key(
+                            source_id=row.source_id, resource=row.resource, event_id=row.event_id,
+                        ),
+                    ).order_by(RefreshRun.created_at.desc())
+                ).scalars().first()
+                try:
+                    run = existing or claim_refresh_run(
+                        db, source_id=row.source_id, resource=row.resource,
+                        policy=RefreshPolicy.EVENT_DRIVEN,
+                        idempotency_key=_event_idempotency_key(
+                            source_id=row.source_id, resource=row.resource, event_id=row.event_id,
+                        ),
+                        lease_owner=lease_owner, now=now, default_cursor_contract=state.cursor_contract,
+                    )
+                except RefreshLeaseError:
+                    db.rollback()
+                    continue
+                run.trigger = "event"
+                run.dispatch_queue = QUEUE_REFRESH_EVENT
+                row.run_id = run.id
+                db.commit()
+            if run.dispatch_state != "dispatched":
+                receipts.append(self.dispatch_pending(db, run_id=run.id, dispatch=dispatch, now=now))
+            else:
+                receipts.append(_receipt(db, row, status="received"))
+        return receipts
 
     def process(self, db: Session, *, run_id: str, lease_owner: str | None = None, now: datetime) -> polling.RefreshRunResult:
         """Materialize one accepted inbox row under its frozen run contract."""
@@ -478,17 +654,28 @@ class EventIngestService:
         ).scalar_one_or_none()
         if letter is None:
             raise RefreshError("DEAD_LETTER_NOT_FOUND", f"no dead letter {dead_letter_id}")
-        if letter.replay_status != "pending":
-            if letter.replay_run_id:
-                existing = db.get(RefreshRun, letter.replay_run_id)
-                if existing is not None:
-                    db.commit()
-                    return existing
-            db.rollback()
-            raise RefreshError("REPLAY_NOT_ALLOWED", "dead letter has already been replayed or discarded")
         old = db.get(RefreshRun, letter.run_id) if letter.run_id else None
         if old is None:
             raise RefreshError("REFRESH_RUN_NOT_FOUND", "dead letter has no source run")
+        replay_key = f"replay:event:{letter.id}"
+        existing = db.execute(
+            select(RefreshRun).where(
+                RefreshRun.source_id == old.source_id,
+                RefreshRun.resource == old.resource,
+                RefreshRun.idempotency_key == replay_key,
+            ).order_by(RefreshRun.created_at.desc())
+        ).scalars().first()
+        if letter.replay_status != "pending":
+            if letter.replay_run_id:
+                linked = db.get(RefreshRun, letter.replay_run_id)
+                if linked is not None:
+                    db.commit()
+                    return linked
+            if existing is not None:
+                db.commit()
+                return existing
+            db.rollback()
+            raise RefreshError("REPLAY_NOT_ALLOWED", "dead letter has already been replayed or discarded")
         inbox = db.execute(
             select(RefreshInboxEvent).where(
                 RefreshInboxEvent.source_id == letter.source_id,
@@ -498,9 +685,12 @@ class EventIngestService:
         ).scalar_one_or_none()
         if inbox is None or not inbox.envelope_json:
             raise RefreshError("INBOX_EVENT_NOT_FOUND", "dead letter has no stored envelope")
-        new = claim_refresh_run(
+        # The idempotency key is derived solely from the immutable DLQ ID.  If
+        # a process crashed after claim_refresh_run committed but before the
+        # replay audit update, this lookup recovers the same run.
+        new = existing or claim_refresh_run(
             db, source_id=old.source_id, resource=old.resource, policy=old.policy,
-            idempotency_key=f"replay:event:{old.id}:{uuid.uuid4()}", lease_owner=f"{operator_id}:replay",
+            idempotency_key=replay_key, lease_owner=f"{operator_id}:replay",
             now=now, default_cursor_contract=old.cursor_contract,
         )
         new.trigger = "replay"
