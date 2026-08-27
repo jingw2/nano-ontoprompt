@@ -329,7 +329,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 **Interfaces:**
 
-- Pytest configuration sets asyncio_default_fixture_loop_scope = "function" and asyncio_default_test_loop_scope = "function".
+- Pytest configuration sets asyncio_default_fixture_loop_scope = "function". The pinned pytest-asyncio==0.24.0 (backend/requirements.txt) does not recognize asyncio_default_test_loop_scope (verified against the installed plugin's addini() calls — it is a later-version option); setting it would itself emit a new "Unknown config option" PytestConfigWarning, so it is intentionally not set. Revisit only if pytest-asyncio is deliberately upgraded.
 - Schema tests resolve the head from Alembic rather than maintaining a second revision constant and assert the current memory tables, including checkpoint and recall tables.
 - The current schema command remains python scripts/run_migrations.py upgrade head followed by python scripts/verify_schema_revision.py.
 
@@ -338,7 +338,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
     def test_schema_contract_uses_resolved_head_and_memory_tables():
         assert resolve_current_head() == "0021_mapping_entity_class_cn"
         assert {"agent_turn_checkpoints", "agent_turn_checkpoint_writes"} <= registered_tables()
-        assert pytest_config()["asyncio_default_test_loop_scope"] == "function"
+        assert pytest_config()["asyncio_default_fixture_loop_scope"] == "function"
 
 - [ ] **Step 2: Run the focused schema tests.**
 
@@ -348,7 +348,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement only the current-head and loop-scope corrections.**
 
-    Derive the revision from Alembic, update the expected table set to the actual model registry, and place the two explicit pytest-asyncio settings in backend/pyproject.toml. Do not weaken schema assertions or remove PostgreSQL-only checks.
+    Derive the revision from Alembic, update the expected table set to the actual model registry, and place the single supported pytest-asyncio setting (asyncio_default_fixture_loop_scope) in backend/pyproject.toml. Do not weaken schema assertions or remove PostgreSQL-only checks.
 
 - [ ] **Step 4: Run focused schema verification.**
 

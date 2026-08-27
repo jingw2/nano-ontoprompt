@@ -42,9 +42,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
+      - name: Pin npm 11.2.0
+        run: |
+          npm install -g npm@11.2.0
+          test "$(npm --version)" = "11.2.0"
       - name: Frontend test:ci
         working-directory: frontend
         run: npm ci && npm run test:ci
+
+  m1-stabilization-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: M1 gate — fresh docker compose up against an empty database
+        run: bash scripts/verify_m1_stabilization_gate.sh
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.v2.yml logs --no-color > /tmp/m1-gate-compose.log 2>&1 || true
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1-gate-compose-logs
+          path: /tmp/m1-gate-compose.log
 
   backend-matrix:
     strategy:

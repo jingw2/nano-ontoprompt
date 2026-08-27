@@ -67,6 +67,20 @@ def test_matrix_commands_use_the_guarded_launcher():
     assert "check_agent_plan_contract.py" in run_text
 
 
+def test_frontend_ci_pins_npm_11_2_0():
+    """actions/setup-node@v4 installs whatever npm ships bundled with the
+    pinned Node version, which is not necessarily npm 11.2.0 — the version
+    README.md/README_zh.md and frontend/package.json's engines field both
+    promise. The frontend-ci job must explicitly install and assert that
+    exact npm version rather than relying on Node's bundled default."""
+    import yaml
+
+    data = yaml.safe_load(WORKFLOW.read_text())
+    run_text = "\n".join(str(s.get("run", "")) for s in data["jobs"]["frontend-ci"]["steps"])
+    assert "npm install -g npm@11.2.0" in run_text
+    assert "npm --version" in run_text
+
+
 def test_frontend_ci_is_not_inside_python_matrix():
     """Task 4 (M1 stabilization): frontend test:ci ran once per backend-matrix
     Python version (3.11 and 3.12) — duplicate, wasted CI time for a job that
