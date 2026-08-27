@@ -184,7 +184,20 @@ def enqueue_refresh_run(
 ) -> str:
     """Hand a refresh run to the broker: the only argument ever sent is the
     durable `run_id`, on the run's routed queue. Returns the broker task ID."""
-    return send_task(message.task_name, [message.run_id], message.queue)
+    # Keep oldest-age metadata separate from Celery's Redis list.  The
+    # observer records only the durable run ID/timestamp and never reads the
+    # task body.  Failure of this best-effort index must not alter dispatch.
+    from app.services.v2.incremental.broker_observer import (
+        record_refresh_dequeue,
+        record_refresh_enqueue,
+    )
+
+    record_refresh_enqueue(queue=message.queue, run_id=message.run_id)
+    try:
+        return send_task(message.task_name, [message.run_id], message.queue)
+    except Exception:
+        record_refresh_dequeue(queue=message.queue, run_id=message.run_id)
+        raise
 
 
 # ── Celery configuration ────────────────────────────────────────────────

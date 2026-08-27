@@ -30,12 +30,9 @@ from app.services.v2.incremental.operations import (
     trigger_refresh,
     update_refresh_schedule,
 )
-from app.services.v2.incremental.operability import QueueObservation
+from app.services.v2.incremental.broker_observer import RedisRefreshBrokerObserver
+from app.services.v2.incremental.operability import QueueObservation, REFRESH_QUEUE_NAMES
 from app.tasks.topology import (
-    QUEUE_REFRESH_EVENT,
-    QUEUE_REFRESH_POLL,
-    QUEUE_REFRESH_REPLAY,
-    QUEUE_REFRESH_SCHEDULE,
     build_refresh_dispatch_message,
     enqueue_refresh_run,
 )
@@ -111,18 +108,19 @@ def _dispatch_run(db: Session, *, run, task_name: str) -> None:
 
 
 def _queue_observations() -> dict[str, QueueObservation]:
-    """Return sanitized queue readiness observations without message bodies."""
-    return {
-        queue: QueueObservation(
-            queue=queue, depth=0, oldest_queued_age_seconds=None, worker_ready=True,
-        )
-        for queue in (
-            QUEUE_REFRESH_SCHEDULE,
-            QUEUE_REFRESH_POLL,
-            QUEUE_REFRESH_EVENT,
-            QUEUE_REFRESH_REPLAY,
-        )
-    }
+    """Return real, sanitized Redis/Celery observations without task bodies."""
+    try:
+        return dict(RedisRefreshBrokerObserver().observe(REFRESH_QUEUE_NAMES))
+    except Exception:
+        # A health endpoint must make an observer failure visible as
+        # unavailable rather than fabricating an empty/ready broker.
+        return {
+            queue: QueueObservation(
+                queue=queue, depth=-1, oldest_queued_age_seconds=None,
+                worker_ready=False,
+            )
+            for queue in REFRESH_QUEUE_NAMES
+        }
 
 
 @router.get("/sources/{source_id}/status", response_model=RefreshStatus)

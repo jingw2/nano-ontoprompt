@@ -9,6 +9,8 @@ cd "$REPO_ROOT"
 
 CHECKPOINT_PROJECT="ontexus-refresh-checkpoint-$$"
 ENV_BACKUP=""
+ENV_BACKUP_CANDIDATE=""
+ENV_REPLACED=0
 CHECKPOINT_COMPLETE=0
 
 cleanup() {
@@ -28,7 +30,14 @@ cleanup() {
       if [ "$cleanup_status" -eq 0 ]; then cleanup_status=1; fi
       echo "[refresh-checkpoint] cleanup failed (could not restore .env)" >&2
     fi
-  elif [ -f .env ]; then
+  elif [ -n "$ENV_BACKUP_CANDIDATE" ]; then
+    if rm -f "$ENV_BACKUP_CANDIDATE"; then
+      echo "[refresh-checkpoint] removed incomplete .env backup"
+    else
+      if [ "$cleanup_status" -eq 0 ]; then cleanup_status=1; fi
+      echo "[refresh-checkpoint] cleanup failed (could not remove incomplete .env backup)" >&2
+    fi
+  elif [ "$ENV_REPLACED" -eq 1 ] && [ -f .env ]; then
     if rm -f .env; then
       echo "[refresh-checkpoint] removed the .env this run created (none existed before)"
     else
@@ -47,11 +56,22 @@ cleanup() {
 trap cleanup EXIT
 
 if [ -f .env ]; then
-  ENV_BACKUP="$(mktemp)"
-  cp .env "$ENV_BACKUP"
-  echo "[refresh-checkpoint] backed up existing .env"
+  ENV_BACKUP_CANDIDATE="$(mktemp)"
+  if cp .env "$ENV_BACKUP_CANDIDATE"; then
+    ENV_BACKUP="$ENV_BACKUP_CANDIDATE"
+    ENV_BACKUP_CANDIDATE=""
+    echo "[refresh-checkpoint] backed up existing .env"
+  else
+    echo "[refresh-checkpoint] could not back up existing .env" >&2
+    exit 1
+  fi
 fi
-cp .env.example .env
+if cp .env.example .env; then
+  ENV_REPLACED=1
+else
+  echo "[refresh-checkpoint] could not install checkpoint .env" >&2
+  exit 1
+fi
 
 echo "[refresh-checkpoint] starting a unique Compose project with refresh workers"
 docker compose -p "$CHECKPOINT_PROJECT" -f docker-compose.v2.yml --profile refresh down -v --remove-orphans >/dev/null 2>&1 || true

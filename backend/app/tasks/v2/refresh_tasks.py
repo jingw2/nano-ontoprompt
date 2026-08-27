@@ -18,7 +18,12 @@ from datetime import datetime, timezone
 from celery.exceptions import SoftTimeLimitExceeded, WorkerShutdown
 
 from app.tasks.celery_app import celery_app
-from app.tasks.topology import QUEUE_REFRESH_POLL, enqueue_refresh_run
+from app.tasks.topology import (
+    QUEUE_REFRESH_EVENT,
+    QUEUE_REFRESH_POLL,
+    build_refresh_dispatch_message,
+    enqueue_refresh_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +47,14 @@ def _send_refresh_via_celery(message) -> str:
 
 def _send_event_via_celery(run_id: str):
     """Publish only a durable event run ID during inbox reconciliation."""
-    return refresh_event_task.delay(run_id)
+    message = build_refresh_dispatch_message(run_id=run_id, task_name="refresh.event")
+    return enqueue_refresh_run(message=message, send_task=_celery_send_task)
+
+
+def _mark_refresh_dequeue(queue: str, run_id: str) -> None:
+    from app.services.v2.incremental.broker_observer import record_refresh_dequeue
+
+    record_refresh_dequeue(queue=queue, run_id=run_id)
 
 
 @celery_app.task(name="refresh.dispatch_due_schedules")
@@ -171,6 +183,7 @@ def _refresh_poll(run_id: str) -> dict:
 @celery_app.task(name="refresh.poll")
 def refresh_poll_task(run_id: str) -> dict:
     """Run-ID-only polling worker entry."""
+    _mark_refresh_dequeue(QUEUE_REFRESH_POLL, run_id)
     return _refresh_poll(run_id)
 
 
@@ -254,6 +267,7 @@ def _refresh_event(run_id: str) -> dict:
 @celery_app.task(name="refresh.event")
 def refresh_event_task(run_id: str) -> dict:
     """Run-ID-only managed webhook/outbox worker entry."""
+    _mark_refresh_dequeue(QUEUE_REFRESH_EVENT, run_id)
     return _refresh_event(run_id)
 
 
@@ -266,6 +280,10 @@ def refresh_replay_task(run_id: str) -> dict:
     Neither path accepts operator-supplied payload, cursor, credential, or
     connector configuration.
     """
+    from app.services.v2.incremental.broker_observer import record_refresh_dequeue
+    from app.tasks.topology import QUEUE_REFRESH_REPLAY
+
+    record_refresh_dequeue(queue=QUEUE_REFRESH_REPLAY, run_id=run_id)
     import app.models  # noqa: F401
     from app.database import SessionLocal
     from app.models.v2.refresh import RefreshInboxEvent

@@ -46,3 +46,11 @@ def test_refresh_checkpoint_only_claims_pass_after_cleanup_succeeds():
     assert "cleanup_status" in source
     assert '[ "$cleanup_status" -ne 0 ]' in source
     assert '[ "$CHECKPOINT_COMPLETE" -eq 1 ]' in source
+
+
+def test_refresh_checkpoint_env_backup_is_not_marked_before_copy_succeeds():
+    source = GATE_SCRIPT.read_text()
+    assert "ENV_BACKUP_CANDIDATE" in source
+    assert 'if cp .env "$ENV_BACKUP_CANDIDATE"; then' in source
+    assert 'ENV_BACKUP="$ENV_BACKUP_CANDIDATE"' in source
+    assert 'ENV_REPLACED=1' in source

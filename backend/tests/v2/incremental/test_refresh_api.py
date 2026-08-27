@@ -19,6 +19,7 @@ from app.models.v2.refresh import (
     RefreshSourceState,
 )
 from app.services.auth_service import create_access_token, hash_password
+from app.services.v2.incremental.operability import QueueObservation
 
 
 NOW = datetime(2026, 8, 26, 0, 0, tzinfo=timezone.utc)
@@ -277,9 +278,108 @@ def test_refresh_health_exposes_backpressure_and_readiness_without_payloads(
     assert "credential" not in response.text
 
 
-def test_saturated_refresh_queue_does_not_block_status_or_agent_dispatch(
-    client, db, refresh_source, operator_headers,
+def test_refresh_health_uses_sanitized_broker_observations(
+    client, db, refresh_source, operator_headers, monkeypatch,
 ):
+    class FakeBrokerObserver:
+        def observe(self, queues):
+            assert tuple(queues) == (
+                "refresh.schedule", "refresh.poll", "refresh.event", "refresh.replay",
+            )
+            return {
+                queue: QueueObservation(
+                    queue=queue,
+                    depth=3,
+                    oldest_queued_age_seconds=321.5,
+                    worker_ready=queue != "refresh.event",
+                )
+                for queue in queues
+            }
+
+    monkeypatch.setattr(
+        "app.routers.v2.refresh.RedisRefreshBrokerObserver", FakeBrokerObserver,
+    )
+    response = client.get("/api/v2/refresh/health", headers=operator_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert all(item["depth"] == 3 for item in body["queues"])
+    assert all(item["oldest_queued_age_seconds"] == 321.5 for item in body["queues"])
+    assert body["readiness"]["broker_ready"] is True
+    assert body["readiness"]["refresh_worker_ready"] is False
+    assert "payload" not in response.text
+    assert "credential" not in response.text
+
+
+def test_refresh_health_reports_unavailable_broker_and_workers_truthfully(
+    client, db, refresh_source, operator_headers, monkeypatch,
+):
+    class UnavailableBrokerObserver:
+        def observe(self, queues):
+            return {
+                queue: QueueObservation(
+                    queue=queue, depth=-1,
+                    oldest_queued_age_seconds=None, worker_ready=False,
+                )
+                for queue in queues
+            }
+
+    monkeypatch.setattr(
+        "app.routers.v2.refresh.RedisRefreshBrokerObserver", UnavailableBrokerObserver,
+    )
+    response = client.get("/api/v2/refresh/health", headers=operator_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert all(item["depth"] == -1 for item in body["queues"])
+    assert all(item["oldest_queued_age_seconds"] is None for item in body["queues"])
+    assert body["readiness"]["broker_ready"] is False
+    assert body["readiness"]["refresh_worker_ready"] is False
+
+
+def test_refresh_trigger_rejects_mode_incompatible_with_persisted_event_policy(
+    client, db, refresh_source, operator_headers, monkeypatch,
+):
+    source = db.get(Connection, "source-001")
+    state = db.get(RefreshSourceState, "state-001")
+    source.refresh_policy = "event_driven"
+    state.configuration = {"refresh_policy": "event_driven"}
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.routers.v2.refresh.enqueue_refresh_run",
+        lambda **_: pytest.fail("incompatible event policy must not be dispatched to refresh.poll"),
+    )
+    response = client.post(
+        "/api/v2/refresh/sources/source-001/run",
+        json={"mode": "batch"}, headers=operator_headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "REFRESH_POLICY_MISMATCH"
+    assert db.query(RefreshRun).count() == 0
+
+
+def test_saturated_refresh_queue_does_not_block_status_or_agent_dispatch(
+    client, db, refresh_source, operator_headers, monkeypatch,
+):
+    class SaturatedBrokerObserver:
+        def observe(self, queues):
+            return {
+                queue: QueueObservation(
+                    queue=queue, depth=100,
+                    oldest_queued_age_seconds=900.0, worker_ready=True,
+                )
+                for queue in queues
+            }
+
+    monkeypatch.setattr(
+        "app.routers.v2.refresh.RedisRefreshBrokerObserver", SaturatedBrokerObserver,
+    )
+    health = client.get("/api/v2/refresh/health", headers=operator_headers)
+    assert health.status_code == 200
+    assert all(item["depth"] == 100 for item in health.json()["queues"])
+
     status = client.get(
         "/api/v2/refresh/sources/source-001/status", headers=operator_headers,
     )

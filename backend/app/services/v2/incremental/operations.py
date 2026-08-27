@@ -248,8 +248,14 @@ def trigger_refresh(
         policy = mode if isinstance(mode, RefreshPolicy) else RefreshPolicy(mode)
     except ValueError as exc:
         raise RefreshError("INVALID_REFRESH_POLICY", "refresh mode is unsupported") from exc
+    configured_policy = _policy_for_source(connection, state)
     if policy is RefreshPolicy.EVENT_DRIVEN:
         raise RefreshError("EVENT_TRIGGER_REQUIRES_SIGNATURE", "event-driven refreshes require the signed webhook route")
+    if policy is not configured_policy:
+        raise RefreshError(
+            "REFRESH_POLICY_MISMATCH",
+            "requested refresh mode does not match the persisted source policy",
+        )
     _validate_backfill(db, source_id=source_id, backfill_from=backfill_from, backfill_to=backfill_to, now=now)
 
     backfill_key = ""
