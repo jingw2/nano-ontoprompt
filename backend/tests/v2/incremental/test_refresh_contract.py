@@ -268,13 +268,23 @@ def _ensure_fixture_dataset_version(db, dataset_version_id) -> DatasetVersion:
 
 def persist_fixture_pipeline_run(db, *, input_dataset_version_ids) -> PipelineRun:
     pipeline = _ensure_fixture_pipeline(db)
-    run = PipelineRun(id=str(uuid.uuid4()), pipeline_id=pipeline.id, status="success")
+    dataset_versions = [
+        _ensure_fixture_dataset_version(db, dataset_version_id)
+        for dataset_version_id in input_dataset_version_ids
+    ]
+    is_completed = bool(dataset_versions)
+    run = PipelineRun(
+        id=str(uuid.uuid4()),
+        pipeline_id=pipeline.id,
+        status="success" if is_completed else "running",
+        finished_at=FIXED_NOW if is_completed else None,
+        dataset_version_id=dataset_versions[0].id if dataset_versions else None,
+    )
     db.add(run)
     db.flush()
-    for ordinal, dataset_version_id in enumerate(input_dataset_version_ids):
-        _ensure_fixture_dataset_version(db, dataset_version_id)
+    for ordinal, dataset_version in enumerate(dataset_versions):
         db.add(PipelineRunInput(
-            id=str(uuid.uuid4()), pipeline_run_id=run.id, dataset_version_id=dataset_version_id, input_ordinal=ordinal,
+            id=str(uuid.uuid4()), pipeline_run_id=run.id, dataset_version_id=dataset_version.id, input_ordinal=ordinal,
         ))
     db.commit()
     db.refresh(run)

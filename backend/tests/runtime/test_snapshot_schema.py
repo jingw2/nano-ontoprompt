@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
+import importlib.util
 from pathlib import Path
 
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 import pytest
-from sqlalchemy import inspect, select, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.ontology_release import OntologyRelease
@@ -253,6 +255,108 @@ def test_pipeline_run_rejects_successful_output_without_completion(db):
         dataset_version_id=output.id,
     ))
     with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_pipeline_run_rejects_successful_completion_without_output(db):
+    pipeline = Pipeline(id="pipeline-001", name="pipeline", spec={})
+    db.add(pipeline)
+    db.flush()
+    db.add(PipelineRun(
+        id="pipeline-run-001",
+        pipeline_id=pipeline.id,
+        status="success",
+        finished_at=datetime.now(timezone.utc),
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def _load_task_11_migration():
+    migration_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0027_semantic_snapshot.py"
+    spec = importlib.util.spec_from_file_location("task_11_snapshot_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def test_sqlite_migration_guards_reject_direct_snapshot_dml(db):
+    _seed_governed_run(db)
+    db.add(_snapshot())
+    db.commit()
+    db.add(SemanticSnapshotInput(
+        snapshot_id="snap-valid-001",
+        dataset_version_id="dataset-version-001",
+        pipeline_run_id="pipeline-run-001",
+    ))
+    db.commit()
+
+    migration = _load_task_11_migration()
+    context = MigrationContext.configure(db.connection())
+    migration.op = Operations(context)
+    migration._create_sqlite_guards()
+
+    with pytest.raises(IntegrityError, match="SEMANTIC_SNAPSHOT_IMMUTABLE"):
+        db.execute(text("UPDATE semantic_snapshots SET quality_summary='{}' WHERE id='snap-valid-001'"))
+        db.commit()
+    db.rollback()
+
+    with pytest.raises(IntegrityError, match="SEMANTIC_SNAPSHOT_IMMUTABLE"):
+        db.execute(text("DELETE FROM semantic_snapshot_inputs WHERE snapshot_id='snap-valid-001'"))
+        db.commit()
+    db.rollback()
+
+    with pytest.raises(IntegrityError, match="SEMANTIC_SNAPSHOT_IMMUTABLE"):
+        db.execute(text(
+            "UPDATE semantic_snapshot_inputs SET pipeline_run_id='pipeline-run-001' "
+            "WHERE snapshot_id='snap-valid-001'"
+        ))
+        db.commit()
+    db.rollback()
+
+    with pytest.raises(IntegrityError, match="SEMANTIC_SNAPSHOT_IMMUTABLE"):
+        db.execute(text("DELETE FROM semantic_snapshots WHERE id='snap-valid-001'"))
+        db.commit()
+    db.rollback()
+
+    failed_run = PipelineRun(
+        id="pipeline-run-failed",
+        pipeline_id="pipeline-001",
+        status="failed",
+        finished_at=datetime.now(timezone.utc),
+        dataset_version_id="dataset-version-001",
+    )
+    db.add(failed_run)
+    db.commit()
+    with pytest.raises(IntegrityError, match="SNAPSHOT_INPUT_NOT_GOVERNED"):
+        db.execute(text(
+            "INSERT INTO semantic_snapshot_inputs "
+            "(id, snapshot_id, dataset_version_id, pipeline_run_id, created_at) "
+            "VALUES ('input-failed-001', 'snap-valid-001', 'dataset-version-001', "
+            "'pipeline-run-failed', CURRENT_TIMESTAMP)"
+        ))
+        db.commit()
+    db.rollback()
+
+    completed_run_without_lineage = PipelineRun(
+        id="pipeline-run-no-lineage",
+        pipeline_id="pipeline-001",
+        status="success",
+        finished_at=datetime.now(timezone.utc),
+        dataset_version_id="dataset-version-001",
+    )
+    db.add(completed_run_without_lineage)
+    db.commit()
+    with pytest.raises(IntegrityError, match="SNAPSHOT_INPUT_NOT_GOVERNED"):
+        db.execute(text(
+            "INSERT INTO semantic_snapshot_inputs "
+            "(id, snapshot_id, dataset_version_id, pipeline_run_id, created_at) "
+            "VALUES ('input-no-lineage-001', 'snap-valid-001', 'dataset-version-001', "
+            "'pipeline-run-no-lineage', CURRENT_TIMESTAMP)"
+        ))
         db.commit()
     db.rollback()
 

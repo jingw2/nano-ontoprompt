@@ -45,7 +45,7 @@ class PipelineRun(Base):
             name="ck_v2_pipeline_runs_status",
         ),
         CheckConstraint(
-            "status <> 'success' OR finished_at IS NOT NULL OR dataset_version_id IS NULL",
+            "status <> 'success' OR (finished_at IS NOT NULL AND dataset_version_id IS NOT NULL)",
             name="ck_v2_pipeline_runs_success_completion",
         ),
     )

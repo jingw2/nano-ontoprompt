@@ -171,6 +171,43 @@ def _create_mysql_guards() -> None:
     )
 
 
+def _create_sqlite_guards() -> None:
+    for table_name, action in (
+        ("semantic_snapshots", "UPDATE"),
+        ("semantic_snapshots", "DELETE"),
+        ("semantic_snapshot_inputs", "UPDATE"),
+        ("semantic_snapshot_inputs", "DELETE"),
+    ):
+        trigger_name = (
+            f"{table_name}_immutable_{action.lower()}"
+        )
+        op.execute(
+            f"CREATE TRIGGER {trigger_name} BEFORE {action} ON {table_name} "
+            "BEGIN SELECT RAISE(ABORT, 'SEMANTIC_SNAPSHOT_IMMUTABLE'); END"
+        )
+    op.execute(
+        """
+        CREATE TRIGGER semantic_snapshot_inputs_validate
+        BEFORE INSERT ON semantic_snapshot_inputs
+        WHEN NOT EXISTS (
+               SELECT 1 FROM v2_pipeline_runs AS run
+                WHERE run.id = NEW.pipeline_run_id
+                  AND run.status = 'success'
+                  AND run.finished_at IS NOT NULL
+                  AND run.dataset_version_id IS NOT NULL
+             )
+          OR NOT EXISTS (
+               SELECT 1 FROM pipeline_run_inputs
+                WHERE pipeline_run_id = NEW.pipeline_run_id
+                  AND dataset_version_id = NEW.dataset_version_id
+             )
+        BEGIN
+          SELECT RAISE(ABORT, 'SNAPSHOT_INPUT_NOT_GOVERNED');
+        END
+        """
+    )
+
+
 def upgrade() -> None:
     # Existing releases were immutable before status existed. Temporarily
     # remove only that trigger while backfilling the new status column; the
@@ -211,7 +248,7 @@ def upgrade() -> None:
     )
     op.create_check_constraint(
         "ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs",
-        "status <> 'success' OR finished_at IS NOT NULL OR dataset_version_id IS NULL",
+        "status <> 'success' OR (finished_at IS NOT NULL AND dataset_version_id IS NOT NULL)",
     )
 
     op.create_table(
@@ -283,6 +320,8 @@ def upgrade() -> None:
         _create_postgresql_guards()
     elif _dialect_name() == "mysql":
         _create_mysql_guards()
+    elif _dialect_name() == "sqlite":
+        _create_sqlite_guards()
 
 
 def downgrade() -> None:
@@ -294,6 +333,15 @@ def downgrade() -> None:
         op.execute("DROP TRIGGER IF EXISTS semantic_snapshots_immutable ON semantic_snapshots")
         op.execute("DROP FUNCTION IF EXISTS reject_semantic_snapshot_mutation()")
     elif dialect == "mysql":
+        for trigger in (
+            "semantic_snapshot_inputs_validate",
+            "semantic_snapshot_inputs_immutable_delete",
+            "semantic_snapshot_inputs_immutable_update",
+            "semantic_snapshots_immutable_delete",
+            "semantic_snapshots_immutable_update",
+        ):
+            op.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    elif dialect == "sqlite":
         for trigger in (
             "semantic_snapshot_inputs_validate",
             "semantic_snapshot_inputs_immutable_delete",
