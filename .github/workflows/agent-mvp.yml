@@ -123,10 +123,15 @@ jobs:
       - name: Worker smoke through the guarded launcher
         run: |
           cd backend
+          # Task 6A: bind the real named-queue topology (not just the
+          # default queue) so a live worker startup proves every queue name
+          # is valid, not only the static Compose/Python assertions.
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             REDIS_URL=redis://localhost:6379/0 \
             timeout 25 python scripts/guarded_entrypoint.py -- python -m celery \
-              -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 || code=$?
+              -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 \
+              -Q refresh.schedule,refresh.poll,refresh.event,refresh.replay,artifact.extraction,agent.interactive,housekeeping \
+              --prefetch-multiplier=1 || code=$?
           test "${code:-0}" -eq 124 || test "${code:-0}" -eq 0
       - name: Backend core suites
         run: |

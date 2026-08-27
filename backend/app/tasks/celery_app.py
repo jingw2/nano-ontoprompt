@@ -3,6 +3,9 @@
 Worker and beat both load this module; it refuses unsupported Python before
 the Celery or pydantic (via `app.config`) imports.  Agent dispatch/index/
 turn/retention tasks are registered here so every core worker role loads them.
+This is the sole application entry point (`-A app.tasks.celery_app`); the
+named-queue/route/bounded-delivery contract is installed by
+`app.tasks.topology.configure_celery_topology` (Task 6A).
 """
 from pathlib import Path
 import sys
@@ -14,6 +17,7 @@ require_supported_python()
 
 from celery import Celery
 from app.config import settings
+from app.tasks.topology import configure_celery_topology
 
 celery_app = Celery("ontexus",
                     broker=settings.redis_url,
@@ -39,6 +43,10 @@ celery_app = Celery("ontexus",
 from app.models import load_all_models  # noqa: E402
 
 load_all_models()
+
+# Task 6A: named queues/routes, task_default_queue, worker prefetch, task
+# events, and refresh-only late-ack/redelivery/time-bound annotations.
+configure_celery_topology(celery_app)
 
 # broker 不可用时快速失败 (默认会长时间重试, 导致 API 请求阻塞)
 celery_app.conf.task_publish_retry = False

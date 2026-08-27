@@ -92,9 +92,22 @@ services:
     volumes: [./backend:/app, ./uploads:/uploads]
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
-  celery_worker:
+  # Task 6A: explicit queue-bound worker profiles. The default `docker
+  # compose up` (no --profile) starts none of these — each is gated behind
+  # its own profile so a plain v2 dev-up stays lightweight; enable with
+  # `--profile refresh` / `--profile artifact` / `--profile agent` /
+  # `--profile housekeeping` (or several at once). `celery_beat` below stays
+  # unprofiled since it only ever publishes/schedules, never consumes.
+  refresh_schedule_worker:
     build: ./backend
     env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
     depends_on:
       migration:
         condition: service_completed_successfully
@@ -107,7 +120,137 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info"
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.schedule --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_poll_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.poll --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_event_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.event --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_replay_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.replay --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  artifact_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["artifact"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q artifact.extraction --prefetch-multiplier=1"
+
+  agent_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["agent"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q agent.interactive --prefetch-multiplier=1"
+
+  housekeeping_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["housekeeping"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q housekeeping --prefetch-multiplier=1"
 
   celery_beat:
     build: ./backend

@@ -63,7 +63,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h -Q housekeeping --prefetch-multiplier=1"
 
   artifact_worker:
     image: ontexus-agent-worker:agent-v1
@@ -75,7 +75,97 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h -Q artifact.extraction --prefetch-multiplier=1"
+
+  # Task 6A: the interactive-queue role was missing — turn execution and
+  # dispatch claim/heartbeat need low-latency isolation from the
+  # housekeeping sweeps below, so they get their own queue-bound role.
+  agent_worker:
+    image: ontexus-agent-worker:agent-v1
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
+      REDIS_URL: redis://redis:6379/0
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n agent@%h -Q agent.interactive --prefetch-multiplier=1"
+
+  # Task 6A: refresh roles were missing entirely — one queue-bound worker
+  # per named refresh queue, with the bounded reference concurrency/prefetch/
+  # time-limit settings and a finite graceful stop time.
+  refresh_schedule_worker:
+    image: ontexus-agent-worker:agent-v1
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
+      REDIS_URL: redis://redis:6379/0
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning -n refresh-schedule@%h -Q refresh.schedule --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_poll_worker:
+    image: ontexus-agent-worker:agent-v1
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
+      REDIS_URL: redis://redis:6379/0
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning -n refresh-poll@%h -Q refresh.poll --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_event_worker:
+    image: ontexus-agent-worker:agent-v1
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
+      REDIS_URL: redis://redis:6379/0
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning -n refresh-event@%h -Q refresh.event --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_replay_worker:
+    image: ontexus-agent-worker:agent-v1
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
+      REDIS_URL: redis://redis:6379/0
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning -n refresh-replay@%h -Q refresh.replay --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
 
   beat:
     image: ontexus-agent-beat:agent-v1
@@ -99,7 +189,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h -Q housekeeping --prefetch-multiplier=1"
 
   sweeper:
     image: ontexus-agent-sweeper:agent-v1
@@ -111,7 +201,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h -Q housekeeping --prefetch-multiplier=1"
 
   frontend:
     image: ontexus-agent-frontend:agent-v1
