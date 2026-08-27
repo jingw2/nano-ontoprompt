@@ -283,3 +283,63 @@ Independent cleanup verification immediately afterward reported
 present and its SHA-256 matched `.env.example`
 (`638541e2ba5b3076e00492be854f7fd6768b90719434064f4506ef11c74c2203`).
 No token, secret, payload, or credential appeared in checkpoint output.
+
+## Review fix round 2/5 evidence
+
+The second review finding was the legacy authenticated
+`POST /api/v2/connections/{connection_id}/sync` compatibility route. It was
+still hard-coding `RefreshPolicy.BATCH` through `create_manual_connection_run`
+and dispatching `refresh.connection` on `refresh.poll`, bypassing the persisted
+source policy used by the typed refresh route.
+
+TDD RED evidence:
+
+```text
+cd backend && pytest -q tests/v2/incremental/test_refresh_api.py -k 'legacy_connection_sync'
+1 failed, 1 passed, 15 deselected, 10 warnings in 1.13s
+```
+
+The failing regression observed a `200` response and a dispatched run for a
+persisted `event_driven` connection, where the expected result was
+`422 EVENT_TRIGGER_REQUIRES_SIGNATURE` with no run or task dispatch.
+
+The compatibility helper now derives the persisted policy from the
+connection/source state before claiming a run, rejects event-driven sources
+before any claim, and uses the persisted batch/micro-batch policy for valid
+legacy runs. The route maps this typed rejection to HTTP 422 and only marks a
+connection active after a policy-valid run is claimed. A historical internal
+caller that provisions source state without a Connection row retains its old
+batch fallback; the authenticated route itself requires the Connection row.
+
+Focused round-2 regression result:
+
+```text
+cd backend && pytest -q \
+  tests/v2/incremental/test_refresh_api.py \
+  tests/v2/incremental/test_refresh_schedule.py \
+  -k 'legacy_connection_sync or manual_refresh_run_persists_destination_queue'
+3 passed, 26 deselected, 11 warnings in 1.25s
+```
+
+Full incremental regression after the fix:
+
+```text
+cd backend && pytest -q tests/v2/incremental
+117 passed, 20 skipped, 146 warnings in 21.24s
+```
+
+Additional round-2 checks passed:
+
+```text
+python -m compileall -q \
+  backend/app/routers/v2/connections.py \
+  backend/app/tasks/v2/refresh_tasks.py
+git diff --check
+```
+
+The round-2 change does not affect the required live checkpoint path: that
+checkpoint calls `/api/v2/refresh/.../run` for batch and the signed webhook
+route for event-driven refreshes, not the legacy `/api/v2/connections/.../sync`
+compatibility endpoint. The prior live checkpoint evidence for unique project
+`ontexus-refresh-checkpoint-44886` therefore remains the applicable live
+verification; no new Compose resources were started in this round.
