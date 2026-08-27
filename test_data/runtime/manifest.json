@@ -1,0 +1,1625 @@
+{
+  "cases": [
+    {
+      "case_id": "backfill",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_schedule.py::test_bounded_backfill_window_advances_cursor"
+        }
+      ],
+      "user_id": "user-beta-operator-13"
+    },
+    {
+      "cancel_outcome": "cancelled",
+      "case_id": "cancel-after-tentative-materialization",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh",
+        "cancellation"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-after-tentative-materialization]"
+        }
+      ],
+      "user_id": "user-beta-operator-17"
+    },
+    {
+      "cancel_outcome": "cancelled",
+      "case_id": "cancel-before-pull",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh",
+        "cancellation"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-before-pull]"
+        }
+      ],
+      "user_id": "user-beta-operator-15"
+    },
+    {
+      "cancel_outcome": "cancelled",
+      "case_id": "cancel-inflight-page",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh",
+        "cancellation"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-inflight-page]"
+        }
+      ],
+      "user_id": "user-acme-operator-16"
+    },
+    {
+      "case_id": "config-drift-late-finish",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "error_code": "CONFIGURATION_DRIFT",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged",
+        "error_code": "CONFIGURATION_DRIFT"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_contract.py::test_configuration_upgrade_returns_configuration_drift_before_fence_check_without_lineage_or_progress"
+        }
+      ],
+      "user_id": "user-acme-operator-12"
+    },
+    {
+      "case_id": "cursor-nonadvance",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "opaque_source_cursor",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_cursor_does_not_advance_without_new_watermark_progress"
+        }
+      ],
+      "user_id": "user-beta-operator-07"
+    },
+    {
+      "case_id": "database-row-parity",
+      "coverage": [
+        "database.dialect_parity"
+      ],
+      "dialects": [
+        "mysql",
+        "postgresql"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "optimistic_lock": "row_version_incremented",
+        "row_count": 1
+      },
+      "layers": [
+        "database"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/integration/test_managed_row_writer_dialects.py::test_identical_rows_and_versions_across_dialects"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "database-target-row-drift",
+      "coverage": [
+        "database.dialect_parity"
+      ],
+      "dialects": [
+        "mysql",
+        "postgresql"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "VERSION_CONFLICT"
+      },
+      "layers": [
+        "database"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/integration/test_managed_row_writer_dialects.py::test_target_row_changes_between_plan_and_execution"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "dlq-replay",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "dead_lettered",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "dead_lettered"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_dlq_replay_does_not_mutate_failed_run"
+        }
+      ],
+      "user_id": "user-acme-operator-08"
+    },
+    {
+      "case_id": "duplicate",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[duplicate]"
+        }
+      ],
+      "user_id": "user-acme-operator-04"
+    },
+    {
+      "case_id": "empty",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[empty]"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "equal-watermark",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[equal-watermark]"
+        }
+      ],
+      "user_id": "user-beta-operator-03"
+    },
+    {
+      "case_id": "execution-ambiguous-rejected-plan",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "AMBIGUOUS_PLAN"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_ambiguous_plan_is_rejected"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "execution-before-image-version-conflict",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "VERSION_CONFLICT"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_before_image_version_conflict_is_rejected"
+        }
+      ],
+      "user_id": "user-acme-operator-08"
+    },
+    {
+      "case_id": "execution-binding-draft-state",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_NOT_PUBLISHED"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_draft_binding_cannot_execute"
+        }
+      ],
+      "user_id": "user-beta-operator-03"
+    },
+    {
+      "case_id": "execution-binding-revoked-state",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_REVOKED"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_revoked_binding_cannot_execute"
+        }
+      ],
+      "user_id": "user-acme-operator-04"
+    },
+    {
+      "case_id": "execution-binding-version-drift",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_VERSION_DRIFT"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_binding_version_drift_is_rejected"
+        }
+      ],
+      "user_id": "user-beta-operator-05"
+    },
+    {
+      "case_id": "execution-connection-target-drift",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "CONNECTION_TARGET_DRIFT"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_connection_target_drift_is_rejected"
+        }
+      ],
+      "user_id": "user-acme-operator-06"
+    },
+    {
+      "case_id": "execution-high-risk-exact-hash-hitl-update",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "pending_approval",
+        "risk_class": "human_approved"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_high_risk_update_requires_exact_plan_hitl_approval"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "execution-idempotent-retry",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "idempotent": true,
+        "outcome": "succeeded"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_retry_with_same_idempotency_key_is_idempotent"
+        }
+      ],
+      "user_id": "user-beta-operator-11"
+    },
+    {
+      "case_id": "execution-low-risk-automatic-update",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "succeeded",
+        "risk_class": "automatic"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_low_risk_reversible_update_executes_automatically"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "execution-parameter-selector-drift",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "PARAMETER_SELECTOR_DRIFT"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_parameter_selector_drift_is_rejected"
+        }
+      ],
+      "user_id": "user-beta-operator-07"
+    },
+    {
+      "case_id": "execution-reconciliation-and-rollback",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rollback_plan_created"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_reconciliation_case_creates_a_new_rollback_plan"
+        }
+      ],
+      "user_id": "user-beta-operator-13"
+    },
+    {
+      "case_id": "execution-row-count-two",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "ROW_COUNT_NOT_SINGLE"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_two_row_match_violates_single_target_precondition"
+        }
+      ],
+      "user_id": "user-acme-operator-10"
+    },
+    {
+      "case_id": "execution-row-count-zero",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "ROW_COUNT_ZERO"
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_zero_row_match_is_reported"
+        }
+      ],
+      "user_id": "user-beta-operator-09"
+    },
+    {
+      "case_id": "execution-timeout-unknown-outcome",
+      "coverage": [
+        "execution.governed_writeback"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "outcome": "unknown",
+        "reconciliation_required": true
+      },
+      "layers": [
+        "execution"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_governance.py::test_timeout_produces_unknown_outcome_and_reconciliation_case"
+        }
+      ],
+      "user_id": "user-acme-operator-12"
+    },
+    {
+      "case_id": "expired-webhook",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_event_ingest.py::test_event_ingest_rejects_expired_webhook_signature"
+        }
+      ],
+      "user_id": "user-beta-operator-09"
+    },
+    {
+      "case_id": "failed-retry",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_failed_retry_keeps_cursor_until_pipeline_success"
+        }
+      ],
+      "user_id": "user-acme-operator-06"
+    },
+    {
+      "case_id": "identity-agent-only-capability",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "MISSING_USER_ENTITLEMENT"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_agent_only_capability_without_user_entitlement_is_denied"
+        }
+      ],
+      "user_id": "user-acme-operator-10"
+    },
+    {
+      "case_id": "identity-cross-domain-token",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "CROSS_DOMAIN_TOKEN"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_cross_domain_token_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-09"
+    },
+    {
+      "case_id": "identity-expired-token",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "EXPIRED_TOKEN"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_expired_token_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-05"
+    },
+    {
+      "case_id": "identity-inactive-agent",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "INACTIVE_AGENT"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_inactive_agent_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-07"
+    },
+    {
+      "case_id": "identity-inactive-user",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "INACTIVE_USER"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_inactive_user_is_denied"
+        }
+      ],
+      "user_id": "user-acme-operator-08"
+    },
+    {
+      "case_id": "identity-malformed-signature",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "MALFORMED_SIGNATURE"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_malformed_signature_is_denied"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "identity-missing-credential",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "MISSING_CREDENTIAL"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_missing_credential_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "identity-missing-scope",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "MISSING_SCOPE"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_missing_scope_is_denied"
+        }
+      ],
+      "user_id": "user-acme-operator-04"
+    },
+    {
+      "case_id": "identity-revoked-token",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "REVOKED_TOKEN"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_revoked_token_is_denied"
+        }
+      ],
+      "user_id": "user-acme-operator-06"
+    },
+    {
+      "case_id": "identity-user-only-entitlement",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "MISSING_AGENT_CAPABILITY"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_user_only_entitlement_without_agent_capability_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-11"
+    },
+    {
+      "case_id": "identity-valid-delegation",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_valid_delegation_establishes_verified_context"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "identity-wrong-audience",
+      "coverage": [
+        "identity.delegation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "WRONG_AUDIENCE"
+      },
+      "layers": [
+        "identity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_identity_credentials.py::test_wrong_audience_is_denied"
+        }
+      ],
+      "user_id": "user-beta-operator-03"
+    },
+    {
+      "case_id": "journey-credit",
+      "coverage": [
+        "business_journey.three_journey_acceptance"
+      ],
+      "execution_mode": "real_model_browser",
+      "expected": {
+        "result": "governed_browser_loop_completed"
+      },
+      "fixture_manifest_sha256": "6cb3d926b5d516e13dcd9bf4cfb9969110d631127c5b378a6fa711642a33d3a6",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "risk_class": "rejected",
+      "skip_allowed": false,
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "playwright",
+          "path": "frontend/src/test/e2e/business-journeys.spec.ts",
+          "title": "credit business journey completes the governed browser loop"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "journey-finance",
+      "coverage": [
+        "business_journey.three_journey_acceptance"
+      ],
+      "execution_mode": "real_model_browser",
+      "expected": {
+        "result": "governed_browser_loop_completed"
+      },
+      "fixture_manifest_sha256": "3d90de8c791d76e1d8a12f34db5214b622d9f2d94048f2af29ffe7e9b562be8f",
+      "journey_id": "finance",
+      "layers": [
+        "business_journey"
+      ],
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "risk_class": "human_approved",
+      "skip_allowed": false,
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "playwright",
+          "path": "frontend/src/test/e2e/business-journeys.spec.ts",
+          "title": "finance business journey completes the governed browser loop"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "journey-supply-chain",
+      "coverage": [
+        "business_journey.three_journey_acceptance"
+      ],
+      "execution_mode": "real_model_browser",
+      "expected": {
+        "result": "governed_browser_loop_completed"
+      },
+      "fixture_manifest_sha256": "51920020d6de25500ff2b700c5cb98ca8865e6f60cfb3dcee7701d70c8c970c5",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "playwright",
+          "path": "frontend/src/test/e2e/business-journeys.spec.ts",
+          "title": "supply chain business journey completes the governed browser loop"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "late",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[late]"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "normal",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[normal]"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "out-of-order",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_polling_cases_are_deterministic[out-of-order]"
+        }
+      ],
+      "user_id": "user-beta-operator-05"
+    },
+    {
+      "case_id": "parity-allow-with-data",
+      "coverage": [
+        "transport.parity"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count_min": 1
+      },
+      "layers": [
+        "parity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_transport_parity.py::test_allow_with_data_is_byte_identical_across_rest_and_sdk"
+        }
+      ],
+      "transports": [
+        "mcp",
+        "reference-agent",
+        "rest",
+        "sdk"
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "parity-denied-result",
+      "coverage": [
+        "transport.parity"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIAL"
+      },
+      "layers": [
+        "parity"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_transport_parity.py::test_denied_result_matches_normalized_decision_across_all_transports"
+        }
+      ],
+      "transports": [
+        "mcp",
+        "reference-agent",
+        "rest",
+        "sdk"
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "parity-writable-plan-hash",
+      "coverage": [
+        "transport.parity"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_hash_stable": true
+      },
+      "layers": [
+        "parity"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_transport_parity.py::test_writable_plan_hash_is_byte_identical_across_rest_and_sdk"
+        }
+      ],
+      "transports": [
+        "mcp",
+        "reference-agent",
+        "rest",
+        "sdk"
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "replay-attack",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_event_ingest.py::test_event_ingest_rejects_replayed_event_id"
+        }
+      ],
+      "user_id": "user-acme-operator-10"
+    },
+    {
+      "case_id": "runtime-allow-no-matches",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count": 0
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_allow_with_no_matches_is_still_allow"
+        }
+      ],
+      "user_id": "user-beta-operator-03"
+    },
+    {
+      "case_id": "runtime-allow-with-data",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count_min": 1
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_allow_with_data_returns_matching_rows"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "runtime-evidence-citations",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "citation_count_min": 1,
+        "decision": "ALLOW"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_investigation_result_carries_evidence_citations"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "runtime-expired-plan",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "PLAN_EXPIRED"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_expired_plan_is_rejected_at_execution"
+        }
+      ],
+      "user_id": "user-acme-operator-08"
+    },
+    {
+      "case_id": "runtime-immutable-read-only-plan",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_writable": false
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_read_only_plan_is_immutable_and_non_writing"
+        }
+      ],
+      "user_id": "user-acme-operator-06"
+    },
+    {
+      "case_id": "runtime-policy-denial",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIAL"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_policy_denial_is_structured_deny"
+        }
+      ],
+      "user_id": "user-beta-operator-05"
+    },
+    {
+      "case_id": "runtime-rule-outcomes",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "rule_outcome": "matched"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_investigation_result_carries_rule_outcomes"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "runtime-stable-denial-codes",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIAL"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_denial_reason_codes_are_stable_across_requests"
+        }
+      ],
+      "user_id": "user-beta-operator-09"
+    },
+    {
+      "case_id": "runtime-structured-deny",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIAL"
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_structured_deny_carries_stable_reason_code"
+        }
+      ],
+      "user_id": "user-acme-operator-04"
+    },
+    {
+      "case_id": "runtime-writable-plan-binding",
+      "coverage": [
+        "runtime.investigation"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_writable": true
+      },
+      "layers": [
+        "runtime"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_service.py::test_writable_plan_binds_target_dialect_and_columns"
+        }
+      ],
+      "user_id": "user-beta-operator-07"
+    },
+    {
+      "case_id": "schema-drift",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_event_ingest.py::test_event_ingest_rejects_schema_drift"
+        }
+      ],
+      "user_id": "user-beta-operator-11"
+    },
+    {
+      "case_id": "snapshot-authorized-empty-result",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count": 0
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_authorized_empty_result_is_allow"
+        }
+      ],
+      "user_id": "user-beta-operator-01"
+    },
+    {
+      "case_id": "snapshot-failed-ungoverned-input",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "UNGOVERNED_PIPELINE_INPUT"
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_failed_or_ungoverned_pipeline_input_is_rejected"
+        }
+      ],
+      "user_id": "user-beta-operator-03"
+    },
+    {
+      "case_id": "snapshot-incomplete-lineage",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "INCOMPLETE_LINEAGE"
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_incomplete_lineage_is_rejected"
+        }
+      ],
+      "user_id": "user-acme-operator-02"
+    },
+    {
+      "case_id": "snapshot-release-drift",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "RELEASE_DRIFT"
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-beta",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_release_drift_is_detected"
+        }
+      ],
+      "user_id": "user-beta-operator-05"
+    },
+    {
+      "case_id": "snapshot-reordered-input-lists",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "hash_order_independent": true
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_reordered_input_lists_produce_the_same_hash"
+        }
+      ],
+      "user_id": "user-acme-operator-06"
+    },
+    {
+      "case_id": "snapshot-stale-snapshot",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "STALE_SNAPSHOT"
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_stale_snapshot_is_flagged"
+        }
+      ],
+      "user_id": "user-acme-operator-04"
+    },
+    {
+      "case_id": "snapshot-valid-published-release",
+      "coverage": [
+        "snapshot.lineage"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "decision": "ALLOW",
+        "lineage_complete": true
+      },
+      "layers": [
+        "snapshot"
+      ],
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_valid_published_release_materializes_complete_lineage"
+        }
+      ],
+      "user_id": "user-acme-operator-00"
+    },
+    {
+      "case_id": "t1-timezone",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "advanced",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "layers": [
+        "refresh"
+      ],
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_schedule.py::test_t1_schedule_respects_timezone_and_business_calendar"
+        }
+      ],
+      "user_id": "user-acme-operator-14"
+    }
+  ],
+  "files": {
+    "README.md": "e47b2255b3c5e320bb4a1ccd9a64f9055f37d59c527b024037601e553f456f79",
+    "db/docker-compose.yml": "757920b296a36b49f350eb53cc14493ddb3de3f1f7a8c408d2b88847d04d4563",
+    "db/mysql/schema.sql": "c5243e85cfb01929995ac3e6eeee678c11e1f92cd3edb5c3bec9b43f5359e0ba",
+    "db/mysql/seed.sql": "b4d63bf3e6c25d17bb59dc3e0c68e924d79753906c227fa6e81693065d499787",
+    "db/postgres/schema.sql": "c13fb9b11c7682c958e065ca8f3598c0ce9f56dba2c274e11ab5c7cbd22a3aa1",
+    "db/postgres/seed.sql": "22bcd3d4f06710f22d8b92591e798c9d568b342f6abba6fdfae874c197ad615f",
+    "fixtures/execution_cases.json": "a6f5b7543406acdb2a389f7f4dd554c6c8f86ab81a45764d661ff28641bc3a75",
+    "fixtures/identities.json": "9b3f48886b181675b82fc32514cdb777392c684b5f651f582a4165b9056a3fa9",
+    "fixtures/runtime_cases.json": "c0ffff3c701952d856ddc318ecf4e24bf09f2862736bb7f973e5e02c004cece7",
+    "fixtures/snapshots.json": "64c578ac6d7ef4bed46e4e5e3ff73768abcb106a562d9d7cbadf1c37cf52c5ab",
+    "fixtures/transport_cases.json": "b4fd6cd931f57259f32a9d7e1d5244157248cbb3fcfa416b2390b95c1823f5e9",
+    "playwright_seed.json": "d79c5c0b7797db7a19e13de402a655a341d6bc5dbcb9383861929560f5e007fd"
+  },
+  "generated_at": "2026-08-26T00:00:00Z",
+  "manifest_version": 1,
+  "seed": 20260826
+}

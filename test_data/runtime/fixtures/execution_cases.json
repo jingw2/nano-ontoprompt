@@ -1,0 +1,147 @@
+{
+  "cases": {
+    "database-row-parity": {
+      "case_id": "database-row-parity",
+      "expected": {
+        "optimistic_lock": "row_version_incremented",
+        "row_count": 1
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    },
+    "database-target-row-drift": {
+      "case_id": "database-target-row-drift",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "VERSION_CONFLICT"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "execution-ambiguous-rejected-plan": {
+      "case_id": "execution-ambiguous-rejected-plan",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "AMBIGUOUS_PLAN"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-02"
+    },
+    "execution-before-image-version-conflict": {
+      "case_id": "execution-before-image-version-conflict",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "VERSION_CONFLICT"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-08"
+    },
+    "execution-binding-draft-state": {
+      "case_id": "execution-binding-draft-state",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_NOT_PUBLISHED"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-03"
+    },
+    "execution-binding-revoked-state": {
+      "case_id": "execution-binding-revoked-state",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_REVOKED"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-04"
+    },
+    "execution-binding-version-drift": {
+      "case_id": "execution-binding-version-drift",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "BINDING_VERSION_DRIFT"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-05"
+    },
+    "execution-connection-target-drift": {
+      "case_id": "execution-connection-target-drift",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "CONNECTION_TARGET_DRIFT"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-06"
+    },
+    "execution-high-risk-exact-hash-hitl-update": {
+      "case_id": "execution-high-risk-exact-hash-hitl-update",
+      "expected": {
+        "outcome": "pending_approval",
+        "risk_class": "human_approved"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "execution-idempotent-retry": {
+      "case_id": "execution-idempotent-retry",
+      "expected": {
+        "idempotent": true,
+        "outcome": "succeeded"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-11"
+    },
+    "execution-low-risk-automatic-update": {
+      "case_id": "execution-low-risk-automatic-update",
+      "expected": {
+        "outcome": "succeeded",
+        "risk_class": "automatic"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    },
+    "execution-parameter-selector-drift": {
+      "case_id": "execution-parameter-selector-drift",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "PARAMETER_SELECTOR_DRIFT"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-07"
+    },
+    "execution-reconciliation-and-rollback": {
+      "case_id": "execution-reconciliation-and-rollback",
+      "expected": {
+        "outcome": "rollback_plan_created"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-13"
+    },
+    "execution-row-count-two": {
+      "case_id": "execution-row-count-two",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "ROW_COUNT_NOT_SINGLE"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-10"
+    },
+    "execution-row-count-zero": {
+      "case_id": "execution-row-count-zero",
+      "expected": {
+        "outcome": "rejected",
+        "reason_code": "ROW_COUNT_ZERO"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-09"
+    },
+    "execution-timeout-unknown-outcome": {
+      "case_id": "execution-timeout-unknown-outcome",
+      "expected": {
+        "outcome": "unknown",
+        "reconciliation_required": true
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-12"
+    }
+  }
+}

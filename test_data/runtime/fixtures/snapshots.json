@@ -1,0 +1,67 @@
+{
+  "cases": {
+    "snapshot-authorized-empty-result": {
+      "case_id": "snapshot-authorized-empty-result",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count": 0
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "snapshot-failed-ungoverned-input": {
+      "case_id": "snapshot-failed-ungoverned-input",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "UNGOVERNED_PIPELINE_INPUT"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-03"
+    },
+    "snapshot-incomplete-lineage": {
+      "case_id": "snapshot-incomplete-lineage",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "INCOMPLETE_LINEAGE"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-02"
+    },
+    "snapshot-release-drift": {
+      "case_id": "snapshot-release-drift",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "RELEASE_DRIFT"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-05"
+    },
+    "snapshot-reordered-input-lists": {
+      "case_id": "snapshot-reordered-input-lists",
+      "expected": {
+        "decision": "ALLOW",
+        "hash_order_independent": true
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-06"
+    },
+    "snapshot-stale-snapshot": {
+      "case_id": "snapshot-stale-snapshot",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "STALE_SNAPSHOT"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-04"
+    },
+    "snapshot-valid-published-release": {
+      "case_id": "snapshot-valid-published-release",
+      "expected": {
+        "decision": "ALLOW",
+        "lineage_complete": true
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    }
+  }
+}
