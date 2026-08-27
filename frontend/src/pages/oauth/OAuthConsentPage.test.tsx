@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import OAuthConsentPage from './OAuthConsentPage'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -29,6 +29,19 @@ function renderConsentPage(initialPath = `/oauth/consent${CONSENT_QS}`) {
   )
 }
 
+// jsdom's window.location.assign is non-configurable, so vi.spyOn on the
+// existing property throws "Cannot redefine property"; replace the whole
+// location object (writable, no type suppression) with a mock assign instead.
+function mockLocationAssign() {
+  const assign = vi.fn()
+  const originalLocation = window.location
+  Object.defineProperty(window, 'location', {
+    writable: true,
+    value: { ...originalLocation, assign },
+  })
+  return { assign, restore: () => Object.defineProperty(window, 'location', { writable: true, value: originalLocation }) }
+}
+
 describe('OAuthConsentPage', () => {
   it('redirects to /login with a returnTo when not authenticated', async () => {
     renderConsentPage()
@@ -46,22 +59,15 @@ describe('OAuthConsentPage', () => {
       http.post('*/api/v1/oauth/consent', () =>
         HttpResponse.json({ data: { redirect_uri: 'https://client.example/cb?code=xyz&state=xyz' }, message: 'ok' })),
     )
-    const originalLocation = window.location
-    // @ts-expect-error -- test-only override so the assertion doesn't navigate jsdom away
-    delete window.location
-    window.location = {
-      ...originalLocation,
-      href: originalLocation.href,
-      assign: (url: string) => { (window.location as unknown as { href: string }).href = url },
-    } as Location
+    const { assign, restore } = mockLocationAssign()
 
     renderConsentPage()
     expect(await screen.findByTestId('oauth-client-name')).toHaveTextContent('Test MCP Client')
     expect(screen.getByTestId('oauth-scope-list')).toHaveTextContent('ontology:read')
     await userEvent.click(screen.getByTestId('oauth-allow'))
-    await waitFor(() => expect(window.location.href).toBe('https://client.example/cb?code=xyz&state=xyz'))
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://client.example/cb?code=xyz&state=xyz'))
 
-    window.location = originalLocation
+    restore()
   })
 
   it('Deny navigates to the redirect_uri with an access_denied error', async () => {
@@ -75,20 +81,13 @@ describe('OAuthConsentPage', () => {
       http.post('*/api/v1/oauth/consent', () =>
         HttpResponse.json({ data: { redirect_uri: 'https://client.example/cb?error=access_denied&state=xyz' }, message: 'ok' })),
     )
-    const originalLocation = window.location
-    // @ts-expect-error -- test-only override
-    delete window.location
-    window.location = {
-      ...originalLocation,
-      href: originalLocation.href,
-      assign: (url: string) => { (window.location as unknown as { href: string }).href = url },
-    } as Location
+    const { assign, restore } = mockLocationAssign()
 
     renderConsentPage()
     await screen.findByTestId('oauth-client-name')
     await userEvent.click(screen.getByTestId('oauth-deny'))
-    await waitFor(() => expect(window.location.href).toBe('https://client.example/cb?error=access_denied&state=xyz'))
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://client.example/cb?error=access_denied&state=xyz'))
 
-    window.location = originalLocation
+    restore()
   })
 })

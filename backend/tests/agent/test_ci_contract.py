@@ -63,9 +63,25 @@ def test_matrix_commands_use_the_guarded_launcher():
     assert "scripts/run_migrations.py upgrade head" in run_text
     assert "scripts/guarded_entrypoint.py" in run_text
     assert "uvicorn" in run_text and "celery" in run_text
-    assert "npm run test:ci" in run_text
     assert "evals.agent_ontology.run" in run_text
     assert "check_agent_plan_contract.py" in run_text
+
+
+def test_frontend_ci_is_not_inside_python_matrix():
+    """Task 4 (M1 stabilization): frontend test:ci ran once per backend-matrix
+    Python version (3.11 and 3.12) — duplicate, wasted CI time for a job that
+    has nothing to do with the Python version. It now runs once, standalone."""
+    import yaml
+
+    data = yaml.safe_load(WORKFLOW.read_text())
+    jobs = data["jobs"]
+    assert jobs["frontend-ci"].get("strategy", {}) == {}
+    assert jobs["backend-matrix"]["strategy"]["matrix"]["python-version"] == ["3.11", "3.12"]
+    frontend_run_text = "\n".join(str(s.get("run", "")) for s in jobs["frontend-ci"]["steps"])
+    assert "npm ci" in frontend_run_text
+    assert "npm run test:ci" in frontend_run_text
+    backend_run_text = "\n".join(str(s.get("run", "")) for s in jobs["backend-matrix"]["steps"])
+    assert "npm run test:ci" not in backend_run_text
 
 
 def test_plan_contract_check_passes_and_reports_owners():

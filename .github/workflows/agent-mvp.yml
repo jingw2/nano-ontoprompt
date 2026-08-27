@@ -35,6 +35,17 @@ jobs:
             exit 1
           fi
 
+  frontend-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Frontend test:ci
+        working-directory: frontend
+        run: npm ci && npm run test:ci
+
   backend-matrix:
     strategy:
       fail-fast: false
@@ -113,9 +124,6 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           RUN_LIVE_EVALS: "1"
         run: cd backend && python -m evals.document_extraction.run --manifest core-v1 --adapter deepseek --output artifacts/evals/document_extraction_result.json
-      - name: Frontend test:ci
-        working-directory: frontend
-        run: npm ci && npm run test:ci
       - name: Frontend E2E suite
         working-directory: frontend
         timeout-minutes: 15
