@@ -122,6 +122,10 @@ class RefreshRun(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     dispatch_state: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     dispatch_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Durable destination queue attribution for operability metrics. Nullable
+    # keeps pre-Task-7 runs readable; new dispatch paths record the exact
+    # queue selected by the Celery topology.
+    dispatch_queue: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     cursor_before_json: Mapped[dict | None] = mapped_column("cursor_before", JSON, nullable=True)
     cursor_after_json: Mapped[dict | None] = mapped_column("cursor_after", JSON, nullable=True)
@@ -292,6 +296,11 @@ class RefreshSchedule(Base):
     sla_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     backfill_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Admission control (Task 7): dispatch_due_schedules refuses to publish a
+    # due schedule's run once its source already has this many queued/running
+    # runs, keeping it durably queued with dispatch_state="backpressured"
+    # instead of piling up unbounded work. Added by 0023_refresh_schedule_admission.
+    max_pending_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     enabled: Mapped[bool] = mapped_column(default=True)
     next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_dispatched_run_id: Mapped[str | None] = mapped_column(
@@ -300,3 +309,9 @@ class RefreshSchedule(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    @property
+    def business_calendar(self) -> list | None:
+        """Alias for `excluded_dates` — the list of ISO dates this schedule
+        skips (Task 7's `dispatch_due_schedules` business-calendar check)."""
+        return self.excluded_dates

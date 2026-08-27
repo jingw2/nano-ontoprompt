@@ -7,11 +7,10 @@ after discarding message bodies) with durable `RefreshRun` state
 snapshot. Never calls a connector or broker with source credentials, and
 never persists or forwards a message payload.
 
-`RefreshRun` has no queue-attributing column yet: `refresh.poll` and
-`refresh.event` are attributed by `RefreshPolicy` (batch/micro_batch vs.
-event_driven — the only durable signal that already exists), and
-`refresh.schedule`/`refresh.replay` report zero/`None` run-level counts
-until a later task (7/10) adds an explicit attribution.
+`RefreshRun.dispatch_queue` is the durable destination-queue signal for new
+runs. Legacy rows with no queue attribution retain the Task 6A policy-based
+fallback for `refresh.poll` and `refresh.event`; explicit queue values always
+win, so schedule/replay runs cannot be misattributed to `refresh.poll`.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.v2.refresh import RefreshRun
@@ -88,24 +87,26 @@ def _database_ready(db: Session) -> bool:
 
 def _queue_run_metrics(db: Session, queue: str) -> tuple[int, int, int, float | None]:
     policies = _POLICIES_BY_QUEUE.get(queue)
-    if not policies:
-        return (0, 0, 0, None)
+    queue_scope = [RefreshRun.dispatch_queue == queue]
+    if policies:
+        queue_scope.append(and_(RefreshRun.dispatch_queue.is_(None), RefreshRun.policy.in_(policies)))
+    queue_filter = or_(*queue_scope)
 
     running_count = db.execute(
         select(func.count()).select_from(RefreshRun)
-        .where(RefreshRun.policy.in_(policies), RefreshRun.status == "running")
+        .where(queue_filter, RefreshRun.status == "running")
     ).scalar_one()
     retry_count = db.execute(
         select(func.count()).select_from(RefreshRun)
-        .where(RefreshRun.policy.in_(policies), RefreshRun.status == "queued", RefreshRun.retry_count > 0)
+        .where(queue_filter, RefreshRun.status == "queued", RefreshRun.retry_count > 0)
     ).scalar_one()
     dead_letter_count = db.execute(
         select(func.count()).select_from(RefreshRun)
-        .where(RefreshRun.policy.in_(policies), RefreshRun.status == "dead_lettered")
+        .where(queue_filter, RefreshRun.status == "dead_lettered")
     ).scalar_one()
     max_lag = db.execute(
         select(func.max(RefreshRun.lag_seconds))
-        .where(RefreshRun.policy.in_(policies), RefreshRun.lag_seconds.isnot(None))
+        .where(queue_filter, RefreshRun.lag_seconds.isnot(None))
     ).scalar_one()
     return (running_count, retry_count, dead_letter_count, max_lag)
 

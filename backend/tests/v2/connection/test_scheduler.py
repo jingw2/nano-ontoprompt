@@ -32,19 +32,45 @@ def test_parse_cron_invalid_raises():
         svc.parse_cron("bad expression")
 
 
-def test_schedule_connection_returns_dict():
+def test_schedule_connection_without_db_only_validates_never_reports_active():
+    """Task 7 deliverable: validation alone never reports a schedule as
+    active — without a db session, syntax validation happens but nothing is
+    persisted, so status must not be "scheduled"."""
     svc = CronService()
     result = svc.schedule_connection_sync("conn-1", "0 8 * * *")
-    assert result["status"] == "scheduled"
+    assert result["status"] != "scheduled"
     assert result["connection_id"] == "conn-1"
     assert "celery_crontab" in result
 
 
-def test_schedule_pipeline_returns_dict():
+def test_schedule_pipeline_without_db_only_validates_never_reports_active():
     svc = CronService()
     result = svc.schedule_pipeline_run("pl-1", "*/30 * * * *")
+    assert result["status"] != "scheduled"
+    assert result["pipeline_id"] == "pl-1"
+
+
+def test_schedule_connection_with_db_persists_and_returns_scheduled(db):
+    svc = CronService()
+    result = svc.schedule_connection_sync("conn-1", "0 8 * * *", db=db)
+    assert result["status"] == "scheduled"
+    assert result["connection_id"] == "conn-1"
+    assert result["next_due_at"] is not None
+
+    from app.models.v2.refresh import RefreshSchedule
+    row = db.query(RefreshSchedule).filter(
+        RefreshSchedule.target_type == "source", RefreshSchedule.target_id == "conn-1",
+    ).first()
+    assert row is not None
+    assert row.next_due_at is not None
+
+
+def test_schedule_pipeline_with_db_persists_and_returns_scheduled(db):
+    svc = CronService()
+    result = svc.schedule_pipeline_run("pl-1", "*/30 * * * *", db=db)
     assert result["status"] == "scheduled"
     assert result["pipeline_id"] == "pl-1"
+    assert result["next_due_at"] is not None
 
 
 def test_describe_cron_every_minute():

@@ -8,10 +8,12 @@ carry no payload/credential field.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 
+from app.models.v2.refresh import RefreshRun
 from app.schemas.refresh import RefreshPolicy
 from app.services.v2.incremental.contract import claim_refresh_run, mark_refresh_retryable
 from app.services.v2.incremental.operability import QueueObservation, collect_refresh_operability
@@ -58,3 +60,23 @@ def test_operability_derives_retry_and_dead_letter_counts_from_durable_run_state
     schedule_metric = next(item for item in result.queues if item.queue == "refresh.schedule")
     assert schedule_metric.retry_count == 0
     assert schedule_metric.dead_letter_count == 0
+
+
+def test_operability_uses_durable_queue_attribution_for_schedule_and_replay_runs(db):
+    for queue in ("refresh.schedule", "refresh.replay"):
+        db.add(RefreshRun(
+            id=str(uuid.uuid4()), source_id=f"source-{queue}", resource="orders",
+            policy=RefreshPolicy.BATCH.value, trigger="scheduled", config_version=1,
+            cursor_contract="watermark_primary_key", status="running",
+            dispatch_state="dispatched", dispatch_queue=queue,
+            idempotency_key=f"{queue}:{uuid.uuid4()}", fencing_token=0,
+        ))
+    db.commit()
+
+    result = collect_refresh_operability(db, now=FIXED_NOW, observations=fixture_queue_observations())
+    schedule_metric = next(item for item in result.queues if item.queue == "refresh.schedule")
+    poll_metric = next(item for item in result.queues if item.queue == "refresh.poll")
+    replay_metric = next(item for item in result.queues if item.queue == "refresh.replay")
+    assert schedule_metric.running_count == 1
+    assert poll_metric.running_count == 0
+    assert replay_metric.running_count == 1

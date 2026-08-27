@@ -36,6 +36,8 @@ celery_app = Celery("ontexus",
                         "app.tasks.v2.pipeline_run",
                         "app.tasks.v2.mapping_apply",
                         "app.tasks.v2.connection_sync",
+                        # Task 7: persisted schedule dispatch + run-ID-only refresh tasks
+                        "app.tasks.v2.refresh_tasks",
                     ])
 
 # 注册全部 ORM 模型 — worker 子进程只加载任务模块, 若 v2 Connection 等模型未
@@ -70,5 +72,12 @@ celery_app.conf.beat_schedule = {
     "agent-memory-vector-sweep": {
         "task": "agent.memory_vector_sweep",
         "schedule": 60.0,
+    },
+    # Task 7: publish every due persisted RefreshSchedule's run to the
+    # broker on a short fixed interval. Dynamic (per-schedule) cadence stays
+    # in refresh_schedules/next_due_at, not as untracked beat entries.
+    "refresh-schedule-dispatch": {
+        "task": "refresh.dispatch_due_schedules",
+        "schedule": 15.0,
     },
 }

@@ -201,7 +201,8 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db), _=Depen
 
 @router.post("/{connection_id}/schedule")
 def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db), _=Depends(require_editor)):
-    """为连接设置 Cron 调度表达式"""
+    """为连接设置 Cron 调度表达式 —— 持久化为 RefreshSchedule 行，由 Celery
+    beat 的 refresh.dispatch_due_schedules 实际派发（见 Task 7）。"""
     from app.services.v2.scheduler.cron_service import CronService
     svc = CronService()
     if not svc.validate_cron(cron_expr):
@@ -211,7 +212,7 @@ def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_d
     if not conn:
         raise HTTPException(404, "Connection not found")
 
-    result = svc.schedule_connection_sync(connection_id, cron_expr)
+    result = svc.schedule_connection_sync(connection_id, cron_expr, db=db)
     config = conn.config or {}
     config["schedule_cron"] = cron_expr
     conn.config = config
@@ -221,7 +222,8 @@ def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_d
 
 @router.post("/{connection_id}/sync")
 def trigger_sync(connection_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
-    """手动触发数据同步"""
+    """手动触发数据同步 —— 通过持久化刷新契约 (Task 6) 声明一个立即执行的
+    RefreshRun，再派发其 run_id 至 refresh.connection (refresh.poll 队列)。"""
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
         raise HTTPException(404, "Connection not found")
@@ -229,11 +231,13 @@ def trigger_sync(connection_id: str, db: Session = Depends(get_db), _=Depends(re
     conn.status = "active"
     db.commit()
 
+    from app.tasks.v2.refresh_tasks import create_manual_connection_run, refresh_connection_task
+    run = create_manual_connection_run(db, connection_id)
+
     try:
-        from app.tasks.v2.sync_tasks import connection_sync_task
-        connection_sync_task.delay(connection_id)
+        refresh_connection_task.delay(run.id)
     except Exception as e:
-        return {"connection_id": connection_id, "status": "sync_failed",
+        return {"connection_id": connection_id, "run_id": run.id, "status": "sync_failed",
                 "error": f"任务派发失败 (Celery/Redis 不可用?): {e}"}
 
-    return {"connection_id": connection_id, "status": "sync_triggered"}
+    return {"connection_id": connection_id, "run_id": run.id, "status": "sync_triggered"}
