@@ -3142,6 +3142,29 @@
         "title": "RecoverOntologyOwnerRequest",
         "type": "object"
       },
+      "RefreshConfigurationUpdate": {
+        "properties": {
+          "configuration": {
+            "default": {},
+            "title": "Configuration",
+            "type": "object"
+          },
+          "cursor_contract": {
+            "title": "Cursor Contract",
+            "type": "string"
+          },
+          "resource": {
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "cursor_contract"
+        ],
+        "title": "RefreshConfigurationUpdate",
+        "type": "object"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -12809,6 +12832,64 @@
           }
         ],
         "summary": "Get Connection",
+        "tags": [
+          "v2-connections"
+        ]
+      }
+    },
+    "/api/v2/connections/{connection_id}/refresh-configuration": {
+      "put": {
+        "description": "管理侧的资源刷新配置修订：在同一数据库事务内更新 Connection 的\ncursor_contract 与该 (connection, resource) 的权威 RefreshSourceState\n修订号，二者必须原子生效——绝不允许 Connection 侧的 JSON/cursor_contract\n单独变更而不递增 config_version、失效旧的 lease/fence。",
+        "operationId": "update_connection_refresh_configuration_api_v2_connections__connection_id__refresh_configuration_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshConfigurationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Connection Refresh Configuration",
         "tags": [
           "v2-connections"
         ]

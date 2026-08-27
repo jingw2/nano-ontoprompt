@@ -86,7 +86,7 @@ from app.models.oauth import OAuthClient, OAuthAuthorizationCode, OAuthRefreshFa
 def load_all_models():
     """Register every ORM model implemented in the current milestone."""
     from app.database import Base
-    from app.models.v2 import action, connection, curated, dataset, logic, mapping, pipeline  # noqa: F401
+    from app.models.v2 import action, connection, curated, dataset, logic, mapping, pipeline, refresh  # noqa: F401
     from app.models.security_domain import SecurityDomain  # noqa: F401
     from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken  # noqa: F401
     from app.models.ontology_release import OntologyRelease  # noqa: F401

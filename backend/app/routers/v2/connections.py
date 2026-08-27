@@ -9,6 +9,7 @@ DELETE /api/v2/connections/{id}
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -152,6 +153,41 @@ def test_connection(connection_id: str, db: Session = Depends(get_db), _=Depends
         conn.status = "error"
         db.commit()
         return {"success": False, "status": "error", "detail": str(e)}
+
+
+class RefreshConfigurationUpdate(BaseModel):
+    resource: str
+    cursor_contract: str  # "watermark_primary_key" | "opaque_source_cursor"
+    configuration: dict = {}
+
+
+@router.put("/{connection_id}/refresh-configuration", response_model=ConnectionResponse)
+def update_connection_refresh_configuration(
+    connection_id: str, body: RefreshConfigurationUpdate,
+    db: Session = Depends(get_db), _=Depends(require_editor),
+):
+    """管理侧的资源刷新配置修订：在同一数据库事务内更新 Connection 的
+    cursor_contract 与该 (connection, resource) 的权威 RefreshSourceState
+    修订号，二者必须原子生效——绝不允许 Connection 侧的 JSON/cursor_contract
+    单独变更而不递增 config_version、失效旧的 lease/fence。
+    """
+    conn = db.query(Connection).filter(Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    from app.services.v2.incremental.contract import update_source_configuration
+
+    conn.cursor_contract = body.cursor_contract
+    # update_source_configuration is the sole commit boundary for this
+    # request, so the Connection mutation above lands in the exact same
+    # transaction as the RefreshSourceState revision bump below.
+    update_source_configuration(
+        db, source_id=connection_id, resource=body.resource,
+        cursor_contract=body.cursor_contract, configuration=body.configuration,
+        now=datetime.now(timezone.utc),
+    )
+    db.refresh(conn)
+    return conn
 
 
 @router.delete("/{connection_id}", status_code=204)
