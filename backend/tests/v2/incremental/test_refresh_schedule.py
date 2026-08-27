@@ -281,3 +281,34 @@ def test_retry_policy_backoff_has_explicit_upper_bound(db):
         create_fixture_schedule(
             db, target_id="source-retry-bound", retry_policy={"max_attempts": 2, "backoff_seconds": 3601},
         )
+
+
+def test_expired_dispatch_claim_is_recovered_once_without_duplicate(db):
+    schedule = create_fixture_schedule(db, target_id="source-expired-claim")
+    occurrence_key = f"schedule:{schedule.id}:{schedule.next_due_at.isoformat()}"
+    retained = RefreshRun(
+        id=str(uuid.uuid4()), source_id="source-expired-claim", resource=DEFAULT_RESOURCE,
+        policy="batch", trigger="scheduled", config_version=1,
+        cursor_contract="watermark_primary_key", status="queued", dispatch_state="pending",
+        dispatch_queue="refresh.poll", dispatch_claim_owner="abandoned-beat",
+        dispatch_claim_expires_at=FIXED_NOW - timedelta(seconds=1), dispatch_retry_at=None,
+        idempotency_key=occurrence_key, fencing_token=0, retry_count=0,
+    )
+    db.add(retained)
+    schedule.last_dispatched_run_id = retained.id
+    db.commit()
+
+    sent = []
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="recovery-beat",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == [retained.id]
+    assert sent == [retained.id]
+    assert db.get(RefreshRun, retained.id).dispatch_state == "dispatched"
+    assert db.get(RefreshRun, retained.id).dispatch_claim_owner is None
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="follow-up-beat",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == []
+    assert sent == [retained.id]
