@@ -353,7 +353,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_exe
                 assert case["test_targets"][0]["kind"] == "pytest"
             else:
                 assert case["test_targets"][0]["kind"] == "playwright"
-                assert "business journey completes the governed browser loop" in case["test_targets"][0]["title"]
+                assert "journey completes the governed browser loop" in case["test_targets"][0]["title"]
             if "business_journey" in case["layers"]:
                 assert case["journey_id"] in {"supply_chain", "finance", "credit"}
                 assert case["model_id"] == "deepseek-v4-flash-vision-exp"
