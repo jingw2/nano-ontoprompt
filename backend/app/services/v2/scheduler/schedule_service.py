@@ -53,7 +53,12 @@ _TASK_NAME_BY_STORED_TARGET_TYPE = {"source": "refresh.connection", "pipeline": 
 DEFAULT_RESOURCE = "__scheduled__"
 
 _MAX_RETRY_ATTEMPTS = 20
+_DEFAULT_MAX_ATTEMPTS = 3
+_MAX_RETRY_BACKOFF_SECONDS = 3600
+_DISPATCH_CLAIM_LEASE_SECONDS = 60
 _BACKPRESSURE_REASON = "BACKPRESSURE"
+_PUBLISH_FAILED_REASON = "PUBLISH_FAILED"
+_RETRY_EXHAUSTED_REASON = "RETRY_EXHAUSTED"
 
 
 def _new_id() -> str:
@@ -116,8 +121,11 @@ def _validate_retry_policy(retry_policy: Mapping[str, object] | None) -> None:
     if max_attempts is None or not (1 <= int(max_attempts) <= _MAX_RETRY_ATTEMPTS):
         raise ValueError(f"retry_policy.max_attempts must be between 1 and {_MAX_RETRY_ATTEMPTS}")
     backoff_seconds = retry_policy.get("backoff_seconds", 0)
-    if int(backoff_seconds) < 0:
-        raise ValueError("retry_policy.backoff_seconds must be non-negative")
+    if not (0 <= int(backoff_seconds) <= _MAX_RETRY_BACKOFF_SECONDS):
+        raise ValueError(
+            "retry_policy.backoff_seconds must be between "
+            f"0 and {_MAX_RETRY_BACKOFF_SECONDS}"
+        )
 
 
 def _validate_request(request: ScheduleRequest) -> ZoneInfo:
@@ -262,6 +270,27 @@ def _as_aware_utc(value: datetime | None) -> datetime | None:
     return value
 
 
+def _retry_settings(schedule: RefreshSchedule) -> tuple[int, int]:
+    """Return total publish attempts and base backoff for a persisted schedule.
+
+    An omitted policy gets a finite three-attempt budget and no delay, keeping
+    broker failures bounded without surprising existing schedules.
+    """
+    policy = schedule.retry_policy or {}
+    return (
+        int(policy.get("max_attempts", _DEFAULT_MAX_ATTEMPTS)),
+        int(policy.get("backoff_seconds", 0)),
+    )
+
+
+def _retry_at(schedule: RefreshSchedule, *, now: datetime, retry_count: int) -> datetime:
+    """Compute a bounded exponential backoff for the next publish attempt."""
+    _, base_seconds = _retry_settings(schedule)
+    exponent = max(0, retry_count - 1)
+    delay_seconds = min(_MAX_RETRY_BACKOFF_SECONDS, base_seconds * (2 ** exponent))
+    return now + timedelta(seconds=delay_seconds)
+
+
 def _dispatch_one_schedule(
     db: Session, *, schedule_id: str, now: datetime, lease_owner: str,
     send_refresh: Callable[[RefreshDispatchMessage], str],
@@ -298,11 +327,30 @@ def _dispatch_one_schedule(
     else:
         config_version, cursor_contract = run.config_version, run.cursor_contract
 
+        retry_at = _as_aware_utc(run.dispatch_retry_at)
+        if retry_at is not None and retry_at > now:
+            db.commit()
+            return None
+        max_attempts, _ = _retry_settings(schedule)
+        if run.dispatch_state == "publish_failed" and run.retry_count >= max_attempts:
+            if run.dispatch_reason != _RETRY_EXHAUSTED_REASON:
+                run.dispatch_reason = _RETRY_EXHAUSTED_REASON
+                run.dispatch_retry_at = None
+            db.commit()
+            return None
+
+        claim_expires_at = _as_aware_utc(run.dispatch_claim_expires_at)
+        if claim_expires_at is not None and claim_expires_at > now:
+            # Another beat owns the handoff; do not publish concurrently. An
+            # expired claim is deliberately eligible for at-least-once retry.
+            db.commit()
+            return None
+
     active_query = select(func.count()).select_from(RefreshRun).where(
-            RefreshRun.source_id == source_id,
-            RefreshRun.resource == resource,
-            RefreshRun.status.in_(("queued", "running")),
-        )
+        RefreshRun.source_id == source_id,
+        RefreshRun.resource == resource,
+        RefreshRun.status.in_(("queued", "running")),
+    )
     if run is not None:
         active_query = active_query.where(RefreshRun.id != run.id)
     existing_active = db.execute(active_query).scalar_one()
@@ -321,6 +369,11 @@ def _dispatch_one_schedule(
             dispatch_state="pending" if admitted else "backpressured",
             dispatch_reason=None if admitted else _BACKPRESSURE_REASON,
             dispatch_queue=QUEUE_REFRESH_POLL,
+            dispatch_claim_owner=lease_owner if admitted else None,
+            dispatch_claim_expires_at=(
+                now + timedelta(seconds=_DISPATCH_CLAIM_LEASE_SECONDS) if admitted else None
+            ),
+            dispatch_retry_at=None,
             idempotency_key=idempotency_key,
             # Informational provenance only — which beat instance dispatched
             # this run — not an active connector lease (lease_expires_at stays
@@ -345,6 +398,8 @@ def _dispatch_one_schedule(
     elif not admitted:
         run.dispatch_state = "backpressured"
         run.dispatch_reason = _BACKPRESSURE_REASON
+        run.dispatch_claim_owner = None
+        run.dispatch_claim_expires_at = None
         schedule.last_dispatched_run_id = run.id
         schedule.next_due_at = due_at
         db.commit()
@@ -354,6 +409,9 @@ def _dispatch_one_schedule(
         # persist the claim before attempting broker publication.
         run.dispatch_state = "pending"
         run.dispatch_reason = None
+        run.dispatch_claim_owner = lease_owner
+        run.dispatch_claim_expires_at = now + timedelta(seconds=_DISPATCH_CLAIM_LEASE_SECONDS)
+        run.dispatch_retry_at = None
 
     schedule.last_dispatched_run_id = run.id
     # Keep the occurrence due until publication succeeds. This is the durable
@@ -371,12 +429,24 @@ def _dispatch_one_schedule(
         send_refresh(message)
     except Exception:
         run.dispatch_state = "publish_failed"
-        run.dispatch_reason = "PUBLISH_FAILED"
+        run.retry_count += 1
+        max_attempts, _ = _retry_settings(schedule)
+        run.dispatch_claim_owner = None
+        run.dispatch_claim_expires_at = None
+        if run.retry_count >= max_attempts:
+            run.dispatch_reason = _RETRY_EXHAUSTED_REASON
+            run.dispatch_retry_at = None
+        else:
+            run.dispatch_reason = _PUBLISH_FAILED_REASON
+            run.dispatch_retry_at = _retry_at(schedule, now=now, retry_count=run.retry_count)
         db.commit()
         return None
 
     run.dispatch_state = "dispatched"
     run.dispatch_reason = None
+    run.dispatch_claim_owner = None
+    run.dispatch_claim_expires_at = None
+    run.dispatch_retry_at = None
     schedule.next_due_at = _next_fire_utc(schedule.cron_expression, tz, due_at)
     db.commit()
     return run.id

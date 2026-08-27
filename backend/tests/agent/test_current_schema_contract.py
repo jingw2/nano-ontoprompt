@@ -31,7 +31,7 @@ def _pytest_ini_options() -> dict:
 
 
 def test_schema_contract_uses_resolved_head_and_memory_tables():
-    assert _resolve_current_head() == "0023_refresh_schedule_admission"
+    assert _resolve_current_head() == "0024_refresh_dispatch_retry"
     assert {"agent_turn_checkpoints", "agent_turn_checkpoint_writes"} <= _registered_tables()
     # pytest-asyncio==0.24.0 (pinned) only recognizes
     # asyncio_default_fixture_loop_scope; the later asyncio_default_test_loop_scope

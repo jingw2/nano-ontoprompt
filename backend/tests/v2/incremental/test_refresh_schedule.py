@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models.v2.refresh import RefreshRun, RefreshSchedule
@@ -47,12 +48,12 @@ def upsert_fixture_schedule(db, *, cron_expr, timezone, business_calendar, sla_s
     return upsert_refresh_schedule(db, request, now=FIXED_NOW)
 
 
-def create_fixture_schedule(db, *, target_id, max_pending_runs=5, cron_expr="* * * * *") -> RefreshSchedule:
+def create_fixture_schedule(db, *, target_id, max_pending_runs=5, cron_expr="* * * * *", retry_policy=None) -> RefreshSchedule:
     """A schedule already due at FIXED_NOW (every-minute cron, upserted one
     minute before FIXED_NOW so next_due_at lands exactly on it)."""
     request = ScheduleRequest(
         target_type="connection", target_id=target_id, cron_expr=cron_expr, timezone="UTC",
-        business_calendar=[], sla_seconds=0, retry_policy=None, backfill_window_seconds=0,
+        business_calendar=[], sla_seconds=0, retry_policy=retry_policy, backfill_window_seconds=0,
         max_pending_runs=max_pending_runs, enabled=True,
     )
     return upsert_refresh_schedule(db, request, now=FIXED_NOW - timedelta(minutes=1))
@@ -215,3 +216,68 @@ def test_publish_failed_occurrence_is_retried_without_duplicate(db):
     assert db.execute(
         select(func.count()).select_from(RefreshRun).where(RefreshRun.source_id == "source-publish-retry")
     ).scalar_one() == 1
+
+
+def test_concurrent_like_dispatchers_cannot_publish_same_claimed_occurrence(db):
+    create_fixture_schedule(db, target_id="source-concurrent-claim")
+    first_sent = []
+    concurrent_sent = []
+
+    def publish_first(message):
+        # Deterministically interleave a second beat while the first callback
+        # is still running. The persisted claim must block the nested publish.
+        nested_ids = dispatch_due_schedules(
+            db, now=FIXED_NOW, lease_owner="beat-b",
+            send_refresh=lambda nested: concurrent_sent.append(nested.run_id) or "nested-broker-id",
+        )
+        assert nested_ids == []
+        first_sent.append(message.run_id)
+        return "first-broker-id"
+
+    ids = dispatch_due_schedules(db, now=FIXED_NOW, lease_owner="beat-a", send_refresh=publish_first)
+    assert ids == first_sent
+    assert concurrent_sent == []
+
+
+def test_publish_retry_policy_applies_backoff_and_stops_at_max_attempts(db):
+    create_fixture_schedule(
+        db, target_id="source-retry-policy", retry_policy={"max_attempts": 2, "backoff_seconds": 60},
+    )
+    attempts = []
+
+    def fail_publish(message):
+        attempts.append(message.run_id)
+        raise RuntimeError("broker unavailable")
+
+    assert dispatch_due_schedules(db, now=FIXED_NOW, lease_owner="beat-a", send_refresh=fail_publish) == []
+    retained = latest_fixture_run(db, source_id="source-retry-policy")
+    assert retained.retry_count == 1
+    retry_at = retained.dispatch_retry_at
+    if retry_at.tzinfo is None:  # SQLite has no timezone-aware datetime type.
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    assert retry_at == FIXED_NOW + timedelta(seconds=60)
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW + timedelta(seconds=59), lease_owner="beat-b", send_refresh=fail_publish,
+    ) == []
+    assert attempts == [retained.id]
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW + timedelta(seconds=60), lease_owner="beat-c", send_refresh=fail_publish,
+    ) == []
+    assert attempts == [retained.id, retained.id]
+    assert retained.retry_count == 2
+    assert retained.dispatch_retry_at is None
+    assert retained.dispatch_reason == "RETRY_EXHAUSTED"
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW + timedelta(hours=1), lease_owner="beat-d", send_refresh=fail_publish,
+    ) == []
+    assert attempts == [retained.id, retained.id]
+
+
+def test_retry_policy_backoff_has_explicit_upper_bound(db):
+    with pytest.raises(ValueError, match="backoff_seconds"):
+        create_fixture_schedule(
+            db, target_id="source-retry-bound", retry_policy={"max_attempts": 2, "backoff_seconds": 3601},
+        )

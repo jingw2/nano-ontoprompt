@@ -126,6 +126,15 @@ class RefreshRun(Base):
     # keeps pre-Task-7 runs readable; new dispatch paths record the exact
     # queue selected by the Celery topology.
     dispatch_queue: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Durable scheduler-side handoff claim. A pending claim is exclusive
+    # until its bounded expiry, after which another beat may safely redrive it.
+    dispatch_claim_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    dispatch_claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    # Earliest broker retry instant for a failed publish. Null means either
+    # retry immediately or the configured retry budget is exhausted.
+    dispatch_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     cursor_before_json: Mapped[dict | None] = mapped_column("cursor_before", JSON, nullable=True)
     cursor_after_json: Mapped[dict | None] = mapped_column("cursor_after", JSON, nullable=True)
