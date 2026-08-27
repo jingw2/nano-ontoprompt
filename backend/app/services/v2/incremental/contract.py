@@ -12,7 +12,7 @@ by this module's non-concurrent unit tests.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Mapping, Sequence
 
 from sqlalchemy import select
@@ -41,6 +41,13 @@ ACTIVE_RUN_STATUSES = ("queued", "running")
 
 def _new_id() -> str:
     return str(uuid.uuid4())
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize dialects (SQLite/MySQL may return naive datetimes)."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def _cursor_to_json(cursor: SourceCursor | None) -> dict | None:
@@ -138,6 +145,7 @@ def update_source_configuration(
 def claim_refresh_run(
     db: Session, *, source_id: str, resource: str, policy: RefreshPolicy | str,
     idempotency_key: str, lease_owner: str, now: datetime, lease_seconds: int = 300,
+    default_cursor_contract: str = "watermark_primary_key",
 ) -> RefreshRun:
     """Claim (or idempotently reuse) a refresh run for (source_id, resource).
 
@@ -148,10 +156,16 @@ def claim_refresh_run(
     RefreshLeaseError. A new claim copies the current config_version and
     cursor_contract into the run and increments the state's fencing token.
     """
-    state = _lock_or_create_source_state(db, source_id=source_id, resource=resource, now=now)
+    state = _lock_or_create_source_state(
+        db,
+        source_id=source_id,
+        resource=resource,
+        now=now,
+        default_cursor_contract=default_cursor_contract,
+    )
     policy_value = policy.value if isinstance(policy, RefreshPolicy) else policy
 
-    active = state.lease_expires_at is not None and state.lease_expires_at > now
+    active = _as_utc(state.lease_expires_at) is not None and _as_utc(state.lease_expires_at) > now
     if active:
         existing = db.execute(
             select(RefreshRun).where(
@@ -195,8 +209,9 @@ def claim_refresh_run(
 def record_refresh_outcome(
     db: Session, *, run_id: str, lease_owner: str, fencing_token: int, config_version: int,
     cursor_contract: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str,
-    next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object],
-    now: datetime,
+    next_cursor: SourceCursor | None, quality_summary: Mapping[str, object], provenance: Mapping[str, object],
+    now: datetime, input_source_cursor: SourceCursor | None = None,
+    input_provenance: Mapping[str, object] | None = None,
 ) -> RefreshRun:
     """Commit a successful refresh outcome, or reject it without side effects.
 
@@ -234,7 +249,7 @@ def record_refresh_outcome(
     if state.lease_owner != lease_owner:
         db.rollback()
         raise RefreshFencingError("REFRESH_FENCING_OWNER_MISMATCH", "lease owner no longer matches the source state")
-    if state.lease_expires_at is None or state.lease_expires_at <= now:
+    if _as_utc(state.lease_expires_at) is None or _as_utc(state.lease_expires_at) <= now:
         db.rollback()
         raise RefreshLeaseError("REFRESH_LEASE_EXPIRED", "lease has expired")
 
@@ -250,6 +265,8 @@ def record_refresh_outcome(
         db.add(PipelineRunInput(
             id=_new_id(), pipeline_run_id=pipeline_run_id, dataset_version_id=dataset_version_id,
             input_ordinal=ordinal,
+            source_cursor=_cursor_to_json(input_source_cursor),
+            provenance=dict(input_provenance) if input_provenance is not None else None,
         ))
     run.pipeline_run_id = pipeline_run_id
     run.source_provenance = dict(provenance)
@@ -352,7 +369,7 @@ def request_refresh_cancellation(db: Session, *, run_id: str, requested_by: str,
             and state.fencing_token == run.fencing_token
             and state.lease_owner == run.lease_owner
             and state.lease_expires_at is not None
-            and state.lease_expires_at > now
+            and _as_utc(state.lease_expires_at) > now
         )
         if fence_current:
             _record_transition(db, run=run, from_status="running", to_status="cancel_requested", reason=reason, actor=requested_by)
@@ -443,6 +460,10 @@ def mark_refresh_retryable(db: Session, *, run_id: str, reason: str, now: dateti
         db.commit()
         return run
 
+    previous_owner = run.lease_owner
+    previous_fence = run.fencing_token
+    state = _lock_source_state(db, source_id=run.source_id, resource=run.resource)
+
     _record_transition(db, run=run, from_status="running", to_status="queued", reason=reason)
     run.status = "queued"
     run.retry_count += 1
@@ -450,6 +471,18 @@ def mark_refresh_retryable(db: Session, *, run_id: str, reason: str, now: dateti
     run.dispatch_state = "pending"
     run.lease_owner = None
     run.lease_expires_at = None
+
+    # The run and source lease are one claim.  Clear both while the source
+    # row is locked; otherwise a retry would leave an orphaned source lease
+    # that blocks every subsequent claim until expiry.
+    if (
+        state is not None
+        and state.fencing_token == previous_fence
+        and state.lease_owner == previous_owner
+    ):
+        state.lease_owner = None
+        state.lease_expires_at = None
+        state.updated_at = now
 
     db.commit()
     db.refresh(run)

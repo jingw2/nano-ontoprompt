@@ -1,23 +1,21 @@
-"""Celery refresh tasks (Task 7) — beat-driven schedule dispatch and the
-run-ID-only `refresh.connection`/`refresh.pipeline` task bodies.
+"""Celery refresh tasks (Tasks 7-8) — beat-driven schedule dispatch and the
+run-ID-only polling worker.
 
 `dispatch_due_schedules_task` (`refresh.schedule` queue) is the only Celery
 entry point that turns a persisted `RefreshSchedule` into a durable
 `RefreshRun` and hands its `run_id` to the broker — see
-`app.services.v2.scheduler.schedule_service`. `refresh_connection_task`/
-`refresh_pipeline_task` (`refresh.poll` queue) are the run-ID-only bodies a
-worker executes once it picks a dispatched run off that queue; the actual
-connector pull/poll logic that turns a claimed run into a completed refresh
-is a later task's concern (Task 8) — this module only wires the durable
-run_id through to that not-yet-built execution step and logs receipt, so
-the Celery task names/queues/routing this task's brief requires are real
-and registered now.
+`app.services.v2.scheduler.schedule_service`. `refresh_poll_task` is the
+sole run-ID-only polling worker on `refresh.poll`; the compatibility
+`refresh.connection`/`refresh.pipeline` names delegate to it for persisted
+schedule messages.
 """
 from __future__ import annotations
 
 import logging
 import uuid
 from datetime import datetime, timezone
+
+from celery.exceptions import SoftTimeLimitExceeded, WorkerShutdown
 
 from app.tasks.celery_app import celery_app
 from app.tasks.topology import QUEUE_REFRESH_POLL, enqueue_refresh_run
@@ -61,19 +59,96 @@ def dispatch_due_schedules_task() -> list[str]:
         db.close()
 
 
+def _refresh_poll(run_id: str) -> dict:
+    """Execute one durable run, acknowledging only after its transition."""
+    import app.models  # noqa: F401
+    from app.database import SessionLocal
+    from app.models.v2.refresh import RefreshRun
+    from app.schemas.refresh import ConfigurationDriftError, RefreshCancellationRequested
+    from app.services.v2.incremental.contract import (
+        finalize_refresh_cancellation,
+        mark_refresh_retryable,
+    )
+    from app.services.v2.incremental.polling import poll_source
+
+    db = SessionLocal()
+    try:
+        run = db.get(RefreshRun, run_id)
+        if run is None:
+            return {"run_id": run_id, "status": "missing"}
+        owner = run.lease_owner or f"refresh-worker:{uuid.uuid4()}"
+        try:
+            result = poll_source(
+                db,
+                source_id=run.source_id,
+                resource=run.resource,
+                lease_owner=owner,
+                now=datetime.now(timezone.utc),
+                _run_id=run.id,
+            )
+            return result.to_dict()
+        except RefreshCancellationRequested:
+            db.rollback()
+            current = db.get(RefreshRun, run_id)
+            finalized = finalize_refresh_cancellation(
+                db,
+                run_id=run_id,
+                lease_owner=current.lease_owner or owner,
+                fencing_token=current.fencing_token,
+                now=datetime.now(timezone.utc),
+            )
+            return {"run_id": finalized.id, "status": finalized.status}
+        except SoftTimeLimitExceeded:
+            db.rollback()
+            retried = mark_refresh_retryable(
+                db, run_id=run_id, reason="WORKER_INTERRUPTED", now=datetime.now(timezone.utc),
+            )
+            return {"run_id": retried.id, "status": retried.status, "retry_count": retried.retry_count}
+        except (WorkerShutdown, KeyboardInterrupt, SystemExit):
+            db.rollback()
+            retried = mark_refresh_retryable(
+                db, run_id=run_id, reason="WORKER_INTERRUPTED", now=datetime.now(timezone.utc),
+            )
+            return {"run_id": retried.id, "status": retried.status, "retry_count": retried.retry_count}
+        except ConfigurationDriftError as exc:
+            # A stale run is failed without touching source cursor or lineage;
+            # the typed reason remains visible to the worker caller.
+            db.rollback()
+            current = db.get(RefreshRun, run_id)
+            current.status = "failed"
+            current.retry_reason = exc.reason_code
+            current.terminal_at = datetime.now(timezone.utc)
+            current.lease_owner = None
+            current.lease_expires_at = None
+            from app.models.v2.refresh import RefreshRunTransition
+
+            current_transition = RefreshRunTransition(
+                id=str(uuid.uuid4()), run_id=current.id, from_status="running",
+                to_status="failed", reason=exc.reason_code, actor=owner,
+            )
+            db.add(current_transition)
+            db.commit()
+            return {"run_id": current.id, "status": current.status, "error_code": exc.reason_code}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="refresh.poll")
+def refresh_poll_task(run_id: str) -> dict:
+    """Run-ID-only polling worker entry."""
+    return _refresh_poll(run_id)
+
+
 @celery_app.task(name="refresh.connection")
 def refresh_connection_task(run_id: str) -> dict:
-    """Run-ID-only connection refresh body (`refresh.poll` queue). Reloads
-    nothing but the run_id here — connector execution is a later task."""
-    logger.info("refresh.connection received run_id=%s (connector execution lands in a later task)", run_id)
-    return {"run_id": run_id, "status": "accepted"}
+    """Compatibility task name delegating to the sole polling worker."""
+    return refresh_poll_task.run(run_id)
 
 
 @celery_app.task(name="refresh.pipeline")
 def refresh_pipeline_task(run_id: str) -> dict:
-    """Run-ID-only pipeline refresh body (`refresh.poll` queue)."""
-    logger.info("refresh.pipeline received run_id=%s (connector execution lands in a later task)", run_id)
-    return {"run_id": run_id, "status": "accepted"}
+    """Compatibility task name delegating to the sole polling worker."""
+    return refresh_poll_task.run(run_id)
 
 
 # ── manual on-demand trigger (shared by the /connections/{id}/sync route and

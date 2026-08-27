@@ -1,4 +1,5 @@
 """SQLConnector 단위 테스트 — 실제 DB 없이 SQLAlchemy mock 사용"""
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -77,3 +78,73 @@ def test_sql_connector_list_resources_calls_inspect():
             tables = connector.list_resources()
             assert tables == ["users", "orders"]
             mock_inspector.get_table_names.assert_called_once()
+
+
+def test_sql_connector_delta_returns_page_with_tuple_overlap_predicate():
+    from app.schemas.refresh import SourceCursor
+    from app.services.connection.base import DeltaPage
+    from app.services.connection.sql_connector import SQLConnector
+
+    connector = SQLConnector({
+        "connection_string": "postgresql://test/test",
+        "source_id": "source-001",
+        "cursor_contract": "watermark_primary_key",
+        "watermark_column": "updated_at",
+        "primary_key_column": "id",
+    })
+    mock_conn = MagicMock()
+    mock_result = MagicMock()
+    mock_result.keys.return_value = ["id", "updated_at", "value"]
+    mock_result.__iter__.return_value = iter([("101", "2026-08-26T01:00:00Z", "new")])
+    mock_conn.execute.return_value = mock_result
+    connector._engine = MagicMock()
+    connector._engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    connector._engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+    page = connector.pull_delta(
+        "orders",
+        cursor=SourceCursor(
+            source_id="source-001", resource="orders", contract="watermark_primary_key",
+            watermark="2026-08-26T01:00:00Z", primary_key="100", opaque_value=None, observed_at=None,
+        ),
+        overlap_window=timedelta(minutes=5),
+    )
+
+    assert isinstance(page, DeltaPage)
+    assert page.candidate_cursor.primary_key == "101"
+    statement = str(mock_conn.execute.call_args.args[0])
+    assert "updated_at >= :overlap_start" in statement
+    assert "ORDER BY updated_at, id" in statement
+    assert "overlap_start" in mock_conn.execute.call_args.args[1]
+
+
+def test_base_connector_fallback_is_an_explicit_full_batch():
+    from app.services.connection.base import ConnectorBase, DeltaPage
+
+    class FullBatchConnector(ConnectorBase):
+        def __init__(self):
+            self._config = {
+                "source_id": "source-001",
+                "cursor_contract": "watermark_primary_key",
+            }
+
+        def test_connection(self):
+            return True
+
+        def list_resources(self):
+            return ["orders"]
+
+        def pull_sample(self, resource, limit=100):
+            return []
+
+        def pull_full(self, resource):
+            return [{"id": "100", "updated_at": "2026-08-26T01:00:00Z"}]
+
+    page = FullBatchConnector().pull_delta(
+        "orders", cursor=None, overlap_window=timedelta(minutes=1),
+    )
+
+    assert isinstance(page, DeltaPage)
+    assert page.cursor_outcome == "unchanged"
+    assert len(page.envelopes) == 1
+    assert page.candidate_cursor.watermark is None

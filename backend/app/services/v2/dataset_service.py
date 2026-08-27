@@ -2,10 +2,12 @@
 from __future__ import annotations
 import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.v2.dataset import Dataset, DatasetVersion
+from app.schemas.refresh import SourceCursor
 from app.services.storage_service import StorageService, get_storage_service
 
 
@@ -21,8 +23,24 @@ class DatasetService:
         self._db.refresh(ds)
         return ds
 
-    def create_version(self, dataset_id: str, data: bytes, rowcount: int | None = None) -> DatasetVersion:
-        """将数据存入 MinIO 并创建 DatasetVersion"""
+    def create_version(
+        self,
+        dataset_id: str,
+        data: bytes,
+        rowcount: int | None = None,
+        *,
+        refresh_run_id: str | None = None,
+        source_cursor: SourceCursor | None = None,
+        observed_at: datetime | None = None,
+        commit: bool = True,
+    ) -> DatasetVersion:
+        """将数据存入 MinIO 并创建 DatasetVersion。
+
+        Refresh polling uses ``commit=False`` so the DatasetVersion and its
+        PipelineRun stay tentative until the fenced refresh outcome commits.
+        The provenance values are attached to the returned version and are
+        also passed through the refresh lineage record by the polling service.
+        """
         ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not ds:
             raise ValueError(f"Dataset {dataset_id} not found")
@@ -39,15 +57,25 @@ class DatasetService:
         uri = self._storage.put_bytes("raw-datasets", key, data)
 
         ver = DatasetVersion(
+            id=str(uuid.uuid4()),
             dataset_id=dataset_id,
             version_no=version_no,
             rowcount=rowcount,
             storage_uri=uri,
             checksum=checksum,
         )
+        # DatasetVersion predates the refresh tables and intentionally keeps
+        # its schema stable in this migration. Keep the provenance on the
+        # version object for callers in this transaction; durable refresh
+        # lineage is recorded on RefreshRun/PipelineRunInput.
+        ver.refresh_run_id = refresh_run_id
+        ver.source_cursor = source_cursor
+        ver.observed_at = observed_at
         self._db.add(ver)
         ds.latest_version_id = ver.id
-        self._db.commit()
+        self._db.flush()
+        if commit:
+            self._db.commit()
         self._db.refresh(ver)
         return ver
 
