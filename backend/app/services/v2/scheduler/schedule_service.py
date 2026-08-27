@@ -234,6 +234,23 @@ def _lock_schedule(db: Session, schedule_id: str) -> RefreshSchedule | None:
     ).scalar_one_or_none()
 
 
+def _lock_schedule_occurrence(db: Session, *, source_id: str, resource: str,
+                              idempotency_key: str) -> RefreshRun | None:
+    """Return the one durable run representing this schedule occurrence.
+
+    A saturated or publish-failed occurrence keeps the schedule due, so every
+    later beat invocation must find and re-drive this row instead of creating
+    another run for the same occurrence.
+    """
+    return db.execute(
+        select(RefreshRun).where(
+            RefreshRun.source_id == source_id,
+            RefreshRun.resource == resource,
+            RefreshRun.idempotency_key == idempotency_key,
+        ).with_for_update()
+    ).scalars().first()
+
+
 def _as_aware_utc(value: datetime | None) -> datetime | None:
     """SQLite's DateTime type round-trips a committed value as naive (it has
     no native tz-aware storage), even though this module always writes
@@ -272,41 +289,76 @@ def _dispatch_one_schedule(
     source_id = schedule.target_id
     resource = DEFAULT_RESOURCE
     task_name = _TASK_NAME_BY_STORED_TARGET_TYPE[schedule.target_type]
-    config_version, cursor_contract = _current_source_revision(db, source_id=source_id, resource=resource)
+    idempotency_key = f"schedule:{schedule.id}:{due_at.isoformat()}"
+    run = _lock_schedule_occurrence(
+        db, source_id=source_id, resource=resource, idempotency_key=idempotency_key,
+    )
+    if run is None:
+        config_version, cursor_contract = _current_source_revision(db, source_id=source_id, resource=resource)
+    else:
+        config_version, cursor_contract = run.config_version, run.cursor_contract
 
-    existing_active = db.execute(
-        select(func.count()).select_from(RefreshRun).where(
+    active_query = select(func.count()).select_from(RefreshRun).where(
             RefreshRun.source_id == source_id,
             RefreshRun.resource == resource,
             RefreshRun.status.in_(("queued", "running")),
         )
-    ).scalar_one()
+    if run is not None:
+        active_query = active_query.where(RefreshRun.id != run.id)
+    existing_active = db.execute(active_query).scalar_one()
     admitted = existing_active < schedule.max_pending_runs
 
-    run = RefreshRun(
-        id=_new_id(),
-        source_id=source_id,
-        resource=resource,
-        policy=RefreshPolicy.BATCH.value,
-        trigger="scheduled",
-        config_version=config_version,
-        cursor_contract=cursor_contract,
-        status="queued",
-        dispatch_state="dispatched" if admitted else "backpressured",
-        dispatch_reason=None if admitted else _BACKPRESSURE_REASON,
-        dispatch_queue=QUEUE_REFRESH_POLL,
-        idempotency_key=f"schedule:{schedule.id}:{due_at.isoformat()}",
-        # Informational provenance only — which beat instance dispatched this
-        # run — not an active connector lease (lease_expires_at stays unset;
-        # the source-level lease in RefreshSourceState is untouched here).
-        lease_owner=lease_owner,
-        fencing_token=0,
-        retry_count=0,
-    )
-    db.add(run)
+    if run is None:
+        run = RefreshRun(
+            id=_new_id(),
+            source_id=source_id,
+            resource=resource,
+            policy=RefreshPolicy.BATCH.value,
+            trigger="scheduled",
+            config_version=config_version,
+            cursor_contract=cursor_contract,
+            status="queued",
+            dispatch_state="pending" if admitted else "backpressured",
+            dispatch_reason=None if admitted else _BACKPRESSURE_REASON,
+            dispatch_queue=QUEUE_REFRESH_POLL,
+            idempotency_key=idempotency_key,
+            # Informational provenance only — which beat instance dispatched
+            # this run — not an active connector lease (lease_expires_at stays
+            # unset; the source-level lease is untouched here).
+            lease_owner=lease_owner,
+            fencing_token=0,
+            retry_count=0,
+        )
+        db.add(run)
+    elif run.status not in ("queued", "running"):
+        # A terminal run proves this occurrence was already consumed. This
+        # handles a stale due row without publishing a second task.
+        schedule.next_due_at = _next_fire_utc(schedule.cron_expression, tz, due_at)
+        db.commit()
+        return None
+    elif run.dispatch_state == "dispatched":
+        # The publish completed but schedule advancement was not observed by
+        # this invocation; advance now without duplicating the broker send.
+        schedule.next_due_at = _next_fire_utc(schedule.cron_expression, tz, due_at)
+        db.commit()
+        return None
+    elif not admitted:
+        run.dispatch_state = "backpressured"
+        run.dispatch_reason = _BACKPRESSURE_REASON
+        schedule.last_dispatched_run_id = run.id
+        schedule.next_due_at = due_at
+        db.commit()
+        return None
+    else:
+        # A retained backpressured/publish-failed/pending row is now admitted;
+        # persist the claim before attempting broker publication.
+        run.dispatch_state = "pending"
+        run.dispatch_reason = None
 
     schedule.last_dispatched_run_id = run.id
-    schedule.next_due_at = _next_fire_utc(schedule.cron_expression, tz, due_at)
+    # Keep the occurrence due until publication succeeds. This is the durable
+    # retry cursor for both backpressure and broker failures.
+    schedule.next_due_at = due_at
 
     db.commit()
     db.refresh(run)
@@ -319,9 +371,14 @@ def _dispatch_one_schedule(
         send_refresh(message)
     except Exception:
         run.dispatch_state = "publish_failed"
+        run.dispatch_reason = "PUBLISH_FAILED"
         db.commit()
         return None
 
+    run.dispatch_state = "dispatched"
+    run.dispatch_reason = None
+    schedule.next_due_at = _next_fire_utc(schedule.cron_expression, tz, due_at)
+    db.commit()
     return run.id
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.v2.refresh import RefreshRun, RefreshSchedule
 from app.services.v2.scheduler.schedule_service import (
@@ -142,3 +142,76 @@ def test_saturated_source_is_queued_with_backpressure_and_never_pulled(db):
     assert sent == []
     assert latest_fixture_run(db, source_id="source-001").dispatch_state == "backpressured"
     assert latest_fixture_run(db, source_id="source-001").status == "queued"
+
+
+def test_saturated_beats_reuse_one_backpressured_run_until_capacity_recovers(db):
+    create_fixture_schedule(db, target_id="source-bounded", max_pending_runs=1)
+    blocker = create_queued_fixture_run(db, source_id="source-bounded")
+    sent = []
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-a",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == []
+    retained = latest_fixture_run(db, source_id="source-bounded")
+    assert retained.dispatch_state == "backpressured"
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-b",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == []
+    assert db.execute(
+        select(func.count()).select_from(RefreshRun).where(RefreshRun.source_id == "source-bounded")
+    ).scalar_one() == 2
+    assert latest_fixture_run(db, source_id="source-bounded").id == retained.id
+    assert sent == []
+
+    blocker.status = "succeeded"
+    db.commit()
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-c",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == [retained.id]
+    assert sent == [retained.id]
+    assert db.get(RefreshRun, retained.id).dispatch_state == "dispatched"
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-d",
+        send_refresh=lambda message: sent.append(message.run_id) or "broker-id",
+    ) == []
+    assert sent == [retained.id]
+    assert db.execute(
+        select(func.count()).select_from(RefreshRun).where(RefreshRun.source_id == "source-bounded")
+    ).scalar_one() == 2
+
+
+def test_publish_failed_occurrence_is_retried_without_duplicate(db):
+    create_fixture_schedule(db, target_id="source-publish-retry")
+    attempts = []
+
+    def fail_once(message):
+        attempts.append(message.run_id)
+        raise RuntimeError("broker unavailable")
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-a", send_refresh=fail_once,
+    ) == []
+    retained = latest_fixture_run(db, source_id="source-publish-retry")
+    assert retained.dispatch_state == "publish_failed"
+    assert attempts == [retained.id]
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-b",
+        send_refresh=lambda message: attempts.append(message.run_id) or "broker-id",
+    ) == [retained.id]
+    assert attempts == [retained.id, retained.id]
+    assert db.get(RefreshRun, retained.id).dispatch_state == "dispatched"
+
+    assert dispatch_due_schedules(
+        db, now=FIXED_NOW, lease_owner="beat-c",
+        send_refresh=lambda message: attempts.append(message.run_id) or "broker-id",
+    ) == []
+    assert attempts == [retained.id, retained.id]
+    assert db.execute(
+        select(func.count()).select_from(RefreshRun).where(RefreshRun.source_id == "source-publish-retry")
+    ).scalar_one() == 1
