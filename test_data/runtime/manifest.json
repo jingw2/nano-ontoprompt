@@ -943,7 +943,7 @@
         {
           "kind": "playwright",
           "path": "frontend/src/test/e2e/business-journeys.spec.ts",
-          "title": "credit business journey completes the governed browser loop"
+          "title": "credit journey completes the governed browser loop"
         }
       ],
       "user_id": "user-acme-operator-02"
@@ -970,7 +970,7 @@
         {
           "kind": "playwright",
           "path": "frontend/src/test/e2e/business-journeys.spec.ts",
-          "title": "finance business journey completes the governed browser loop"
+          "title": "finance journey completes the governed browser loop"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -997,7 +997,7 @@
         {
           "kind": "playwright",
           "path": "frontend/src/test/e2e/business-journeys.spec.ts",
-          "title": "supply chain business journey completes the governed browser loop"
+          "title": "supply chain journey completes the governed browser loop"
         }
       ],
       "user_id": "user-acme-operator-00"

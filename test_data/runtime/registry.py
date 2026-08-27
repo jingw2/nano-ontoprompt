@@ -31,7 +31,7 @@ RISK_CLASSES = {"automatic", "human_approved", "rejected"}
 REQUIRED_TRANSPORTS = {"mcp", "reference-agent", "rest", "sdk"}
 REQUIRED_DIALECTS = {"mysql", "postgresql"}
 JOURNEY_MODEL_ID = "deepseek-v4-flash-vision-exp"
-JOURNEY_TITLE_SUBSTRING = "business journey completes the governed browser loop"
+JOURNEY_TITLE_SUBSTRING = "journey completes the governed browser loop"
 
 _PYTEST_NODE_RE = re.compile(r"^[\w./-]+\.py::[\w:\[\]\-\.]+$")
 
@@ -171,9 +171,9 @@ _DATABASE_TARGETS = {
 # --- Business journey cases (real_model_browser) ------------------------------
 _JOURNEY_SPEC = "frontend/src/test/e2e/business-journeys.spec.ts"
 _JOURNEY_TARGETS = {
-    "journey-supply-chain": _playwright(_JOURNEY_SPEC, "supply chain business journey completes the governed browser loop"),
-    "journey-finance": _playwright(_JOURNEY_SPEC, "finance business journey completes the governed browser loop"),
-    "journey-credit": _playwright(_JOURNEY_SPEC, "credit business journey completes the governed browser loop"),
+    "journey-supply-chain": _playwright(_JOURNEY_SPEC, "supply chain journey completes the governed browser loop"),
+    "journey-finance": _playwright(_JOURNEY_SPEC, "finance journey completes the governed browser loop"),
+    "journey-credit": _playwright(_JOURNEY_SPEC, "credit journey completes the governed browser loop"),
 }
 
 CASE_REGISTRY: dict[str, TestTarget] = {
