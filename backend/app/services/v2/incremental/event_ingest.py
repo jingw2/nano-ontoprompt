@@ -464,7 +464,7 @@ class EventIngestService:
                     # Flush the persisted attempt before the terminal helper
                     # commits the run/inbox/DLQ state together.
                     db.flush()
-                    self._dead_letter_event(db, run_id=current.id, reason="PUBLISH_FAILED", now=now)
+                    self._dead_letter_event(db, run_id=current.id, reason="PUBLISH_EXHAUSTED", now=now)
                     durable = db.get(RefreshInboxEvent, current_row.id)
                     return _receipt(
                         db, durable, status="dead_lettered", reason_code="PUBLISH_EXHAUSTED",

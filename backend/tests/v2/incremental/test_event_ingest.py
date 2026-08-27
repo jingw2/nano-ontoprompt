@@ -356,9 +356,11 @@ def test_broker_publish_failures_exhaust_delivery_budget_into_replayable_dlq(db)
     assert second.dead_letter_id is not None
     assert db.query(RefreshInboxEvent).one().state == "dead_lettered"
     assert db.query(RefreshInboxEvent).one().delivery_attempts == 2
-    assert db.get(RefreshRun, receipt.run_id).status == "dead_lettered"
+    exhausted_run = db.get(RefreshRun, receipt.run_id)
+    assert exhausted_run.status == "dead_lettered"
+    assert exhausted_run.retry_reason == "PUBLISH_EXHAUSTED"
     dead_letter = db.query(RefreshDeadLetter).one()
-    assert dead_letter.reason == "PUBLISH_FAILED"
+    assert dead_letter.reason == "PUBLISH_EXHAUSTED"
     assert dead_letter.delivery_attempts == 2
 
     replay = service.replay_dead_letter(
