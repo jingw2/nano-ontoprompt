@@ -94,12 +94,15 @@ docker compose -f docker-compose.v2.yml up --build
 ```
 
 将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。
+专门的 `migration` 服务会先对空数据库运行 `run_migrations.py upgrade head`;
+后端与 worker 服务会等待该服务成功完成(Compose 的
+`service_completed_successfully`)后才会启动。
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
 
 ### 方式二 — 手动启动(最小化,无需外部服务)
 
-**前置要求:** Python 3.11+、Node.js 18+
+**前置要求:** Python 3.11 或 3.12、Node 22.14.0、npm 11.2.0
 
 ```bash
 # 后端

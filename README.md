@@ -99,12 +99,15 @@ docker compose -f docker-compose.v2.yml up --build
 ```
 
 This starts PostgreSQL, Redis, Neo4j, MinIO, ChromaDB, backend and frontend.
+A dedicated `migration` service runs `run_migrations.py upgrade head` against
+an empty database first; backend/worker services wait for it to complete
+successfully (Compose `service_completed_successfully`) before starting.
 
 Open [http://localhost:5173](http://localhost:5173). Default credentials: `admin / admin123`.
 
 ### Option 2 — Manual setup (minimal, no external services)
 
-**Prerequisites:** Python 3.11+, Node.js 18+
+**Prerequisites:** Python 3.11 or 3.12, Node 22.14.0, npm 11.2.0
 
 ```bash
 # Backend

@@ -7,7 +7,9 @@ services:
       POSTGRES_USER: ontexus
       POSTGRES_PASSWORD: ontexus
     ports: ["5432:5432"]
-    volumes: [pg_data:/var/lib/postgresql/data]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./backend/scripts/postgres-initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ontexus"]
       interval: 10s

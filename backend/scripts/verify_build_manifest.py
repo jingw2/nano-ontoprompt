@@ -34,9 +34,19 @@ REQUIRED_FIELDS = ("schema_contract_version", "manifest_version", "alembic_head"
 
 def resolve_alembic_head(alembic_dir: pathlib.Path) -> str:
     """Read the single current Alembic head from a script directory. Fails
-    closed if there are zero or multiple heads (an unresolved branch)."""
+    closed if there are zero or multiple heads (an unresolved branch).
+
+    Loading every revision file (to read revision/down_revision) executes
+    each one as a module — some import from the sibling `alembic_helpers`
+    package, resolvable only when the backend root (alembic_dir's parent) is
+    on sys.path. `run_migrations.py` gets this for free by exec'ing
+    `python -m alembic` from that directory; this direct ScriptDirectory
+    call does not, so it's added explicitly."""
     from alembic.script import ScriptDirectory
 
+    backend_root = str(alembic_dir.resolve().parent)
+    if backend_root not in sys.path:
+        sys.path.insert(0, backend_root)
     heads = ScriptDirectory(str(alembic_dir)).get_heads()
     if len(heads) != 1:
         raise SystemExit(

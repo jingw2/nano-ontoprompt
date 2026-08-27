@@ -123,6 +123,25 @@ def test_manifest_pins_exact_alembic_head(tmp_path):
         assert role in data["images"], f"missing image role {role}"
 
 
+def test_resolve_alembic_head_works_as_a_bare_script_invocation(tmp_path):
+    """Regression: resolve_alembic_head() loads every revision file as a
+    module — 0003_publication_governance.py imports the sibling
+    alembic_helpers package, resolvable only when the backend root is on
+    sys.path. `python -m alembic` gets that from CWD for free;
+    `python scripts/verify_build_manifest.py` (a bare script invocation,
+    exactly how both Compose migration services call it) does not, and
+    raised ModuleNotFoundError: No module named 'alembic_helpers' in a real
+    `docker compose up` run before this fix."""
+    manifest = tmp_path / "m.json"
+    signed = tmp_path / "m.signed.json"
+    assert _run("generate_build_manifest.py", "--root", str(REPO_ROOT), "--output", str(manifest)).returncode == 0
+    assert _run("sign_build_manifest.py", "--input", str(manifest), "--output", str(signed)).returncode == 0
+    r = _run(
+        "verify_build_manifest.py", "--manifest", str(signed), "--alembic-dir", str(BACKEND_DIR / "alembic"),
+    )
+    assert r.returncode == 0, r.stderr
+
+
 def test_compose_resolves_alembic_head_dynamically():
     """I-9: Compose services must never pin the Alembic head as a static
     string — a new migration would silently leave it stale (as

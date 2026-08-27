@@ -15,6 +15,8 @@ services:
       POSTGRES_DB: ontexus
       POSTGRES_USER: ontexus
       POSTGRES_PASSWORD: ontexus
+    volumes:
+      - ./backend/scripts/postgres-initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ontexus -d ontexus"]
       interval: 5s
