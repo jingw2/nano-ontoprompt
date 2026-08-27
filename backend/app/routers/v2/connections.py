@@ -201,23 +201,29 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db), _=Depen
 
 @router.post("/{connection_id}/schedule")
 def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db), _=Depends(require_editor)):
-    """为连接设置 Cron 调度表达式 —— 持久化为 RefreshSchedule 行，由 Celery
-    beat 的 refresh.dispatch_due_schedules 实际派发（见 Task 7）。"""
+    """Compatibility delegate for the typed refresh schedule operation."""
+    from app.services.v2.incremental.operations import RefreshError, update_refresh_schedule
     from app.services.v2.scheduler.cron_service import CronService
-    svc = CronService()
-    if not svc.validate_cron(cron_expr):
+
+    if not CronService().validate_cron(cron_expr):
         raise HTTPException(400, f"无效的 cron 表达式: {cron_expr}")
-
-    conn = db.query(Connection).filter(Connection.id == connection_id).first()
-    if not conn:
-        raise HTTPException(404, "Connection not found")
-
-    result = svc.schedule_connection_sync(connection_id, cron_expr, db=db)
-    config = conn.config or {}
-    config["schedule_cron"] = cron_expr
-    conn.config = config
-    db.commit()
-    return result
+    try:
+        schedule = update_refresh_schedule(
+            db, source_id=connection_id, cron_expr=cron_expr,
+            timezone_name="UTC", business_calendar=[], sla_seconds=0,
+            backfill_window_seconds=0, max_pending_runs=1, enabled=True,
+        )
+    except RefreshError as exc:
+        if exc.reason_code == "SOURCE_NOT_FOUND":
+            raise HTTPException(404, "Connection not found") from exc
+        raise HTTPException(422, detail=exc.reason_code) from exc
+    return {
+        "connection_id": connection_id,
+        "cron": cron_expr,
+        "celery_crontab": CronService().parse_cron(cron_expr),
+        "status": "scheduled",
+        "next_due_at": schedule.next_due_at.isoformat() if schedule.next_due_at else None,
+    }
 
 
 @router.post("/{connection_id}/sync")

@@ -257,6 +257,32 @@ def refresh_event_task(run_id: str) -> dict:
     return _refresh_event(run_id)
 
 
+@celery_app.task(name="refresh.replay")
+def refresh_replay_task(run_id: str) -> dict:
+    """Run-ID-only replay worker entry.
+
+    The retained dead-letter/inbox record (when present) is reloaded by the
+    event worker; a failed polling run is reloaded by the polling worker.
+    Neither path accepts operator-supplied payload, cursor, credential, or
+    connector configuration.
+    """
+    import app.models  # noqa: F401
+    from app.database import SessionLocal
+    from app.models.v2.refresh import RefreshInboxEvent
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        inbox = db.execute(
+            select(RefreshInboxEvent).where(RefreshInboxEvent.run_id == run_id)
+        ).scalar_one_or_none()
+    finally:
+        db.close()
+    if inbox is not None:
+        return _refresh_event(run_id)
+    return _refresh_poll(run_id)
+
+
 @celery_app.task(name="refresh.connection")
 def refresh_connection_task(run_id: str) -> dict:
     """Compatibility task name delegating to the sole polling worker."""

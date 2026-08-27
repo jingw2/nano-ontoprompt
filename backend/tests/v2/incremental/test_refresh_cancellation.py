@@ -175,3 +175,19 @@ def test_event_outbox_envelope_uses_the_same_cancellation_contract(db):
     assert result.status == "succeeded"
     assert cancelled.already_terminal is True
     assert cancelled.status == "succeeded"
+
+
+def test_refresh_operations_cancel_adapter_preserves_operator_identity(db):
+    _polling_source(db, connector=_SourceConnector(page=None))
+    run = _claim(db, owner="worker-operations")
+
+    from app.services.v2.incremental.operations import cancel_refresh_run
+
+    requested = cancel_refresh_run(
+        db, run_id=run.id, operator_id="operator-001",
+        reason="operator stop", now=NOW,
+    )
+
+    assert requested.status in {"cancel_requested", "cancelled"}
+    assert requested.cancel_requested_by == "operator-001"
+    assert requested.cancel_reason == "operator stop"

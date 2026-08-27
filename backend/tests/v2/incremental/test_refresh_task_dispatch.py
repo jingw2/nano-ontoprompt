@@ -79,3 +79,10 @@ def test_saturated_refresh_queue_does_not_block_agent_interactive_queue(fake_bro
     assert fake_broker.depth("refresh.poll") > 0
     accepted = fake_broker.send("agent.interactive_probe", ["probe-001"], "agent.interactive")
     assert accepted.queue == "agent.interactive"
+
+
+def test_refresh_replay_task_is_registered_as_a_run_id_only_worker():
+    from app.tasks.v2.refresh_tasks import refresh_replay_task
+
+    assert refresh_replay_task.name == "refresh.replay"
+    assert refresh_replay_task.run.__code__.co_argcount >= 1

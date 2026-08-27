@@ -1,0 +1,1 @@
+{"version":1,"event_id":"checkpoint-event-001","source_id":"source-checkpoint-event","resource":"checkpoint_events","operation":"upsert","primary_key":"event-row-001","payload":{"id":"event-row-001","state":"ready"},"source_cursor":"checkpoint-cursor-001","schema_hash":"checkpoint-schema-v1","occurred_at":"2026-08-28T00:00:00+00:00"}

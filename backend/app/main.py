@@ -62,6 +62,7 @@ from app.routers.v2 import curated as curated_v2
 from app.routers.v2 import mappings as mappings_v2
 from app.routers.v2 import incremental as incremental_v2
 from app.routers.v2 import refresh_events as refresh_events_v2
+from app.routers.v2 import refresh as refresh_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
 
 def _seed_db():
@@ -208,6 +209,7 @@ app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-sear
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"])
 app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"])
 app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"])
+app.include_router(refresh_v2.router, prefix="/api/v2/refresh", tags=["v2-refresh"])
 app.include_router(refresh_events_v2.router, prefix="/api/v2/refresh", tags=["v2-refresh-events"])
 app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"])
 app.include_router(retention.router, prefix="/api/v2", tags=["v2-retention"])

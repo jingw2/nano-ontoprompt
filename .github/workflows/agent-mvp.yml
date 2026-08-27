@@ -65,6 +65,17 @@ jobs:
         with:
           name: m1-gate-compose-logs
           path: /tmp/m1-gate-compose.log
+      - name: Refresh checkpoint — live batch and signed webhook DatasetVersions
+        run: bash scripts/verify_refresh_checkpoint.sh
+      - name: Dump refresh checkpoint compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.v2.yml logs --no-color > /tmp/refresh-checkpoint-compose.log 2>&1 || true
+      - name: Upload refresh checkpoint compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refresh-checkpoint-compose-logs
+          path: /tmp/refresh-checkpoint-compose.log
 
   backend-matrix:
     strategy:
