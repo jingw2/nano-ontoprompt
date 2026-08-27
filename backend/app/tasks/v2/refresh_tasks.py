@@ -317,15 +317,35 @@ def refresh_pipeline_task(run_id: str) -> dict:
 # the sync_connection/sync_all_connections compatibility wrappers) ─────────
 
 def create_manual_connection_run(db, connection_id: str):
-    """Claim a durable, immediately-leased `RefreshRun` for a manual
-    on-demand connection sync (Task 6 contract, BATCH policy) — distinct
-    from a T+1-scheduled run, which starts `queued` with no lease until a
-    worker claims it."""
-    from app.schemas.refresh import RefreshPolicy
+    """Claim a durable manual run using the persisted connection policy.
+
+    This compatibility helper still produces a leased run for the legacy
+    `refresh.connection` task, but it rejects event-driven sources before any
+    claim so they cannot be forced onto `refresh.poll`.
+    """
+    from app.models.v2.connection import Connection
+    from app.schemas.refresh import RefreshError, RefreshPolicy
+    from app.services.v2.incremental.operations import _policy_for_source, _source_state
     from app.services.v2.incremental.contract import claim_refresh_run
 
+    connection = db.get(Connection, connection_id)
+    if connection is None:
+        # Preserve the historical internal helper behavior for callers that
+        # already provision source state without a Connection row. The
+        # authenticated route verifies the connection first; persisted
+        # policies are enforced whenever that source record exists.
+        policy = RefreshPolicy.BATCH
+    else:
+        configured_state = _source_state(db, source_id=connection_id)
+        policy = _policy_for_source(connection, configured_state)
+        if policy is RefreshPolicy.EVENT_DRIVEN:
+            raise RefreshError(
+                "EVENT_TRIGGER_REQUIRES_SIGNATURE",
+                "event-driven refreshes require the signed webhook route",
+            )
+
     run = claim_refresh_run(
-        db, source_id=connection_id, resource=DEFAULT_RESOURCE, policy=RefreshPolicy.BATCH,
+        db, source_id=connection_id, resource=DEFAULT_RESOURCE, policy=policy,
         idempotency_key=f"manual:{uuid.uuid4()}", lease_owner="manual-sync",
         now=datetime.now(timezone.utc),
     )

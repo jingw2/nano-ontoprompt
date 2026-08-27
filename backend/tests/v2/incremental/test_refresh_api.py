@@ -360,6 +360,76 @@ def test_refresh_trigger_rejects_mode_incompatible_with_persisted_event_policy(
     assert db.query(RefreshRun).count() == 0
 
 
+def test_legacy_connection_sync_rejects_persisted_event_policy(
+    client, db, refresh_source, operator_headers, monkeypatch,
+):
+    from app.main import app
+    from app.routers.v2 import connections as connections_router
+
+    source = db.get(Connection, "source-001")
+    state = db.get(RefreshSourceState, "state-001")
+    source.refresh_policy = "event_driven"
+    state.configuration = {"refresh_policy": "event_driven"}
+    db.commit()
+
+    def override_connections_db():
+        yield db
+
+    app.dependency_overrides[connections_router.get_db] = override_connections_db
+    dispatched = []
+    monkeypatch.setattr(
+        "app.tasks.v2.refresh_tasks.refresh_connection_task.delay",
+        lambda run_id: dispatched.append(run_id),
+    )
+    try:
+        response = client.post(
+            "/api/v2/connections/source-001/sync", headers=operator_headers,
+        )
+    finally:
+        app.dependency_overrides.pop(connections_router.get_db, None)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "EVENT_TRIGGER_REQUIRES_SIGNATURE"
+    assert dispatched == []
+    assert db.query(RefreshRun).count() == 0
+
+
+def test_legacy_connection_sync_keeps_valid_batch_compatibility(
+    client, db, refresh_source, operator_headers, monkeypatch,
+):
+    from app.main import app
+    from app.routers.v2 import connections as connections_router
+
+    source = db.get(Connection, "source-001")
+    state = db.get(RefreshSourceState, "state-001")
+    source.refresh_policy = "batch"
+    state.configuration = {"refresh_policy": "batch"}
+    db.commit()
+
+    def override_connections_db():
+        yield db
+
+    dispatched = []
+    app.dependency_overrides[connections_router.get_db] = override_connections_db
+    monkeypatch.setattr(
+        "app.tasks.v2.refresh_tasks.refresh_connection_task.delay",
+        lambda run_id: dispatched.append(run_id),
+    )
+    try:
+        response = client.post(
+            "/api/v2/connections/source-001/sync", headers=operator_headers,
+        )
+    finally:
+        app.dependency_overrides.pop(connections_router.get_db, None)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "sync_triggered"
+    assert dispatched == [response.json()["run_id"]]
+    persisted = db.get(RefreshRun, response.json()["run_id"])
+    assert persisted.policy == "batch"
+    assert persisted.dispatch_queue == "refresh.poll"
+
+
 def test_saturated_refresh_queue_does_not_block_status_or_agent_dispatch(
     client, db, refresh_source, operator_headers, monkeypatch,
 ):

@@ -228,17 +228,25 @@ def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_d
 
 @router.post("/{connection_id}/sync")
 def trigger_sync(connection_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
-    """手动触发数据同步 —— 通过持久化刷新契约 (Task 6) 声明一个立即执行的
-    RefreshRun，再派发其 run_id 至 refresh.connection (refresh.poll 队列)。"""
+    """手动触发数据同步 through the persisted refresh policy.
+
+    The compatibility response/task name is retained for valid batch and
+    micro-batch connections, but event-driven sources must use the signed
+    webhook route and can never be sent to the polling queue.
+    """
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
         raise HTTPException(404, "Connection not found")
 
+    from app.services.v2.incremental.operations import RefreshError
+    from app.tasks.v2.refresh_tasks import create_manual_connection_run, refresh_connection_task
+    try:
+        run = create_manual_connection_run(db, connection_id)
+    except RefreshError as exc:
+        raise HTTPException(status_code=422, detail=exc.reason_code) from exc
+
     conn.status = "active"
     db.commit()
-
-    from app.tasks.v2.refresh_tasks import create_manual_connection_run, refresh_connection_task
-    run = create_manual_connection_run(db, connection_id)
 
     try:
         refresh_connection_task.delay(run.id)
