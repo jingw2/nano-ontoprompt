@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Mapping, Sequence
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.v2.refresh import (
@@ -78,17 +78,25 @@ def _lock_or_create_source_state(
     if state is not None:
         return state
     # First claim for a brand-new (source_id, resource): FOR UPDATE cannot
-    # lock a row that does not exist yet, so use an upsert that tolerates a
-    # concurrent first-claim race instead of a plain INSERT.
-    stmt = pg_insert(RefreshSourceState.__table__).values(
-        id=_new_id(), source_id=source_id, resource=resource,
-        cursor_contract=default_cursor_contract, config_version=1, fencing_token=0,
-        created_at=now, updated_at=now,
-    ).on_conflict_do_nothing(index_elements=["source_id", "resource"])
-    db.execute(stmt)
-    db.flush()
+    # lock a row that does not exist yet. Race a plain (dialect-portable)
+    # insert inside a SAVEPOINT; a concurrent first claim on another
+    # connection may win first and violate the (source_id, resource) unique
+    # constraint — recover by rolling back just the failed insert and
+    # re-locking the row the winner committed, instead of relying on a
+    # Postgres-only ON CONFLICT upsert.
+    savepoint = db.begin_nested()
+    try:
+        db.add(RefreshSourceState(
+            id=_new_id(), source_id=source_id, resource=resource,
+            cursor_contract=default_cursor_contract, config_version=1, fencing_token=0,
+            created_at=now, updated_at=now,
+        ))
+        db.flush()
+        savepoint.commit()
+    except IntegrityError:
+        savepoint.rollback()
     state = _lock_source_state(db, source_id=source_id, resource=resource)
-    if state is None:  # pragma: no cover - defensive; upsert always leaves a row behind
+    if state is None:  # pragma: no cover - defensive; the losing branch above always leaves a winner's row behind
         raise RefreshError("SOURCE_STATE_MISSING", "failed to provision RefreshSourceState")
     return state
 

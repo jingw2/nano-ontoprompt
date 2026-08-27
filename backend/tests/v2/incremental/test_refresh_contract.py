@@ -111,23 +111,34 @@ def concurrent_refresh_db():
     if not TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL required")
     schema = "refresh_" + uuid.uuid4().hex
+
+    # Every engine here is short-lived and explicitly disposed in a
+    # try/finally — including the admin engine's own setup step — so a
+    # failure partway through setup (e.g. schema creation) can never leak a
+    # pooled connection into the rest of the suite.
     admin_engine = create_engine(TEST_DATABASE_URL)
-    with admin_engine.begin() as conn:
-        conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-    admin_engine.dispose()
+    try:
+        with admin_engine.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    finally:
+        admin_engine.dispose()
 
     _migrate(schema)
 
     engine = create_engine(_scoped_url(schema))
     wrapper = ConcurrentRefreshDB(engine, schema)
-    yield wrapper
-    wrapper.session.close()
-    engine.dispose()
+    try:
+        yield wrapper
+    finally:
+        wrapper.session.close()
+        engine.dispose()
 
-    cleanup_engine = create_engine(TEST_DATABASE_URL)
-    with cleanup_engine.begin() as conn:
-        conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-    cleanup_engine.dispose()
+        cleanup_engine = create_engine(TEST_DATABASE_URL)
+        try:
+            with cleanup_engine.begin() as conn:
+                conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        finally:
+            cleanup_engine.dispose()
 
 
 # ── fixture helpers ─────────────────────────────────────────────────────
