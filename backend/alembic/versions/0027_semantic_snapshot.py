@@ -208,6 +208,23 @@ def _create_sqlite_guards() -> None:
     )
 
 
+def _remediate_ungoverned_successful_runs() -> None:
+    """Keep legacy success rows from violating the governed completion check."""
+    op.execute(
+        """
+        UPDATE v2_pipeline_runs
+           SET status = 'failed',
+               error_log = CASE
+                 WHEN error_log IS NULL OR error_log = ''
+                 THEN 'MIGRATION_REMEDIATED_UNGOVERNED_SUCCESS'
+                 ELSE error_log
+               END
+         WHERE status = 'success'
+           AND (finished_at IS NULL OR dataset_version_id IS NULL)
+        """
+    )
+
+
 def upgrade() -> None:
     # Existing releases were immutable before status existed. Temporarily
     # remove only that trigger while backfilling the new status column; the
@@ -232,24 +249,47 @@ def upgrade() -> None:
            END
         """
     )
-    op.alter_column(
-        "ontology_releases", "status", nullable=False,
-        server_default=sa.text("'published'"), existing_type=sa.String(20),
-    )
-    op.create_check_constraint(
-        "ck_ontology_releases_status", "ontology_releases",
-        "status IN ('draft', 'published', 'revoked')",
-    )
+    if _dialect_name() == "sqlite":
+        with op.batch_alter_table("ontology_releases", recreate="always") as batch_op:
+            batch_op.alter_column(
+                "status", nullable=False,
+                server_default=sa.text("'published'"), existing_type=sa.String(20),
+            )
+            batch_op.create_check_constraint(
+                "ck_ontology_releases_status",
+                "status IN ('draft', 'published', 'revoked')",
+            )
+    else:
+        op.alter_column(
+            "ontology_releases", "status", nullable=False,
+            server_default=sa.text("'published'"), existing_type=sa.String(20),
+        )
+        op.create_check_constraint(
+            "ck_ontology_releases_status", "ontology_releases",
+            "status IN ('draft', 'published', 'revoked')",
+        )
     _restore_release_immutability_guard()
 
-    op.create_check_constraint(
-        "ck_v2_pipeline_runs_status", "v2_pipeline_runs",
-        "status IN ('pending', 'running', 'success', 'failed', 'cancelled')",
-    )
-    op.create_check_constraint(
-        "ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs",
-        "status <> 'success' OR (finished_at IS NOT NULL AND dataset_version_id IS NOT NULL)",
-    )
+    _remediate_ungoverned_successful_runs()
+    if _dialect_name() == "sqlite":
+        with op.batch_alter_table("v2_pipeline_runs", recreate="always") as batch_op:
+            batch_op.create_check_constraint(
+                "ck_v2_pipeline_runs_status",
+                "status IN ('pending', 'running', 'success', 'failed', 'cancelled')",
+            )
+            batch_op.create_check_constraint(
+                "ck_v2_pipeline_runs_success_completion",
+                "status <> 'success' OR (finished_at IS NOT NULL AND dataset_version_id IS NOT NULL)",
+            )
+    else:
+        op.create_check_constraint(
+            "ck_v2_pipeline_runs_status", "v2_pipeline_runs",
+            "status IN ('pending', 'running', 'success', 'failed', 'cancelled')",
+        )
+        op.create_check_constraint(
+            "ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs",
+            "status <> 'success' OR (finished_at IS NOT NULL AND dataset_version_id IS NOT NULL)",
+        )
 
     op.create_table(
         "semantic_snapshots",
@@ -363,9 +403,17 @@ def downgrade() -> None:
             type_="check",
         )
     op.drop_table("semantic_snapshots")
-    op.drop_constraint("ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs", type_="check")
-    op.drop_constraint("ck_v2_pipeline_runs_status", "v2_pipeline_runs", type_="check")
-    op.drop_constraint("ck_ontology_releases_status", "ontology_releases", type_="check")
-    _drop_release_immutability_guard()
-    op.drop_column("ontology_releases", "status")
+    if dialect == "sqlite":
+        with op.batch_alter_table("v2_pipeline_runs", recreate="always") as batch_op:
+            batch_op.drop_constraint("ck_v2_pipeline_runs_success_completion", type_="check")
+            batch_op.drop_constraint("ck_v2_pipeline_runs_status", type_="check")
+        with op.batch_alter_table("ontology_releases", recreate="always") as batch_op:
+            batch_op.drop_constraint("ck_ontology_releases_status", type_="check")
+            batch_op.drop_column("status")
+    else:
+        op.drop_constraint("ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs", type_="check")
+        op.drop_constraint("ck_v2_pipeline_runs_status", "v2_pipeline_runs", type_="check")
+        op.drop_constraint("ck_ontology_releases_status", "ontology_releases", type_="check")
+        _drop_release_immutability_guard()
+        op.drop_column("ontology_releases", "status")
     _restore_release_immutability_guard()

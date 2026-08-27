@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 
+import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput
@@ -274,6 +276,76 @@ def test_pipeline_run_rejects_successful_completion_without_output(db):
     db.rollback()
 
 
+def test_manual_pipeline_run_without_pins_persists_output_and_lineage(db, monkeypatch):
+    from app.services.v2 import dataset_service
+    from app.tasks.v2 import pipeline_run as pipeline_module
+
+    class MemoryStorage:
+        def put_bytes(self, bucket, key, data, content_type="application/octet-stream"):
+            return f"s3://{bucket}/{key}"
+
+    monkeypatch.setattr("app.database.SessionLocal", sessionmaker(bind=db.get_bind()))
+    monkeypatch.setattr(dataset_service, "get_storage_service", lambda: MemoryStorage())
+    monkeypatch.setattr(pipeline_module, "_load_source_rows", lambda *args, **kwargs: [{"id": "row-001"}])
+    monkeypatch.setattr(
+        pipeline_module,
+        "_execute_route",
+        lambda route, context, data: (data, context),
+    )
+
+    pipeline = Pipeline(
+        id="pipeline-manual-001",
+        name="manual pipeline",
+        source_dataset_id="dataset-source-001",
+        route="A",
+        spec={},
+        status="active",
+    )
+    source_dataset = Dataset(
+        id="dataset-source-001",
+        name="source",
+        kind="structured",
+    )
+    source_version = DatasetVersion(
+        id="dataset-source-version-001",
+        dataset_id=source_dataset.id,
+        version_no=1,
+        rowcount=1,
+    )
+    source_dataset.latest_version_id = source_version.id
+    run = PipelineRun(
+        id="pipeline-run-manual-001",
+        pipeline_id=pipeline.id,
+        status="pending",
+    )
+    db.add_all([pipeline, source_dataset, source_version, run])
+    db.commit()
+
+    pipeline_module.pipeline_run_task.run(pipeline.id, run.id)
+    db.expire_all()
+
+    persisted_run = db.get(PipelineRun, run.id)
+    assert persisted_run.status == "success"
+    assert persisted_run.finished_at is not None
+    assert persisted_run.dataset_version_id is not None
+    output_version = db.get(DatasetVersion, persisted_run.dataset_version_id)
+    assert output_version is not None
+    assert output_version.dataset_id != source_dataset.id
+    assert db.query(PipelineRunInput).filter(
+        PipelineRunInput.pipeline_run_id == run.id,
+        PipelineRunInput.dataset_version_id == source_version.id,
+    ).one()
+
+    db.add(_snapshot(snapshot_id="snap-manual-001"))
+    db.commit()
+    db.add(SemanticSnapshotInput(
+        snapshot_id="snap-manual-001",
+        dataset_version_id=source_version.id,
+        pipeline_run_id=run.id,
+    ))
+    db.commit()
+
+
 def _load_task_11_migration():
     migration_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0027_semantic_snapshot.py"
     spec = importlib.util.spec_from_file_location("task_11_snapshot_migration", migration_path)
@@ -359,6 +431,144 @@ def test_sqlite_migration_guards_reject_direct_snapshot_dml(db):
         ))
         db.commit()
     db.rollback()
+
+
+def _sqlite_pre_0027_engine():
+    engine = create_engine("sqlite:///:memory:")
+    metadata = sa.MetaData()
+    sa.Table("users", metadata, sa.Column("id", sa.String, primary_key=True))
+    sa.Table(
+        "ontology_projects", metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("latest_published_release_id", sa.String),
+    )
+    sa.Table(
+        "ontology_releases", metadata,
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("ontology_id", sa.String(36), nullable=False),
+        sa.Column("version_no", sa.Integer, nullable=False),
+        sa.Column("version", sa.String(100), nullable=False),
+        sa.Column("manifest_bytes", sa.LargeBinary, nullable=False),
+        sa.Column("manifest_projection", sa.JSON, nullable=False),
+        sa.Column("schema_hash", sa.LargeBinary, nullable=False),
+        sa.Column("created_by", sa.String, nullable=False),
+        sa.Column("created_at", sa.DateTime, nullable=False),
+    )
+    sa.Table("v2_pipelines", metadata, sa.Column("id", sa.String, primary_key=True))
+    sa.Table("v2_dataset_versions", metadata, sa.Column("id", sa.String, primary_key=True))
+    sa.Table(
+        "v2_pipeline_runs", metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("pipeline_id", sa.String, nullable=False),
+        sa.Column("status", sa.String(20), nullable=False),
+        sa.Column("started_at", sa.DateTime),
+        sa.Column("finished_at", sa.DateTime),
+        sa.Column("stats", sa.JSON),
+        sa.Column("error_log", sa.Text),
+        sa.Column("dataset_version_id", sa.String),
+        sa.Column("created_at", sa.DateTime, nullable=False),
+    )
+    sa.Table(
+        "pipeline_run_inputs", metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("pipeline_run_id", sa.String, nullable=False),
+        sa.Column("dataset_version_id", sa.String, nullable=False),
+        sa.Column("input_ordinal", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    return engine
+
+
+def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
+    engine = _sqlite_pre_0027_engine()
+    now = datetime.now(timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users (id) VALUES ('user-001')"
+        ))
+        connection.execute(text(
+            "INSERT INTO ontology_projects (id, latest_published_release_id) "
+            "VALUES ('ontology-001', 'release-001')"
+        ))
+        connection.execute(text(
+            "INSERT INTO ontology_releases "
+            "(id, ontology_id, version_no, version, manifest_bytes, manifest_projection, schema_hash, created_by, created_at) "
+            "VALUES ('release-001', 'ontology-001', 1, 'v1', :manifest, '{}', :schema_hash, 'user-001', :created_at)"
+        ), {
+            "manifest": b"immutable-manifest",
+            "schema_hash": b"schema-hash",
+            "created_at": now,
+        })
+        connection.execute(text(
+            "INSERT INTO v2_pipelines (id) VALUES ('pipeline-001')"
+        ))
+        connection.execute(text(
+            "INSERT INTO v2_dataset_versions (id) VALUES ('dataset-version-001')"
+        ))
+        connection.execute(text(
+            "INSERT INTO v2_pipeline_runs "
+            "(id, pipeline_id, status, finished_at, dataset_version_id, created_at) "
+            "VALUES ('pipeline-run-valid', 'pipeline-001', 'success', :finished_at, "
+            "'dataset-version-001', :created_at), "
+            "('pipeline-run-invalid', 'pipeline-001', 'success', NULL, NULL, :created_at)"
+        ), {"finished_at": now, "created_at": now})
+        connection.execute(text(
+            "INSERT INTO pipeline_run_inputs "
+            "(id, pipeline_run_id, dataset_version_id, input_ordinal) "
+            "VALUES ('pipeline-input-001', 'pipeline-run-valid', 'dataset-version-001', 0)"
+        ))
+
+    migration = _load_task_11_migration()
+    with engine.begin() as connection:
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='semantic_snapshots'"
+        )).scalar_one() == "semantic_snapshots"
+        assert connection.execute(text(
+            "SELECT name FROM pragma_table_info('ontology_releases') WHERE name='status'"
+        )).scalar_one() == "status"
+        pipeline_run_sql = connection.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='v2_pipeline_runs'"
+        )).scalar_one()
+        assert "ck_v2_pipeline_runs_success_completion" in pipeline_run_sql
+        assert "finished_at IS NOT NULL AND dataset_version_id IS NOT NULL" in pipeline_run_sql
+        assert connection.execute(text(
+            "SELECT status FROM ontology_releases WHERE id='release-001'"
+        )).scalar_one() == "published"
+        remediated = connection.execute(text(
+            "SELECT status, error_log FROM v2_pipeline_runs WHERE id='pipeline-run-invalid'"
+        )).one()
+        assert remediated == ("failed", "MIGRATION_REMEDIATED_UNGOVERNED_SUCCESS")
+        trigger_names = {
+            row[0] for row in connection.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            ))
+        }
+        assert {
+            "semantic_snapshots_immutable_update",
+            "semantic_snapshots_immutable_delete",
+            "semantic_snapshot_inputs_immutable_update",
+            "semantic_snapshot_inputs_immutable_delete",
+            "semantic_snapshot_inputs_validate",
+        } <= trigger_names
+
+    with engine.begin() as connection:
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.downgrade()
+
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='semantic_snapshots'"
+        )).scalar_one_or_none() is None
+        assert connection.execute(text(
+            "SELECT name FROM pragma_table_info('ontology_releases') WHERE name='status'"
+        )).scalar_one_or_none() is None
+        assert connection.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'semantic_snapshot%'"
+        )).first() is None
 
 
 def test_task_11_migration_is_next_linear_head():

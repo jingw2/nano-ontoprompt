@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from typing import Sequence
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -327,7 +328,7 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     name_parts.append("curated")
     ds_name = " ".join(name_parts)
     curated_ds = svc.create_dataset(name=ds_name, kind="curated")
-    svc.create_version(curated_ds.id, _safe_csv_bytes(data), rowcount=len(data))
+    curated_version = svc.create_version(curated_ds.id, _safe_csv_bytes(data), rowcount=len(data))
 
     if data:
         try:
@@ -350,6 +351,7 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
         "route": source["route"],
         "table_name": table_name,
         "curated_dataset_id": curated_ds.id,
+        "curated_dataset_version_id": curated_version.id,
         "rows_in": ctx.rows_in,
         "rows_out": len(data),
         "meta": ctx.meta,
@@ -425,6 +427,7 @@ def pipeline_run_task(
             input_dataset_version_ids = [value[0] for value in input_dataset_version_ids]
         else:
             input_dataset_version_ids = list(input_dataset_version_ids)
+        lineage_version_ids = list(input_dataset_version_ids)
         if input_dataset_version_ids:
             run.dataset_version_id = input_dataset_version_ids[0]
             db.commit()
@@ -453,6 +456,8 @@ def pipeline_run_task(
                 dataset_id=source["dataset_id"],
                 input_dataset_version_ids=source_version_ids or None,
             )
+            if source_version is not None and source_version.id not in lineage_version_ids:
+                lineage_version_ids.append(source_version.id)
             ctx = PipelineContext(
                 dataset_id=source["dataset_id"],
                 version_no=source_version.version_no if source_version is not None else None,
@@ -493,6 +498,27 @@ def pipeline_run_task(
             pl.route = sources[0]["route"]
         else:
             pl.route = pl.route or sources[0]["route"] or "A"
+        if outputs:
+            run.dataset_version_id = outputs[0]["curated_dataset_version_id"]
+        existing_lineage = {
+            value[0] for value in db.query(PipelineRunInput.dataset_version_id).filter(
+                PipelineRunInput.pipeline_run_id == run.id,
+            ).all()
+        }
+        next_input_ordinal = db.query(PipelineRunInput.input_ordinal).filter(
+            PipelineRunInput.pipeline_run_id == run.id,
+        ).order_by(PipelineRunInput.input_ordinal.desc()).first()
+        next_input_ordinal = (next_input_ordinal[0] + 1) if next_input_ordinal else 0
+        for version_id in lineage_version_ids:
+            if version_id in existing_lineage:
+                continue
+            db.add(PipelineRunInput(
+                id=str(uuid.uuid4()),
+                pipeline_run_id=run.id,
+                dataset_version_id=version_id,
+                input_ordinal=next_input_ordinal,
+            ))
+            next_input_ordinal += 1
         db.commit()
 
         run.status = "success"
