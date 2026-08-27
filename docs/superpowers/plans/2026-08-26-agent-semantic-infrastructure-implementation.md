@@ -19,7 +19,8 @@
 - Celery is the Phase 2 execution boundary. Named queues/routes are `refresh.schedule`, `refresh.poll`, `refresh.event`, `refresh.replay`, `artifact.extraction`, `agent.interactive`, and `housekeeping`; a refresh task message contains only its durable `run_id` and task name, never source arguments, cursors, credentials, SQL, or payloads.
 - Local/reference Compose topology uses explicit queue-bound worker roles and profiles in both Compose files. Worker role names alone are not queue isolation; every worker command passes `-Q` with its allowlisted queue set, bounded concurrency/prefetch/time limits, late acknowledgement, and worker-loss redelivery for refresh tasks. Compose is a reference topology, not a claim of Kubernetes or autoscaling support.
 - The per-source/partition lease remains the correctness owner under backpressure. Queue depth, oldest queued age, run lag, retry, DLQ, broker, and worker readiness are observable without exposing message payloads, credentials, or PII; queue saturation retains a durable queued/backpressured run and never drops or executes it inline.
-- Graceful shutdown, soft timeout, and cancellation leave a durable retryable run with the prior cursor/checkpoint unchanged; at-least-once redelivery is safe through the existing lease, fencing, idempotency, and dedupe contracts.
+- Graceful shutdown and soft timeout leave a durable retryable run, while explicit cancellation leaves a durable terminal `cancelled` run that can be safely superseded only by a new run; both preserve the prior cursor/checkpoint and make at-least-once redelivery safe through the existing lease, fencing, idempotency, and dedupe contracts.
+- Cancellation is a durable, fenced state transition: a queued run may be cancelled immediately; a running run first records `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, and the claimed fencing token, then the worker transitions it to `cancelled` only at a safe point before any durable outcome/advance. Connector pages, CDC batches, tentative materialization, and `record_refresh_outcome` all re-check that request while holding the source/partition lease and fence. A cancellation request after a durable outcome has committed is non-reversible and returns `CANCELLATION_TOO_LATE`; it preserves the committed DatasetVersion/PipelineRun/SemanticSnapshot and never pretends to roll back production state.
 - Capacity evidence is a repeatable measurement artifact, not a throughput promise: it records the synthetic refresh profile's measured throughput, latency, queue age, lag, and resource use. No fixed throughput threshold is invented in this plan.
 - PostgreSQL 16 remains the primary application database. Phase 3 writer coverage includes PostgreSQL and MySQL 8 with synthetic databases only.
 - Every Runtime entry point calls the same RuntimeService; adapters contain transport mapping only and never implement alternate authorization, policy, hashing, or writes.
@@ -79,7 +80,7 @@ The current assets do not cover the new contracts. Add a separate runtime corpus
 - Identity cases: valid delegation, missing credential, malformed signature, wrong audience, missing scope, expired token, revoked token, inactive Agent, inactive user, cross-domain token, Agent-only capability, and user-only entitlement.
 - Runtime cases: evidence citations, rule outcomes, ALLOW with data, ALLOW with no matches, structured DENY, policy denial, immutable read-only plan, writable plan binding, expired plan, and stable denial codes.
 - Execution cases: low-risk reversible automatic update, high-risk exact-hash HITL update, ambiguous/rejected plan, binding draft/revoked state, binding version drift, connection-target drift, parameter/selector drift, before-image/version conflict, row-count zero/two, idempotent retry, timeout/unknown outcome, reconciliation, and rollback-plan creation.
-- Refresh cases: normal non-empty batch, empty batch, late event, equal-watermark/different-primary-key, duplicate event, out-of-order event, failed retry, cursor non-advance, DLQ/replay, expired webhook, replay attack, schema drift, source configuration drift after claim, T+1 timezone/business-calendar run, bounded backfill, two independent sequence partitions, N+1 held until N, in-order release, gap timeout to DLQ, replay without checkpoint regression, and CDC ordering.
+- Refresh cases: normal non-empty batch, empty batch, late event, equal-watermark/different-primary-key, duplicate event, out-of-order event, failed retry, cursor non-advance, DLQ/replay, expired webhook, replay attack, schema drift, source configuration drift after claim, T+1 timezone/business-calendar run, bounded backfill, two independent sequence partitions, N+1 held until N, in-order release, gap timeout to DLQ, replay without checkpoint regression, CDC ordering, cancel-before-pull, cancel-inflight-page, cancel-after-tentative-materialization, and cancel-after-durable-outcome.
 - Database cases: identical logical rows and version columns in PostgreSQL and MySQL, plus a second fixture whose target row changes between plan and execution.
 - Transport cases: equivalent REST, SDK, MCP, and reference-Agent requests with different envelopes, request IDs, and presentation metadata.
 - Capacity cases: a deterministic refresh workload profile naming corpus seed, mode mix, source contracts, event/row counts, concurrency/prefetch settings, and operator-supplied latency/lag/queue-age/resource limits; the profile contains no universal throughput threshold.
@@ -111,14 +112,14 @@ The generator exposes generate(seed: int, output_dir: Path) -> dict and a CLI wi
 - sdk: a full SDK pytest node ID such as sdk/tests/test_runtime_client.py::test_sdk_injects_delegation_and_decodes_investigation; or
 - playwright: a spec path and exact test title such as frontend/src/test/e2e/runtime-governance.spec.ts::operator approves the exact plan hash and sees the receipt.
 
-registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 28 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; refresh cases additionally require `refresh_mode` in `{batch, micro_batch, event_driven}`, a `source_contract` in `{watermark_primary_key, opaque_source_cursor, sequence_partition}`, an expected cursor/terminal outcome, and an optional typed `error_code`. A `sequence_partition` case also declares `sequence_outcome` and `partition`; the configuration-drift case additionally declares `partition_checkpoint_outcome` and must use `error_code == CONFIGURATION_DRIFT`, `cursor_outcome == unchanged`, and `partition_checkpoint_outcome == unchanged`. It does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–27 have created those tests.
+registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_listable(target: TestTarget) -> bool, and assert_case_registry(case: Mapping[str, object]) -> None. TestTarget has a kind plus an exact target; a Playwright target stores both the spec path and exact title so the registry can validate the descriptor without running it in Task 1, then run `npx playwright test recorded_spec_path --list` and require that title in the Task 28 gate. assert_case_registry checks the manifest/registry bidirectional mapping, required fields, descriptor syntax, and layer metadata; refresh cases additionally require `refresh_mode` in `{batch, micro_batch, event_driven}`, a `source_contract` in `{watermark_primary_key, opaque_source_cursor, sequence_partition}`, an expected cursor/terminal outcome, and an optional typed `error_code`. A `sequence_partition` case also declares `sequence_outcome` and `partition`; cancellation cases additionally declare `cancel_outcome` in `{requested, cancelled, cancellation_too_late}`, `cursor_outcome`, and `partition_checkpoint_outcome` when partitioned, while `cancel-after-durable-outcome` must use `error_code == CANCELLATION_TOO_LATE` and preserve its durable outcome. The configuration-drift case additionally declares `partition_checkpoint_outcome` and must use `error_code == CONFIGURATION_DRIFT`, `cursor_outcome == unchanged`, and `partition_checkpoint_outcome == unchanged`. It does not require future tests to exist. target_is_listable resolves the repository root and uses `pytest --collect-only recorded_node_id` for pytest targets and `npx playwright test recorded_spec_path --list` for Playwright targets once Tasks 6–27 have created those tests.
 
 ### Coverage matrix
 
 | Test purpose | Fixture source | Required assertions |
 | --- | --- | --- |
 | Normal pipeline and ontology | Existing domain corpus plus snapshots.json | Completed lineage, published release, quality/evidence summaries, reproducible materialization |
-| Source refresh | refresh_cases.json plus synthetic source rows/events and both SQL seeds | Batch/micro-batch/event-driven modes, source cursor and partition checkpoint monotonicity, at-least-once dedupe, schedule/SLA, retry/DLQ/replay, lag/provenance, and configuration-revision drift fencing |
+| Source refresh | refresh_cases.json plus synthetic source rows/events and both SQL seeds | Batch/micro-batch/event-driven modes, source cursor and partition checkpoint monotonicity, at-least-once dedupe, schedule/SLA, retry/DLQ/replay, lag/provenance, configuration-revision drift fencing, and durable cancellation outcomes |
 | Sequence CDC/outbox ordering | refresh_cases.json (`two-partitions`, `n-plus-one-held`, `n-arrives-releases`, `gap-timeout`, `replay-no-regress`, `config-drift-late-finish`) plus partitioned event seeds | Unique partition state, inbox-first persistence, expected-next lease consumption, independent partition progress, ordered gap release, timeout DLQ, configuration-revision fencing, and replay/checkpoint non-regression |
 | Edge and boundary | Existing edge_cases/* plus reordered, empty, expired, and multi-input runtime cases | Empty result is allowed, hash is order-independent, limits and expiry are deterministic |
 | Negative and security | identities.json, runtime_cases.json, execution_cases.json | Stable denial codes, no protected data leakage, no caller identity spoofing, no secret/SQL acceptance |
@@ -126,8 +127,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 | API/SDK/MCP/reference parity | transport_cases.json | Same normalized result and canonical plan_hash, independent of envelopes and tracing IDs |
 | PostgreSQL/MySQL integration | Both SQL seed directories and db/docker-compose.yml | Row update, exact row count, optimistic locking, timeout, binding drift, idempotency, unknown outcome |
 | Python/Celery topology and operability | capacity_profile.json plus test_refresh_task_dispatch.py/test_refresh_operability.py | Exact named queues/routes, run-ID-only messages, bounded concurrency/prefetch/ack/time settings, graceful retry, queue depth/oldest age/run lag/retry/DLQ/readiness, and refresh saturation isolation from API/Runtime and agent/interactive dispatch |
-| Capacity decision | capacity_profile.json plus the Task 10A report/ADR | Repeatable measured throughput, latency, queue age, lag, and resource use; explicit operator-limit comparison and a contract-preserving extraction decision, with no invented universal threshold |
-| Playwright E2E | playwright_seed.json plus registry Playwright targets | Refresh schedule, config version/contract, cursor/lag, partition checkpoint/gap, configuration-drift failed status, failed/DLQ replay status, investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
+| Capacity decision | capacity_profile.json plus the Task 10A report/ADR and runtime/db/docker-compose.yml | Repeatable measured queue consumption, throughput, latency, queue age, lag, and resource use from real queue-bound workers; explicit operator-limit comparison and a contract-preserving extraction decision, with no invented universal threshold |
+| Cancellation and interruption | refresh_cases.json plus both dialect fixtures, test_refresh_cancellation.py, and refresh API/E2E targets | Fenced cancel request, cancel-before/inflight/after-tentative-materialization behavior, unchanged cursor/checkpoint/lineage, retry-safe soft timeout/shutdown, and precise `CANCELLATION_TOO_LATE` preservation after a committed outcome |
+| Playwright E2E | playwright_seed.json plus registry Playwright targets | Refresh schedule, config version/contract, cursor/lag, partition checkpoint/gap, cancellation requested/cancelled/too-late visibility, configuration-drift failed status, failed/DLQ replay status, investigation citations, sandbox diff, automatic/HITL states, receipt, reconciliation, rollback-plan visibility |
 | Case-to-test traceability | manifest.json plus registry.py | Task 1 validates descriptor/schema/metadata binding; Task 28 verifies every target is collectable/listable, with required dialects, transports, refresh modes, and Playwright marker |
 
 ### Task 1: Create the runtime test-data inventory and generator
@@ -159,9 +161,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Produces generate(seed: int, output_dir: Path) -> dict and validate_manifest(output_dir: Path) -> None.
 - Produces fixture records with case_id, expected, coverage, layers, and test_targets; uses synthetic tenants tenant-acme and tenant-beta, synthetic users, and synthetic row IDs.
 - Produces PostgreSQL and MySQL schemas with the same managed_targets logical table, primary key target_id, writable field status, optimistic-lock field row_version, and synthetic refresh_source_rows/refresh_event_log tables containing stable source/resource/cursor/sequence fixtures.
-- Produces test_data/runtime/db/docker-compose.yml with PostgreSQL published on host port 55432 and MySQL published on host port 53306; both use database runtime, user runtime, password runtime, healthchecks, and only synthetic seed rows.
+- Produces test_data/runtime/db/docker-compose.yml with PostgreSQL published on host port 55432, MySQL published on host port 53306, and synthetic Redis published on fixed host port 56379; all three use healthchecks on the project-scoped `runtime_fixture` network. The fixture also defines queue-bound `refresh_schedule_worker`, `refresh_poll_worker`, `refresh_event_worker`, and `refresh_replay_worker` services using `python -m celery -A app.tasks.celery_app worker -Q ...`, with database/Redis URLs pointing at service names. The capacity gate uses a unique Compose project, refuses an occupied reserved port, and always runs `down -v --remove-orphans`; these ports and volumes are isolated test infrastructure, never production.
 - Produces a registry entry for every case. Each database case has dialects exactly ["mysql", "postgresql"], each parity case has transports exactly ["mcp", "reference-agent", "rest", "sdk"], each refresh case has at least one exact polling/event/schedule pytest target, and each E2E case has at least one Playwright target.
-- Produces refresh cases with `refresh_mode` in `batch`, `micro_batch`, or `event_driven`, a `source_contract` in `watermark_primary_key`, `opaque_source_cursor`, or `sequence_partition`, and an expected `cursor_outcome` in `advanced`, `unchanged`, or `dead_lettered`. `sequence_partition` cases additionally include a partition and `sequence_outcome` in `accepted`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, or `replayed`. The `config-drift-late-finish` case is a `sequence_partition` case with `sequence_outcome: dead_lettered`, and also includes `error_code: CONFIGURATION_DRIFT`, `partition_checkpoint_outcome: unchanged`, and exact backend/Playwright targets for the late-finish test.
+- Produces refresh cases with `refresh_mode` in `batch`, `micro_batch`, or `event_driven`, a `source_contract` in `watermark_primary_key`, `opaque_source_cursor`, or `sequence_partition`, and an expected `cursor_outcome` in `advanced`, `unchanged`, or `dead_lettered`. `sequence_partition` cases additionally include a partition and `sequence_outcome` in `accepted`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, or `replayed`. Cancellation cases include `cancel_outcome` in `requested`, `cancelled`, or `cancellation_too_late`, `cursor_outcome`/`partition_checkpoint_outcome`, and any expected `error_code`; `cancel-after-durable-outcome` must use `error_code: CANCELLATION_TOO_LATE` and assert the durable outcome remains unchanged. The `config-drift-late-finish` case is a `sequence_partition` case with `sequence_outcome: dead_lettered`, and also includes `error_code: CONFIGURATION_DRIFT`, `partition_checkpoint_outcome: unchanged`, and exact backend/Playwright targets for the late-finish test.
 - Produces `capacity_profile.json` with top-level `seed: 20260826`, `workload.refresh_modes` equal to `batch`, `micro_batch`, and `event_driven`, `workload.source_contracts` covering all three contracts, deterministic row/event counts, `worker_limits`, and `deployment_limits` keys for measured latency, queue age, lag, and resource use. It must not contain a `throughput_threshold` or claim a universal pass/fail capacity.
 - Produces test_no_pii_or_real_secret() in test_fixture_manifest.py. Its deterministic scan rejects `-----BEGIN .*PRIVATE KEY-----`, bearer/JWT strings, non-sentinel access_token/refresh_token values, `AKIA[0-9A-Z]{16}` or other cloud-account markers, `postgresql://`/`mysql://` production hosts, cloud-provider URIs, non-`.invalid` email domains, and phone patterns such as `[+]?[0-9][0-9 ()-]{8,}`; runtime/runtime, vault:runtime-db, and example.invalid are explicitly test-only sentinels.
 
@@ -192,9 +194,16 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
                 assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
                 assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
                 assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
+                if case["case_id"].startswith("cancel-"):
+                    assert case["cancel_outcome"] in {"requested", "cancelled", "cancellation_too_late"}
+                    assert case["cursor_outcome"] == "unchanged" or case["cancel_outcome"] == "cancellation_too_late"
+                    if case["cancel_outcome"] == "cancellation_too_late":
+                        assert case["error_code"] == "CANCELLATION_TOO_LATE"
                 if case["source_contract"] == "sequence_partition":
                     assert case["partition"]
                     assert case["sequence_outcome"] in {"accepted", "duplicate", "lower", "held_gap", "gap_timeout", "processed", "dead_lettered", "replayed"}
+                    if case["case_id"].startswith("cancel-"):
+                        assert case["partition_checkpoint_outcome"] == "unchanged"
                 if case["case_id"] == "config-drift-late-finish":
                     assert case["error_code"] == "CONFIGURATION_DRIFT"
                     assert case["cursor_outcome"] == "unchanged"
@@ -216,9 +225,9 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 
 - [ ] **Step 3: Implement the generator and fixtures.**
 
-    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, refresh, and Playwright case, and no real credential material. `refresh_cases.json` must include stable cases named `normal`, `empty`, `late`, `equal-watermark`, `duplicate`, `out-of-order`, `failed-retry`, `cursor-nonadvance`, `dlq-replay`, `expired-webhook`, `replay-attack`, `schema-drift`, `config-drift-late-finish`, `backfill`, `t1-timezone`, `two-partitions`, `n-plus-one-held`, `n-arrives-releases`, `gap-timeout`, `replay-no-regress`, and `cdc-ordering`; `playwright_seed.json` must include schedule/cursor/config-version/per-partition checkpoint/gap/lag and dead-letter/replay/configuration-drift states. `capacity_profile.json` must include the fixed corpus seed, all refresh modes/contracts, workload sizes, reference worker limits, and named operator/deployment limit fields without a universal throughput threshold. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
+    Use one fixed seed, canonical JSON with sorted keys and UTF-8, fixed UTC timestamps, explicit expected outcomes for every normal, edge, negative, security, drift, rollback, reconciliation, PostgreSQL, MySQL, parity, SDK, MCP, reference-Agent, refresh, cancellation, and Playwright case, and no real credential material. `refresh_cases.json` must include stable cases named `normal`, `empty`, `late`, `equal-watermark`, `duplicate`, `out-of-order`, `failed-retry`, `cursor-nonadvance`, `dlq-replay`, `expired-webhook`, `replay-attack`, `schema-drift`, `config-drift-late-finish`, `backfill`, `t1-timezone`, `two-partitions`, `n-plus-one-held`, `n-arrives-releases`, `gap-timeout`, `replay-no-regress`, `cdc-ordering`, `cancel-before-pull`, `cancel-inflight-page`, `cancel-after-tentative-materialization`, and `cancel-after-durable-outcome`; `playwright_seed.json` must include schedule/cursor/config-version/per-partition checkpoint/gap/lag, cancellation-requested/cancelled/cancellation-too-late, and dead-letter/replay/configuration-drift states. `README.md` must document the cancellation state machine, the safe-point/no-progress invariant, the `CANCELLATION_TOO_LATE` non-reversible rule, and the real Redis/worker fixture startup and cleanup. `capacity_profile.json` must include the fixed corpus seed, all refresh modes/contracts, workload sizes, reference worker limits, and named operator/deployment limit fields without a universal throughput threshold. The generator must fail if a fixture lacks case_id, expected, coverage, layers, or test_targets. Store only public test sentinels runtime/runtime and vault:runtime-db in isolated test infrastructure; never write a signed token, private key, production URI, cloud account, real email, or real phone to a manifest or fixture. The scanner applies the same rules to every generated JSON, SQL, YAML, and Markdown byte, while allowing only those named sentinels.
 
-    Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, refresh cases with their mode/source-contract/cursor-outcome metadata plus typed `error_code`/`partition_checkpoint_outcome` for configuration drift, and E2E cases with an exact Playwright spec/title. The `config-drift-late-finish` targets include `backend/tests/v2/incremental/test_refresh_contract.py::test_configuration_upgrade_returns_configuration_drift_before_fence_check_without_lineage_or_progress` and `frontend/src/test/e2e/runtime-governance.spec.ts::operator sees configuration drift as failed with unchanged progress`. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
+    Register every case in registry.py with one or more exact target descriptors. Mark database cases with both dialects, parity cases with all four transports, refresh cases with their mode/source-contract/cursor-outcome metadata plus typed `error_code`/`partition_checkpoint_outcome` for configuration drift and cancellation, and E2E cases with an exact Playwright spec/title. The cancellation targets include unit/API/integration cases for cancel-before-pull, cancel-inflight-page, cancel-after-tentative-materialization, and cancel-after-durable-outcome; the latter records `CANCELLATION_TOO_LATE` and committed-lineage preservation. The `config-drift-late-finish` targets include `backend/tests/v2/incremental/test_refresh_contract.py::test_configuration_upgrade_returns_configuration_drift_before_fence_check_without_lineage_or_progress` and `frontend/src/test/e2e/runtime-governance.spec.ts::operator sees configuration drift as failed with unchanged progress`. Implement test_no_pii_or_real_secret() as a deterministic corpus scan and make the manifest test call it.
 
 - [ ] **Step 4: Run generation and the focused test.**
 
@@ -501,7 +510,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_lis
 - Create: backend/app/services/v2/incremental/contract.py
 - Create: backend/tests/v2/incremental/test_refresh_contract.py
 
-Migration ownership: `0022_refresh_contract.py` is the single refresh-state migration; it owns `refresh_source_states`, `refresh_partition_states`, `refresh_schedules`, refresh runs/inbox/outbox/DLQ, frozen config-version/contract fields, dispatch/backpressure state, configuration-revision indexes, and their unique keys, lease/fencing indexes, and DatasetVersion/PipelineRun lineage references. Later migrations depend on this head and must not recreate or shadow any authoritative refresh state table.
+Migration ownership: `0022_refresh_contract.py` is the single refresh-state migration; it owns `refresh_source_states`, `refresh_partition_states`, `refresh_schedules`, refresh runs/inbox/outbox/DLQ, frozen config-version/contract fields, dispatch/backpressure state, cancellation request fields/state-transition history, configuration-revision indexes, and their unique keys, lease/fencing indexes, and DatasetVersion/PipelineRun lineage references. Later migrations depend on this head and must not recreate or shadow any authoritative refresh state table.
 
 **Interfaces:**
 
@@ -510,7 +519,7 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - `RefreshSourceState` is the authoritative mutable singleton for exactly one `(source_id, resource)`. Its monotonic `config_version` is the source configuration revision. It stores the current cursor, `cursor_contract`, `config_version`, `lease_owner`, `lease_expires_at`, monotonically increasing `fencing_token`, `last_successful_run_id`, and update timestamps. For `sequence_partition`, this source-level cursor is aggregate/provenance state only; the per-partition checkpoint is the ordering authority and cannot be replaced by the aggregate cursor. The database uniqueness constraint on `(source_id, resource)` prevents competing authoritative rows.
 - `RefreshPartitionState` is the authoritative mutable singleton for exactly one `(source_id, resource, partition)` under the `sequence_partition` contract. It stores the claimed `config_version` and `cursor_contract`, `expected_next_sequence`, the last contiguous checkpoint, lease owner/expiry, a partition fencing token, gap start/timeout state, last successful run, and timestamps. Non-sequence sources never create or advance partition checkpoints; sequence sources must provide a partition and monotonic sequence.
 - `ChangeEnvelope` is an immutable value with `event_id`, `source_id`, `resource`, `operation` (`upsert` or `delete`), normalized `primary_key`, `payload`, `watermark`, `source_cursor`, `schema_hash`, optional `partition`/`sequence`, `occurred_at`, and `received_at`.
-- `RefreshRun` stores policy, trigger, the frozen source `config_version` and `cursor_contract`, status (`queued|running|succeeded|failed|dead_lettered`), dispatch state (`pending|dispatched|backpressured|publish_failed`), dispatch reason, cursor before/after, input and output DatasetVersion IDs, PipelineRun ID, source provenance, quality summary, lag, duplicate/late counts, retry count, idempotency key (scoped to source/resource/config version), lease owner/expiry, the issued source/partition fencing token, and terminal timestamps. `RefreshInboxEvent`, `RefreshOutboxEvent`, and `RefreshDeadLetter` store durable event identity/hash, source/resource/partition/sequence when present, processing state, delivery attempts, and replay status; inbox processing states include `received`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, and `replayed`.
+- `RefreshRun` stores policy, trigger, the frozen source `config_version` and `cursor_contract`, status (`queued|running|cancel_requested|cancelled|succeeded|failed|dead_lettered`), dispatch state (`pending|dispatched|backpressured|publish_failed`), dispatch reason, cursor before/after, input and output DatasetVersion IDs, PipelineRun ID, source provenance, quality summary, lag, duplicate/late counts, retry count, idempotency key (scoped to source/resource/config version), lease owner/expiry, the issued source/partition fencing token, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `cancel_fencing_token`, and terminal timestamps. `cancel_requested` is an in-flight request awaiting a safe-point worker transition; `cancelled` is terminal and retry-safe, and a future manual run gets a new run ID. `RefreshInboxEvent`, `RefreshOutboxEvent`, and `RefreshDeadLetter` store durable event identity/hash, source/resource/partition/sequence when present, processing state, delivery attempts, and replay status; inbox processing states include `received`, `duplicate`, `lower`, `held_gap`, `gap_timeout`, `processed`, `dead_lettered`, and `replayed`.
 - `PipelineRunInput` is an authoritative association with `pipeline_run_id`, `dataset_version_id`, source cursor/provenance, and input ordinal; it supports multi-source runs while the existing singular `PipelineRun.dataset_version_id` remains a backwards-compatible primary/output pointer and is never the complete lineage set.
 - `RefreshSchedule` stores a source or pipeline target, cron expression, IANA timezone, business-calendar identifier and excluded dates, SLA seconds, retry policy, backfill window, enabled state, next due time, last dispatched run, and a uniqueness key for the target.
 - `normalize_change_envelope(raw: Mapping[str, object], *, source_id: str, resource: str, received_at: datetime) -> ChangeEnvelope` rejects missing event identity, source/resource mismatch, invalid cursor shape, or schema hash drift.
@@ -519,12 +528,15 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - `update_source_configuration(db: Session, *, source_id: str, resource: str, cursor_contract: str, configuration: Mapping[str, object], now: datetime) -> RefreshSourceState` locks the source state and all of its partition states in one transaction, atomically increments `config_version`, stores the new non-secret source configuration/contract revision (credentials remain secret references), updates each partition's claimed `config_version` and `cursor_contract`, clears active source and partition leases, and increments their fencing tokens so every claim from the prior revision is invalid. The new revision is the only revision eligible for future claims.
 - The managed source-configuration update path in `backend/app/routers/v2/connections.py` must call `update_source_configuration` in the same database transaction as the persisted connection/resource revision; it must never mutate connection JSON or cursor-contract fields without incrementing `config_version` and invalidating existing leases/fences.
 - `claim_refresh_run(db: Session, *, source_id: str, resource: str, policy: RefreshPolicy, idempotency_key: str, lease_owner: str, now: datetime, lease_seconds: int) -> RefreshRun` locks the authoritative `RefreshSourceState` with `SELECT ... FOR UPDATE` (or the dialect-equivalent serializable lock), treats `lease_expires_at > now` as active, atomically reuses an active idempotent run for the same owner only within the current source/resource/config-version scope or rejects another active lease, and for a new claim copies the current `config_version` and `cursor_contract` into the run while incrementing and returning the state fencing token. A claim may not be granted from a request-body cursor or from a non-authoritative state row.
-- `record_refresh_outcome(db: Session, *, run_id: str, lease_owner: str, fencing_token: int, config_version: int, cursor_contract: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str, next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object], now: datetime, partition: str | None = None, partition_fencing_token: int | None = None, completed_sequences: Sequence[int] | None = None) -> RefreshRun` starts one transaction and locks `RefreshSourceState`; for a sequence run it also locks the matching `RefreshPartitionState` in the fixed source-then-partition order. FIRST, before any lease/owner/fencing check or lineage write, it compares the presented `config_version`/`cursor_contract` with the run-frozen values and authoritative source state, and for a sequence run compares the partition revision/contract with the same frozen source contract. Any mismatch immediately raises `ConfigurationDriftError` with reason code `CONFIGURATION_DRIFT`, rolls back, and leaves DatasetVersion/PipelineRun/`PipelineRunInput` lineage, source cursor, and partition checkpoint untouched. ONLY AFTER all revision/contract comparisons match does it validate `lease_expires_at > now`, exact lease owner, and source/partition fencing tokens; those failures use typed lease/fencing errors. On a matching revision it writes the associations, then CAS-updates the state cursor and `last_successful_run_id` with an owner/token/config-version/contract/`run.cursor_before` predicate. A sequence run must also provide the partition, exact active partition fencing token and matching partition config version/contract, plus a contiguous `completed_sequences` list beginning at `expected_next_sequence`; the transaction CAS-advances its checkpoint with an owner/token/config-version/contract/expected-checkpoint predicate only for that expected-next contiguous drain. Any failed CAS or sequence-gap mismatch rolls back every association and never advances either cursor or checkpoint.
+- `record_refresh_outcome(db: Session, *, run_id: str, lease_owner: str, fencing_token: int, config_version: int, cursor_contract: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str, next_cursor: SourceCursor, quality_summary: Mapping[str, object], provenance: Mapping[str, object], now: datetime, partition: str | None = None, partition_fencing_token: int | None = None, completed_sequences: Sequence[int] | None = None) -> RefreshRun` starts one transaction and locks `RefreshSourceState`; for a sequence run it also locks the matching `RefreshPartitionState` in the fixed source-then-partition order. FIRST, before any lease/owner/fencing check or lineage write, it compares the presented `config_version`/`cursor_contract` with the run-frozen values and authoritative source state, and for a sequence run compares the partition revision/contract with the same frozen source contract. Any mismatch immediately raises `ConfigurationDriftError` with reason code `CONFIGURATION_DRIFT`, rolls back, and leaves DatasetVersion/PipelineRun/`PipelineRunInput` lineage, source cursor, and partition checkpoint untouched. ONLY AFTER all revision/contract comparisons match does it validate `lease_expires_at > now`, exact lease owner, and source/partition fencing tokens; those failures use typed lease/fencing errors. It then checks `assert_refresh_not_cancelled` while holding the same lease/fence before writing any lineage association and checks again immediately before each cursor/checkpoint CAS. A `RefreshCancellationRequested` rolls back tentative materialization and prevents every durable result/advance; if the outcome transaction commits first, a later cancellation request is `CANCELLATION_TOO_LATE`. On a matching revision it writes the associations, then CAS-updates the state cursor and `last_successful_run_id` with an owner/token/config-version/contract/`run.cursor_before` predicate. A sequence run must also provide the partition, exact active partition fencing token and matching partition config version/contract, plus a contiguous `completed_sequences` list beginning at `expected_next_sequence`; the transaction CAS-advances its checkpoint with an owner/token/config-version/contract/expected-checkpoint predicate only for that expected-next contiguous drain. Any failed CAS or sequence-gap mismatch rolls back every association and never advances either cursor or checkpoint.
+- `request_refresh_cancellation(db: Session, *, run_id: str, requested_by: str, reason: str, now: datetime) -> RefreshRun` is the only cancellation entry point. It locks the run, authoritative source state, and matching partition state in the source-then-partition order, validates operator authorization before mutation, and validates the run's frozen config version against the authoritative state. For `queued` it transitions directly to terminal `cancelled` without inventing a worker lease; for an actively leased `running` run it additionally validates the current lease/fencing token and atomically records `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, and `cancel_fencing_token` and changes status to `cancel_requested`; for `cancel_requested` it returns the same durable request. For `succeeded`, `failed`, `dead_lettered`, or a run whose durable outcome has already committed, it raises `CancellationTooLateError` with reason code `CANCELLATION_TOO_LATE` and makes no mutation. It accepts no cursor, source URL, credential, payload, or worker-supplied authority.
+- `finalize_refresh_cancellation(db: Session, *, run_id: str, lease_owner: str, fencing_token: int, now: datetime) -> RefreshRun` runs under the same source/partition lock order, checks the requested `cancel_fencing_token` and active owner/fence, and atomically transitions `cancel_requested` to terminal `cancelled`, clears the lease, and records the terminal time. It is idempotent for an already `cancelled` run and rejects a stale worker with `RefreshFencingError`; it never advances source cursor, partition checkpoint, DatasetVersion/PipelineRun lineage, or snapshot state.
+- `assert_refresh_not_cancelled(db: Session, *, run_id: str, lease_owner: str, fencing_token: int, now: datetime) -> None` locks the run and authoritative source/partition state in the fixed order, verifies owner/fence/configuration, and raises `RefreshCancellationRequested` when status is `cancel_requested`. Connector page boundaries, CDC inbox/batch boundaries, tentative materialization boundaries, and `record_refresh_outcome` call this guard before durable result/advance. `record_refresh_outcome(... )` also re-checks the cancellation request in its transaction immediately before lineage association and CAS cursor/checkpoint updates; cancellation before commit rolls back the whole outcome. If the outcome commit wins the lock race, a later request is deterministically `CANCELLATION_TOO_LATE` and the committed result remains authoritative.
 - `mark_refresh_retryable(db: Session, *, run_id: str, reason: str, now: datetime) -> RefreshRun` performs an idempotent durable `running -> queued` interruption transition, increments `retry_count`, records the non-secret reason, clears the expired worker lease, sets `dispatch_state="pending"`, and leaves cursor-before/after, DatasetVersion/PipelineRun lineage, and any sequence checkpoint unchanged. A terminal run is returned unchanged; this function never replays a connector inline.
 
 - [ ] **Step 1: Write failing contract, uniqueness, lease, cursor, and configuration-drift tests.**
 
-    `concurrent_refresh_db` must expose two independent database sessions/workers and synchronize their claim/finish calls with a barrier; the two fencing tests below are concurrency tests, not single-session mocks. Use the same transaction isolation and row-lock path as production for PostgreSQL and the supported MySQL integration fixture. The first test must race the two claim calls and assert exactly one success; the second must retain worker A's old token while worker B claims after expiry and commits a newer cursor before worker A finishes.
+    `concurrent_refresh_db` must expose two independent database sessions/workers and synchronize their claim/finish calls with a barrier; the two fencing tests below are concurrency tests, not single-session mocks. Use the same transaction isolation and row-lock path as production for PostgreSQL and the supported MySQL integration fixture. The first test must race the two claim calls and assert exactly one success; the second must retain worker A's old token while worker B claims after expiry and commits a newer cursor before worker A finishes. `test_refresh_cancellation_dialects.py` must parameterize both PostgreSQL and MySQL and use two real sessions/workers for cancellation races, including cancel-before-pull, cancel during an in-flight connector/CDC page, cancel after tentative materialization but before the outcome transaction, and cancel after the durable outcome commit.
 
     def test_watermark_cursor_orders_equal_timestamps_by_primary_key():
         older = SourceCursor(source_id="source-001", resource="orders", contract="watermark_primary_key", watermark="2026-08-26T01:00:00Z", primary_key="100", opaque_value=None, observed_at=FIXED_NOW)
@@ -596,6 +608,34 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
         mark_fixture_failed(db, run.id)
         assert read_fixture_cursor(db).primary_key == "100"
 
+    def test_fenced_cancellation_request_records_actor_reason_and_safe_point_state(concurrent_refresh_db):
+        run = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-cancel-001", lease_owner="worker-a")
+        requested = request_refresh_cancellation(concurrent_refresh_db, run_id=run.id, requested_by="operator-001", reason="source maintenance", now=FIXED_NOW + timedelta(seconds=1))
+        assert requested.status == "cancel_requested"
+        assert requested.cancel_requested_by == "operator-001"
+        assert requested.cancel_reason == "source maintenance"
+        assert requested.cancel_fencing_token == run.fencing_token
+        cancelled = finalize_refresh_cancellation(concurrent_refresh_db, run_id=run.id, lease_owner="worker-a", fencing_token=run.fencing_token, now=FIXED_NOW + timedelta(seconds=2))
+        assert cancelled.status == "cancelled"
+        assert read_fixture_cursor(concurrent_refresh_db) == run.cursor_before
+        assert list_pipeline_inputs(concurrent_refresh_db, run.id) == []
+
+    def test_cancellation_request_is_idempotent_and_stale_worker_cannot_finalize(concurrent_refresh_db):
+        run = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-cancel-002", lease_owner="worker-a")
+        requested = request_refresh_cancellation(concurrent_refresh_db, run_id=run.id, requested_by="operator-001", reason="stop", now=FIXED_NOW)
+        assert request_refresh_cancellation(concurrent_refresh_db, run_id=run.id, requested_by="operator-001", reason="stop", now=FIXED_NOW) == requested
+        with pytest.raises(RefreshFencingError):
+            finalize_refresh_cancellation(concurrent_refresh_db, run_id=run.id, lease_owner="worker-a", fencing_token=run.fencing_token - 1, now=FIXED_NOW)
+
+    def test_cancellation_after_durable_outcome_is_non_reversible(concurrent_refresh_db):
+        run = claim_fixture_run(concurrent_refresh_db, idempotency_key="refresh-cancel-003", lease_owner="worker-a")
+        record_refresh_outcome(concurrent_refresh_db, run_id=run.id, lease_owner="worker-a", fencing_token=run.fencing_token, config_version=run.config_version, cursor_contract=run.cursor_contract, input_dataset_version_ids=["dataset-version-committed"], pipeline_run_id="pipeline-run-committed", next_cursor=cursor_fixture("2026-08-26T02:00:00Z", "200"), quality_summary={}, provenance={}, now=FIXED_NOW)
+        with pytest.raises(CancellationTooLateError) as exc:
+            request_refresh_cancellation(concurrent_refresh_db, run_id=run.id, requested_by="operator-001", reason="too late", now=FIXED_NOW + timedelta(seconds=1))
+        assert exc.value.reason_code == "CANCELLATION_TOO_LATE"
+        assert get_refresh_run(concurrent_refresh_db, run.id).status == "succeeded"
+        assert dataset_version_exists(concurrent_refresh_db, "dataset-version-committed") is True
+
 - [ ] **Step 2: Run the focused tests to verify they fail.**
 
     Run from the repository root:
@@ -603,11 +643,11 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_contract.py -q)
 
-    Expected: FAIL because the refresh schemas, durable models, migration, and contract service do not exist, including authoritative configuration revision/fence invalidation and the configuration-drift rollback test.
+    Expected: FAIL because the refresh schemas, durable models, migration, and contract service do not exist, including authoritative configuration revision/fence invalidation, the fenced cancellation state machine, and the configuration-drift rollback test.
 
 - [ ] **Step 3: Implement the minimum durable contract.**
 
-    Add the typed Pydantic/domain values and SQLAlchemy tables, register all models, and create migration `0022_refresh_contract.py` with `down_revision` set to the current Alembic head resolved by Task 2 (currently `0021_mapping_entity_class_cn` in this checkout). This migration is the single Phase 2 refresh-state migration and must create `refresh_source_states` with unique `(source_id, resource)` and `refresh_partition_states` with unique `(source_id, resource, partition)`, including cursor/contract/config-version fields, lease owner/expiry, fencing tokens, expected-next/checkpoint sequence fields, gap status, and last-successful-run references. `RefreshRun` must persist its frozen `config_version` and `cursor_contract`; partition rows persist the claimed config version and cursor contract. Add uniqueness on `(source_id, resource, event_id)` and idempotency keys scoped to source/resource/config version, configuration-revision/lease/fencing/expiry indexes, append-only event/run state transitions, and JSON columns for opaque cursors/provenance/quality summaries. Store cursor before/after and input DatasetVersion/PipelineRun references explicitly; never treat a request-body cursor or event ID as trusted identity without source validation.
+    Add the typed Pydantic/domain values and SQLAlchemy tables, register all models, and create migration `0022_refresh_contract.py` with `down_revision` set to the current Alembic head resolved by Task 2 (currently `0021_mapping_entity_class_cn` in this checkout). This migration is the single Phase 2 refresh-state migration and must create `refresh_source_states` with unique `(source_id, resource)` and `refresh_partition_states` with unique `(source_id, resource, partition)`, including cursor/contract/config-version fields, lease owner/expiry, fencing tokens, expected-next/checkpoint sequence fields, gap status, and last-successful-run references. `RefreshRun` must persist its frozen `config_version` and `cursor_contract`, the `queued|running|cancel_requested|cancelled|succeeded|failed|dead_lettered` status state machine, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `cancel_fencing_token`, and append-only cancellation/run transition records; partition rows persist the claimed config version and cursor contract. Add uniqueness on `(source_id, resource, event_id)` and idempotency keys scoped to source/resource/config version, configuration-revision/lease/fencing/expiry/cancellation indexes, append-only event/run state transitions, and JSON columns for opaque cursors/provenance/quality summaries. Store cursor before/after and input DatasetVersion/PipelineRun references explicitly; never treat a request-body cursor or event ID as trusted identity without source validation.
 
 - [ ] **Step 4: Run contract, migration, and model checks.**
 
@@ -618,7 +658,7 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
     (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/models/test_v2_schema.py tests/v2/incremental/test_refresh_contract.py -q)
 
-    Expected: PASS for watermark/opaque/sequence cursor contracts, duplicate-event idempotency, unique source/partition state, second-worker claim rejection, expired-worker late-finish fencing, configuration upgrade invalidation, typed `CONFIGURATION_DRIFT` with no lineage/cursor/checkpoint progress, immutable run state, and cursor non-advance after failure; the migration has one head and registers every refresh table.
+    Expected: PASS for watermark/opaque/sequence cursor contracts, duplicate-event idempotency, unique source/partition state, second-worker claim rejection, expired-worker late-finish fencing, configuration upgrade invalidation, typed `CONFIGURATION_DRIFT` with no lineage/cursor/checkpoint progress, fenced/idempotent cancellation, cancellation-too-late preservation of a committed outcome, immutable run state, and cursor non-advance after failure; the migration has one head and registers every refresh table.
 
 - [ ] **Step 5: Commit the refresh contract.**
 
@@ -651,7 +691,7 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - `get_refresh_task_options(task_name: str) -> Mapping[str, object]` returns the registered refresh task's `acks_late`, `reject_on_worker_lost`, `soft_time_limit`, and `time_limit` values and rejects non-refresh names.
 - `QueueObservation` contains queue name, depth, oldest queued age seconds, and worker-ready boolean. `RefreshQueueMetric` contains queue name, depth, oldest queued age seconds, running count, retry count, dead-letter count, and maximum run lag seconds. `RefreshReadiness` contains database-ready, broker-ready, and refresh-worker-ready booleans plus a derived `ready` boolean. `RefreshOperability` contains a tuple of `RefreshQueueMetric`, `RefreshReadiness`, and observed-at UTC time; it contains no message payload or credential.
 - `collect_refresh_operability(db: Session, *, now: datetime, observations: Mapping[str, QueueObservation]) -> RefreshOperability` validates that observations cover every named refresh queue, derives retry/DLQ/run-lag counts only from durable refresh state, and returns queue/backpressure/readiness data. `QueueObservation` is supplied by a broker inspector after it has discarded message bodies; the function never calls a connector or broker with source credentials.
-- `mark_refresh_retryable` from Task 6 is the shared interruption boundary. Refresh workers call it on `SoftTimeLimitExceeded`, explicit cancellation, and graceful shutdown before acknowledging; hard worker loss relies on late acknowledgement/redelivery and the durable lease expiry. The prior cursor/checkpoint remains the only valid retry origin.
+- `mark_refresh_retryable` from Task 6 is the shared interruption boundary for `SoftTimeLimitExceeded` and graceful shutdown; refresh workers call it before acknowledging and hard worker loss relies on late acknowledgement/redelivery plus durable lease expiry. An explicit operator cancellation uses `assert_refresh_not_cancelled` and `finalize_refresh_cancellation` instead, so it reaches terminal `cancelled` only before a durable outcome. The prior cursor/checkpoint remains the only valid retry origin for both paths.
 - The v2 Compose reference topology has explicit queue-bound profiles: `refresh_schedule_worker` (`refresh.schedule`), `refresh_poll_worker` (`refresh.poll`), `refresh_event_worker` (`refresh.event`), `refresh_replay_worker` (`refresh.replay`), `artifact_worker` (`artifact.extraction`), `agent_worker` (`agent.interactive`), and `housekeeping_worker` (`housekeeping`), plus one `beat` service. The Agent Compose keeps its existing dispatcher/watchdog/sweeper roles but gives them explicit queue flags and adds the missing refresh and interactive roles. All worker and beat commands use `python -m celery -A app.tasks.celery_app`; role names alone never imply queue isolation.
 - Each refresh worker command passes `--concurrency` from the bounded reference setting, `--prefetch-multiplier=1`, and a finite `stop_grace_period`; the service profile documents `REFRESH_WORKER_CONCURRENCY`, `REFRESH_WORKER_PREFETCH_MULTIPLIER`, `REFRESH_SOFT_TIME_LIMIT_SECONDS`, `REFRESH_HARD_TIME_LIMIT_SECONDS`, and `REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS`. The plan does not add Kubernetes manifests or claim autoscaling.
 
@@ -843,8 +883,10 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - Modify: backend/app/services/v2/incremental/orchestrator.py
 - Modify: backend/app/tasks/v2/refresh_tasks.py
 - Create: backend/tests/v2/incremental/test_refresh_polling.py
+- Create: backend/tests/v2/incremental/test_refresh_cancellation.py
 - Create: backend/tests/v2/incremental/integration/__init__.py
 - Create: backend/tests/v2/incremental/integration/test_refresh_polling_dialects.py
+- Create: backend/tests/v2/incremental/integration/test_refresh_cancellation_dialects.py
 - Modify: backend/tests/v2/connection/test_sql_connector.py
 - Modify: backend/tests/v2/connection/test_rest.py
 - Modify: backend/tests/v2/connection/test_mongo.py
@@ -855,7 +897,7 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - `ConnectorBase.pull_delta(resource: str, *, cursor: SourceCursor | None, overlap_window: timedelta) -> DeltaPage` is the only incremental connector interface. SQL requires server-owned `watermark_column` and `primary_key_column`; REST passes the configured delta/cursor parameter; Mongo uses its configured opaque/ObjectId cursor. A connector without a valid cursor contract falls back to an explicit full batch and records `cursor_outcome="unchanged"`, never guessing a watermark.
 - `poll_source(db: Session, *, source_id: str, resource: str, lease_owner: str, now: datetime) -> RefreshRunResult` claims a refresh run, reads the persisted cursor, frozen config version/contract, and source fencing token, pulls the overlap window, normalizes and deduplicates envelopes, persists a new DatasetVersion and PipelineRun, and advances the cursor only after those durable records and their success outcome commit using the returned fencing token/config revision/contract. A source configuration change during the poll returns typed `CONFIGURATION_DRIFT` and leaves the prior run/cursor unchanged.
 - `RefreshRunResult` contains run ID, status, frozen config version/contract, input DatasetVersion IDs, PipelineRun ID, cursor before/after, duplicate count, late-event count, retry count, DLQ count, source lag seconds, and provenance.
-- Celery task `refresh.poll(run_id: str)` is the only worker entry for polling; it reloads source/resource/configuration from the durable run and never accepts connector arguments. `refresh.poll` catches `SoftTimeLimitExceeded` and explicit cancellation, calls `mark_refresh_retryable(..., reason="WORKER_INTERRUPTED")`, and acknowledges only after that transition commits. Hard worker loss is handled by late acknowledgement/redelivery and lease expiry; no cursor or partition checkpoint is advanced by interruption.
+- Celery task `refresh.poll(run_id: str)` is the only worker entry for polling; it reloads source/resource/configuration from the durable run and never accepts connector arguments. It calls `assert_refresh_not_cancelled(...)` at every connector page/partition batch boundary and before tentative DatasetVersion/PipelineRun materialization. On `RefreshCancellationRequested`, it rolls back any uncommitted materialization and calls `finalize_refresh_cancellation(...)` under the same lease/fence before acknowledging; no cursor, partition checkpoint, DatasetVersion/PipelineRun lineage, or snapshot is advanced. It catches `SoftTimeLimitExceeded` and graceful shutdown separately, calls `mark_refresh_retryable(..., reason="WORKER_INTERRUPTED")`, and acknowledges only after that transition commits. Hard worker loss is handled by late acknowledgement/redelivery and lease expiry; no cursor or partition checkpoint is advanced by interruption. If the durable outcome transaction commits before a cancellation lock is acquired, the run remains authoritative and a later API request returns `CANCELLATION_TOO_LATE`.
 - `dedupe_key` is applied before materialization; equal timestamps sort by primary key, late records are included within the overlap window, and out-of-order records do not move the cursor backward. Failed attempts keep the previous cursor, retry with bounded backoff, and move to `RefreshDeadLetter` after the configured maximum; replay creates a new idempotent run rather than mutating the old run.
 - `DatasetService.create_version(..., refresh_run_id: str | None, source_cursor: SourceCursor | None, observed_at: datetime | None) -> DatasetVersion` records refresh provenance. `pipeline_run_task(pipeline_id: str, run_id: str, input_dataset_version_ids: Sequence[str] | None = None)` uses the explicitly pinned input versions, otherwise `Dataset.latest_version_id`/latest approved version, and never calls `preview(dataset_id, 1, ...)` for production refresh.
 - `IncrementalOrchestrator.on_connection_sync` consumes the `RefreshRunResult` and passes its input version/run IDs to the pipeline and later snapshot materialization; it does not create a PipelineRun with only `pipeline_id` and `status`.
@@ -883,6 +925,25 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
         assert interrupted.cursor_before == interrupted.cursor_after
         assert read_fixture_cursor(polling_fixture.db) == before
 
+    @pytest.mark.parametrize("case_id", ["cancel-before-pull", "cancel-inflight-page", "cancel-after-tentative-materialization"])
+    def test_poll_cancellation_stops_at_safe_point_without_durable_progress(case_id, polling_fixture):
+        result = run_polling_fixture(case_id, polling_fixture)
+        assert result.status == "cancelled"
+        assert result.cancel_requested_at is not None
+        assert result.cursor_before == result.cursor_after
+        assert result.input_dataset_version_ids == []
+        assert result.pipeline_run_id is None
+        assert read_fixture_cursor(polling_fixture.db) == result.cursor_before
+
+    def test_poll_cancellation_after_outcome_returns_too_late_and_preserves_lineage(polling_fixture):
+        result = run_polling_fixture("cancel-after-durable-outcome", polling_fixture)
+        assert result.status == "succeeded"
+        with pytest.raises(CancellationTooLateError) as exc:
+            request_refresh_cancellation(polling_fixture.db, run_id=result.run_id, requested_by="operator-001", reason="too late", now=FIXED_NOW)
+        assert exc.value.reason_code == "CANCELLATION_TOO_LATE"
+        assert result.input_dataset_version_ids
+        assert result.pipeline_run_id
+
     def test_dlq_replay_does_not_mutate_failed_run(polling_fixture):
         failed = run_polling_fixture("dlq-replay", polling_fixture)
         replay = replay_refresh_fixture(failed.run_id)
@@ -905,22 +966,22 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 
 - [ ] **Step 3: Implement shared polling and pinned input behavior.**
 
-    Add cursor-aware connector responses and server-owned identifier validation, implement overlap reads with `(watermark, primary_key)` predicates, and apply canonical event dedupe before writing a DatasetVersion. Persist run statistics and source lag, use a lease around each poll, keep the cursor unchanged until the DatasetVersion and PipelineRun succeed, and route exhausted retries to the durable DLQ. Register `refresh.poll(run_id: str)` on `refresh.poll`; it reloads all source state from the run ID and catches `SoftTimeLimitExceeded`/explicit cancellation through the Task 6 `mark_refresh_retryable` transition before acknowledging. Extend DatasetService/PipelineRun metadata and update `_load_source_rows` to accept explicit version IDs or the dataset's latest approved version. Preserve existing full/snapshot connector behavior and compatibility tests.
+    Add cursor-aware connector responses and server-owned identifier validation, implement overlap reads with `(watermark, primary_key)` predicates, and apply canonical event dedupe before writing a DatasetVersion. Persist run statistics and source lag, use a lease around each poll, keep the cursor unchanged until the DatasetVersion and PipelineRun succeed, and route exhausted retries to the durable DLQ. Register `refresh.poll(run_id: str)` on `refresh.poll`; it reloads all source state from the run ID, checks `assert_refresh_not_cancelled` at connector page and tentative-materialization boundaries, and on cancellation calls `finalize_refresh_cancellation` before acknowledging. Soft timeout and graceful shutdown use `mark_refresh_retryable` instead, while the outcome transaction re-checks cancellation immediately before lineage and cursor/checkpoint advancement. If that transaction already committed, cancellation is a typed `CANCELLATION_TOO_LATE` with no rollback claim. Extend DatasetService/PipelineRun metadata and update `_load_source_rows` to accept explicit version IDs or the dataset's latest approved version. Preserve existing full/snapshot connector behavior and compatibility tests.
 
 - [ ] **Step 4: Run unit and both-dialect integration tests.**
 
     Run:
 
     REPO_ROOT="$(git rev-parse --show-toplevel)"
-    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_polling.py tests/v2/connection/test_sql_connector.py tests/v2/connection/test_rest.py tests/v2/connection/test_mongo.py -q)
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_polling.py tests/v2/incremental/test_refresh_cancellation.py tests/v2/connection/test_sql_connector.py tests/v2/connection/test_rest.py tests/v2/connection/test_mongo.py -q)
     (cd "$REPO_ROOT" && docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait postgres mysql)
-    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/v2/incremental/integration/test_refresh_polling_dialects.py -q)
+    (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/v2/incremental/integration/test_refresh_polling_dialects.py tests/v2/incremental/integration/test_refresh_cancellation_dialects.py -q)
 
-    Expected: PASS for normal/empty/late/equal-watermark/duplicate/out-of-order events, cursor non-advance on failure or worker interruption, retry/DLQ/replay, observed lag, pinned latest input, run-ID-only task payloads, and the same durable refresh semantics against PostgreSQL and MySQL sources.
+    Expected: PASS for normal/empty/late/equal-watermark/duplicate/out-of-order events, cursor non-advance on failure or worker interruption, cancel-before-pull/cancel-inflight-page/cancel-after-tentative-materialization safe-point cancellation, cancellation-too-late preservation of committed lineage, retry/DLQ/replay, observed lag, pinned latest input, run-ID-only task payloads, and the same durable refresh semantics against PostgreSQL and MySQL sources.
 
 - [ ] **Step 5: Commit semi-real-time polling.**
 
-    git add backend/app/services/v2/incremental/polling.py backend/app/services/connection/base.py backend/app/services/connection/sql_connector.py backend/app/services/connection/rest_connector.py backend/app/services/connection/mongo_connector.py backend/app/services/v2/dataset_service.py backend/app/tasks/v2/pipeline_run.py backend/app/services/v2/incremental/orchestrator.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_refresh_polling.py backend/tests/v2/incremental/integration/__init__.py backend/tests/v2/incremental/integration/test_refresh_polling_dialects.py backend/tests/v2/connection/test_sql_connector.py backend/tests/v2/connection/test_rest.py backend/tests/v2/connection/test_mongo.py
+    git add backend/app/services/v2/incremental/polling.py backend/app/services/connection/base.py backend/app/services/connection/sql_connector.py backend/app/services/connection/rest_connector.py backend/app/services/connection/mongo_connector.py backend/app/services/v2/dataset_service.py backend/app/tasks/v2/pipeline_run.py backend/app/services/v2/incremental/orchestrator.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_refresh_polling.py backend/tests/v2/incremental/test_refresh_cancellation.py backend/tests/v2/incremental/integration/__init__.py backend/tests/v2/incremental/integration/test_refresh_polling_dialects.py backend/tests/v2/incremental/integration/test_refresh_cancellation_dialects.py backend/tests/v2/connection/test_sql_connector.py backend/tests/v2/connection/test_rest.py backend/tests/v2/connection/test_mongo.py
     git commit -m "feat: add durable semi-real-time refresh polling"
 
 ### Task 9: Add bounded event-driven refresh adapters and inbox/DLQ replay
@@ -935,7 +996,9 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - Modify: backend/app/main.py
 - Modify: backend/app/tasks/v2/refresh_tasks.py
 - Create: backend/tests/v2/incremental/test_event_ingest.py
+- Modify: backend/tests/v2/incremental/test_refresh_cancellation.py
 - Create: backend/tests/v2/incremental/integration/test_event_ingest_integration.py
+- Create: backend/tests/v2/incremental/integration/test_refresh_cancellation_dialects.py
 
 **Interfaces:**
 
@@ -943,8 +1006,8 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - `ManagedOutboxAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` accepts only the versioned outbox envelope fields and rejects missing event ID, source/resource mismatch, schema drift, or invalid sequence. A sequence outbox must provide both `partition` and a monotonic integer `sequence`; a watermark/opaque outbox uses cursor ordering and dedupe instead.
 - `ManagedCdcAdapter.normalize(record: Mapping[str, object], *, source_id: str, received_at: datetime) -> ChangeEnvelope` is the sole CDC adapter in v1. It accepts one documented external producer envelope with required partition and monotonic sequence, and does not open Kafka, broker, or arbitrary stream connections. The repository supplies `LocalCdcProducerDouble` in tests for deterministic envelopes.
 - `PartitionConsumeStatus` is the closed set `accepted|duplicate|lower|held_gap|gap_timeout|processed|dead_lettered|replayed`. `sequence_partition` envelopes are first persisted to `RefreshInboxEvent` with `received`/`held_gap` status, then consumed under the matching `RefreshPartitionState` lease only when `sequence == expected_next_sequence`. `duplicate` (the same event/dedupe key or a previously processed sequence identity) is acknowledged without changing the checkpoint; a distinct event with a sequence below `expected_next_sequence` is `lower`, retained/audited, and never applied; `held_gap` retains N+1 and does not advance anything; `gap_timeout` is the explicit timeout reason/status that transitions the held item to terminal `dead_lettered`; `processed` advances only after durable DatasetVersion/PipelineRun outcome; `dead_lettered` leaves the last contiguous checkpoint unchanged; `replayed` uses a new run and can only move the checkpoint forward.
-- `EventIngestService.accept(db: Session, envelope: ChangeEnvelope, *, lease_owner: str, now: datetime) -> IngestReceipt` persists the inbox idempotently before any dispatch, then claims the source `RefreshRun`/`RefreshSourceState` fencing token and frozen config version/contract, and locks/claims the per-source/resource/partition `RefreshPartitionState` lease before evaluating the expected-next sequence. It drains newly contiguous held events in order, calls `record_refresh_outcome(..., config_version=run.config_version, cursor_contract=run.cursor_contract, partition=..., partition_fencing_token=..., completed_sequences=[...])`, updates the partition checkpoint and source cursor only after durable materialization and outcome, and returns the explicit `PartitionConsumeStatus`, source/partition fencing tokens, and checkpoint. Watermark/opaque sources bypass partition sequencing and use `RefreshSourceState` cursor/dedupe semantics.
-- Celery task `refresh.event(run_id: str)` is the only worker entry for an accepted inbox event; it reloads the durable inbox/run and source contract from `run_id`, never accepts a raw event payload or credential, and uses the same lease/fencing path. Interruption calls `mark_refresh_retryable` before acknowledgement; inbox status remains replayable and the source/partition checkpoint is unchanged.
+- `EventIngestService.accept(db: Session, envelope: ChangeEnvelope, *, lease_owner: str, now: datetime) -> IngestReceipt` persists the inbox idempotently before any dispatch, then claims the source `RefreshRun`/`RefreshSourceState` fencing token and frozen config version/contract, and locks/claims the per-source/resource/partition `RefreshPartitionState` lease before evaluating the expected-next sequence. It checks `assert_refresh_not_cancelled` before each inbox/batch drain and before tentative materialization, drains newly contiguous held events in order, calls `record_refresh_outcome(..., config_version=run.config_version, cursor_contract=run.cursor_contract, partition=..., partition_fencing_token=..., completed_sequences=[...])`, and re-checks cancellation in the same fenced transaction immediately before lineage, checkpoint, and cursor advancement. Cancellation before commit rolls back tentative materialization and `finalize_refresh_cancellation` marks the run terminal `cancelled`; cancellation after the durable outcome lock wins is `CANCELLATION_TOO_LATE` with the committed result preserved. It returns the explicit `PartitionConsumeStatus`, source/partition fencing tokens, and checkpoint. Watermark/opaque sources bypass partition sequencing and use `RefreshSourceState` cursor/dedupe semantics.
+- Celery task `refresh.event(run_id: str)` is the only worker entry for an accepted inbox event; it reloads the durable inbox/run and source contract from `run_id`, never accepts a raw event payload or credential, and uses the same lease/fencing path. `RefreshCancellationRequested` calls `finalize_refresh_cancellation` before acknowledgement; soft timeout/graceful shutdown calls `mark_refresh_retryable` before acknowledgement. The inbox status remains replayable and the source/partition checkpoint is unchanged on either interruption path.
 - `replay_dead_letter(db: Session, *, dead_letter_id: str, operator_id: str, now: datetime) -> RefreshRun` creates a new idempotent run from the stored envelope and retains the original dead-letter record and reason.
 - `POST /api/v2/refresh/events/webhook/{source_id}` verifies the raw signed body before parsing; outbox and CDC adapters are internal ingestion contracts in v1 and are not exposed as arbitrary broker endpoints. The route returns only event/run IDs and status, never source secrets or protected payloads.
 - Durable inbox/outbox state uses one consumer lease per source partition, bounded retries, explicit `dead_lettered` status, and a replay audit record. The inbox write is durable before a consumer lease is acquired. Equal sequence/event IDs are `duplicate`; lower sequences are `lower` (or `dead_lettered` after the source-defined retention rule) and never silently applied. N+1 before N is `held_gap`; N arrival releases N and any contiguous held events in order. A gap timeout records `gap_timeout`/`GAP_TIMEOUT_DLQ`, transitions the held event to `dead_lettered`, and leaves the checkpoint unchanged. A replay never regresses `expected_next_sequence` or the source cursor, and every checkpoint update is fencing/CAS guarded as defined in Task 6.
@@ -979,6 +1042,23 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
         replay = replay_dead_letter(db, dead_letter_id=receipt.dead_letter_id, operator_id="operator-001", now=FIXED_NOW)
         assert replay.id != receipt.run_id
         assert original_dead_letter(db, receipt.dead_letter_id).replayed_at is not None
+
+    @pytest.mark.parametrize("case_id", ["cancel-before-pull", "cancel-inflight-page", "cancel-after-tentative-materialization"])
+    def test_event_cancellation_keeps_inbox_and_partition_progress_unchanged(case_id, partitioned_refresh_db):
+        result = run_event_fixture(case_id, partitioned_refresh_db)
+        assert result.status == "cancelled"
+        assert result.cursor_outcome == "unchanged"
+        assert result.partition_checkpoint_outcome == "unchanged"
+        assert result.input_dataset_version_ids == []
+        assert result.pipeline_run_id is None
+
+    def test_event_cancellation_after_commit_is_too_late_without_checkpoint_rollback(partitioned_refresh_db):
+        result = run_event_fixture("cancel-after-durable-outcome", partitioned_refresh_db)
+        assert result.status == "succeeded"
+        with pytest.raises(CancellationTooLateError) as exc:
+            request_refresh_cancellation(partitioned_refresh_db, run_id=result.run_id, requested_by="operator-001", reason="too late", now=FIXED_NOW)
+        assert exc.value.reason_code == "CANCELLATION_TOO_LATE"
+        assert read_partition_checkpoint(partitioned_refresh_db, result.partition) == result.partition_checkpoint_after
 
     def test_two_sequence_partitions_advance_independently(db):
         ingest_fixture_event(db, "two-partitions", partition="p-0", sequence=1)
@@ -1021,11 +1101,11 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_event_ingest.py tests/v2/incremental/integration/test_event_ingest_integration.py -q)
 
-    Expected: FAIL because no signed webhook route, durable inbox/consumer lease, bounded CDC adapter, ordering guard, or DLQ replay service exists.
+    Expected: FAIL because no signed webhook route, durable inbox/consumer lease, bounded CDC adapter, ordering guard, fenced cancellation path, or DLQ replay service exists.
 
 - [ ] **Step 3: Implement only the managed event boundary.**
 
-    Normalize all three supported sources into `ChangeEnvelope`, verify webhook signature/timestamp before parsing, enforce source-owned schema and the sequence-partition contract, and persist the inbox before dispatch. For a sequence source, claim the source run/fencing token, lock the unique `RefreshPartitionState` row under its consumer lease/fencing token, accept only the expected-next sequence, hold N+1, drain N plus contiguous held events in order, and persist explicit duplicate/lower/gap/dead-letter/replay statuses. Advance the partition checkpoint and `RefreshSourceState` cursor only in the fenced transaction after durable DatasetVersion/PipelineRun outcome. Use the same dedupe, lease, DatasetVersion, PipelineRun, and cursor advancement services as Task 8. Keep the CDC implementation as a producer-envelope adapter plus `LocalCdcProducerDouble`; do not add a Kafka client, arbitrary broker URL, generic stream topology, or best-effort direct database listener.
+    Normalize all three supported sources into `ChangeEnvelope`, verify webhook signature/timestamp before parsing, enforce source-owned schema and the sequence-partition contract, and persist the inbox before dispatch. For a sequence source, claim the source run/fencing token, lock the unique `RefreshPartitionState` row under its consumer lease/fencing token, accept only the expected-next sequence, hold N+1, drain N plus contiguous held events in order, and persist explicit duplicate/lower/gap/dead-letter/replay statuses. Call `assert_refresh_not_cancelled` at inbox, page, and batch boundaries and immediately before `record_refresh_outcome`; advance the partition checkpoint and `RefreshSourceState` cursor only in the fenced transaction after durable DatasetVersion/PipelineRun outcome and a final cancellation check. Cancellation before that commit rolls back tentative materialization and finalizes `cancelled`; if the outcome commit wins, the API returns `CANCELLATION_TOO_LATE` and keeps the committed checkpoint/lineage. Use the same dedupe, lease, DatasetVersion, PipelineRun, and cursor advancement services as Task 8. Keep the CDC implementation as a producer-envelope adapter plus `LocalCdcProducerDouble`; do not add a Kafka client, arbitrary broker URL, generic stream topology, or best-effort direct database listener.
 
 - [ ] **Step 4: Run event, API, and migration checks.**
 
@@ -1036,11 +1116,11 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
     (cd "$REPO_ROOT/backend" && python scripts/run_migrations.py upgrade head)
     (cd "$REPO_ROOT" && docker compose -f docker-compose.v2.yml config --quiet)
 
-    Expected: PASS for valid webhook/outbox/CDC envelopes, missing/non-integer sequence rejection, expired signature, replay attack, duplicate/equal event, lower sequence, two independent partitions, N+1 hold and ordered release, gap-timeout DLQ, replay without checkpoint regression, schema drift, source/partition lease fencing, configuration-revision drift with no lineage/checkpoint progress, interruption retry with unchanged checkpoint, run-ID-only event dispatch, DLQ/replay, and no arbitrary broker dependency.
+    Expected: PASS for valid webhook/outbox/CDC envelopes, missing/non-integer sequence rejection, expired signature, replay attack, duplicate/equal event, lower sequence, two independent partitions, N+1 hold and ordered release, gap-timeout DLQ, replay without checkpoint regression, schema drift, source/partition lease fencing, configuration-revision drift with no lineage/checkpoint progress, cancel-before/inflight/after-tentative-materialization safe-point cancellation, cancellation-too-late preservation after commit, interruption retry with unchanged checkpoint, run-ID-only event dispatch, DLQ/replay, and no arbitrary broker dependency.
 
 - [ ] **Step 5: Commit bounded event ingestion.**
 
-    git add backend/app/services/v2/incremental/event_adapters.py backend/app/services/v2/incremental/event_ingest.py backend/app/routers/v2/refresh_events.py backend/app/main.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_event_ingest.py backend/tests/v2/incremental/integration/test_event_ingest_integration.py
+    git add backend/app/services/v2/incremental/event_adapters.py backend/app/services/v2/incremental/event_ingest.py backend/app/routers/v2/refresh_events.py backend/app/main.py backend/app/tasks/v2/refresh_tasks.py backend/tests/v2/incremental/test_event_ingest.py backend/tests/v2/incremental/test_refresh_cancellation.py backend/tests/v2/incremental/integration/test_event_ingest_integration.py backend/tests/v2/incremental/integration/test_refresh_cancellation_dialects.py
     git commit -m "feat: add bounded event-driven refresh adapters"
 
 ### Task 10: Expose refresh operations and failure/replay status
@@ -1054,18 +1134,21 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - Modify: backend/app/main.py
 - Modify: backend/app/routers/v2/connections.py
 - Create: backend/tests/v2/incremental/test_refresh_api.py
+- Modify: backend/tests/v2/incremental/test_refresh_cancellation.py
 - Modify: backend/tests/v2/incremental/test_refresh_task_dispatch.py
 
 **Interfaces:**
 
 - `RefreshStatus` contains source ID, resource, `RefreshPolicy`, current `config_version` and `cursor_contract`, cursor, cursor observed time, source fencing token (never writable by the caller), per-partition `expected_next_sequence`/checkpoint/gap status and claimed config version when applicable, latest run ID/status, input DatasetVersion ID, PipelineRun ID, freshness lag seconds, duplicate/late/retry/DLQ counts, next schedule time, SLA status, and bounded backfill window.
 - `RefreshTriggerRequest` contains only `mode: RefreshPolicy` and optional `backfill_from`/`backfill_to` instants; the server loads source, resource, cursor, credentials, and connector configuration from the persisted connection contract.
+- `CancelRefreshRequest` contains exactly `reason: str`; the server derives the operator identity from the verified credential and never accepts a lease owner, fencing token, cursor, source URL, credential, event payload, or broker address.
 - `get_refresh_status(db: Session, *, source_id: str, resource: str | None = None) -> RefreshStatus` returns persisted state only and never reconstructs a cursor from request data.
 - `trigger_refresh(db: Session, *, source_id: str, resource: str, mode: RefreshPolicy, backfill_from: datetime | None, backfill_to: datetime | None, operator_id: str, now: datetime) -> RefreshRun` validates the stored source contract and creates a durable idempotent run.
+- `cancel_refresh_run(db: Session, *, run_id: str, operator_id: str, reason: str, now: datetime) -> RefreshRun` authorizes the operator and delegates to Task 6 `request_refresh_cancellation`; it returns the durable `cancel_requested`/`cancelled` state or maps `CancellationTooLateError` to the typed `CANCELLATION_TOO_LATE` response without changing the committed outcome.
 - `replay_refresh_run(db: Session, *, run_id: str, dead_letter_id: str | None, operator_id: str, now: datetime) -> RefreshRun` delegates to `replay_dead_letter` or a failed-run retry policy and never edits the original run/cursor.
 - Celery task `refresh.replay(run_id: str)` consumes only the newly created durable replay run ID on `refresh.replay`; it reloads the retained dead-letter/failed-run record and source contract inside the worker, never receives an operator cursor, event payload, broker address, or credential.
 - `get_refresh_health(db: Session, *, now: datetime, observations: Mapping[str, QueueObservation]) -> RefreshOperability` delegates to `collect_refresh_operability` and returns only queue depth/age, run lag, retry/DLQ counts, broker/worker readiness, and observed time.
-- `GET /api/v2/refresh/sources/{source_id}/status`, `POST /api/v2/refresh/sources/{source_id}/run`, `POST /api/v2/refresh/runs/{run_id}/replay`, `PUT /api/v2/refresh/sources/{source_id}/schedule`, and `GET /api/v2/refresh/health` use existing editor/operator authorization and return typed `RefreshStatus`/`RefreshRun`/`RefreshOperability` values. Mutation routes commit the durable run or schedule first and then enqueue a `RefreshDispatchMessage` containing only `run_id`, task name, and queue; a connector pull, CDC materialization, replay, or transform never runs in the FastAPI process. Backfill is limited to the persisted schedule window; arbitrary source URLs, cursors, credentials, broker addresses, and payloads are rejected.
+- `GET /api/v2/refresh/sources/{source_id}/status`, `POST /api/v2/refresh/sources/{source_id}/run`, `POST /api/v2/refresh/runs/{run_id}/cancel`, `POST /api/v2/refresh/runs/{run_id}/replay`, `PUT /api/v2/refresh/sources/{source_id}/schedule`, and `GET /api/v2/refresh/health` use existing editor/operator authorization and return typed `RefreshStatus`/`RefreshRun`/`RefreshOperability` values. The cancel route requires the editor/operator scope, persists the request before returning `202`, exposes `cancel_requested_at`/actor/reason and terminal `cancelled` state to an authorized operator, and returns `409` with `CANCELLATION_TOO_LATE` when a durable outcome already committed. Mutation routes commit the durable run or schedule first and then enqueue a `RefreshDispatchMessage` containing only `run_id`, task name, and queue; a connector pull, CDC materialization, replay, transform, or cancellation finalization never runs in the FastAPI process. Backfill is limited to the persisted schedule window; arbitrary source URLs, cursors, credentials, broker addresses, and payloads are rejected.
 
 - [ ] **Step 1: Write failing refresh operation API tests.**
 
@@ -1086,6 +1169,27 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
         assert triggered.status_code == 202
         assert replayed.status_code == 202
         assert triggered.json()["cursor_before"] == replayed.json()["cursor_before"]
+
+    def test_refresh_cancel_persists_durable_request_and_returns_terminal_safe_state(client, operator_headers):
+        response = client.post("/api/v2/refresh/runs/run-running-001/cancel", json={"reason": "planned source maintenance"}, headers=operator_headers)
+        assert response.status_code == 202
+        assert response.json()["status"] in {"cancel_requested", "cancelled"}
+        assert response.json()["cancel_requested_by"] == "operator-001"
+        assert response.json()["cancel_reason"] == "planned source maintenance"
+        status = client.get("/api/v2/refresh/sources/source-001/status", headers=operator_headers)
+        assert status.json()["latest_run"]["cancel_requested_at"] is not None
+
+    def test_refresh_cancel_requires_operator_authorization(client, viewer_headers):
+        response = client.post("/api/v2/refresh/runs/run-running-001/cancel", json={"reason": "not allowed"}, headers=viewer_headers)
+        assert response.status_code == 403
+
+    def test_refresh_cancel_after_durable_outcome_is_typed_non_reversible_conflict(client, operator_headers):
+        response = client.post("/api/v2/refresh/runs/run-succeeded-001/cancel", json={"reason": "too late"}, headers=operator_headers)
+        assert response.status_code == 409
+        assert response.json()["reason_code"] == "CANCELLATION_TOO_LATE"
+        status = client.get("/api/v2/refresh/sources/source-001/status", headers=operator_headers)
+        assert status.json()["latest_run"]["status"] == "succeeded"
+        assert status.json()["latest_run"]["input_dataset_version_id"] == "dataset-version-committed"
 
     def test_refresh_trigger_only_persists_and_enqueues_durable_run_id(client, operator_headers, monkeypatch):
         def fail_if_called(*_args, **_kwargs):
@@ -1129,24 +1233,24 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py -q)
 
-    Expected: FAIL because no normalized refresh status/trigger/replay/health endpoints exist, the current schedule route stores only a cron string in connection JSON, and the API has no durable run-ID-only dispatch or connector-inline guard.
+    Expected: FAIL because no normalized refresh status/trigger/cancel/replay/health endpoints exist, the current schedule route stores only a cron string in connection JSON, and the API has no durable run-ID-only dispatch, fenced cancellation response, or connector-inline guard.
 
 - [ ] **Step 3: Implement the thin refresh operations adapter.**
 
-    Add typed request/response models, route all operations to `ScheduleService`, `PollingRefreshService`, `EventIngestService`, and `collect_refresh_operability`, and preserve original run/cursor records on retries/replays. Register the router once, retain the existing connection route as a compatibility delegate, and return no raw event payload, credential, cursor override, or external broker configuration. Commit the durable run before calling `enqueue_refresh_run`; the only broker message is the Task 6A `RefreshDispatchMessage`, so a saturated or unavailable refresh queue returns a queued `202` and does not block Runtime/status requests or the `agent.interactive` queue.
+    Add typed request/response models, route all operations to `ScheduleService`, `PollingRefreshService`, `EventIngestService`, Task 6 cancellation services, and `collect_refresh_operability`, and preserve original run/cursor records on retries/replays. Register the router once, retain the existing connection route as a compatibility delegate, and return no raw event payload, credential, cursor override, or external broker configuration. Commit the durable run before calling `enqueue_refresh_run`; the only broker message is the Task 6A `RefreshDispatchMessage`, so a saturated or unavailable refresh queue returns a queued `202` and does not block Runtime/status requests or the `agent.interactive` queue. Cancellation is a durable database action, not a FastAPI worker shortcut: an authorized request commits `cancel_requested`/`cancelled` before returning, and a committed outcome maps to `409 CANCELLATION_TOO_LATE` without rollback.
 
 - [ ] **Step 4: Run refresh API and end-to-end incremental tests.**
 
     Run:
 
     REPO_ROOT="$(git rev-parse --show-toplevel)"
-    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_polling.py tests/v2/incremental/test_event_ingest.py -q)
+    (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_api.py tests/v2/incremental/test_refresh_schedule.py tests/v2/incremental/test_refresh_polling.py tests/v2/incremental/test_refresh_cancellation.py tests/v2/incremental/test_event_ingest.py -q)
 
-    Expected: PASS for status, T+1 schedule, lag/cursor and sequence-partition checkpoint/gap visibility, queue depth/oldest age/run lag/retry/DLQ/readiness visibility, bounded manual trigger/backfill, failed/DLQ replay, authentication, run-ID-only post-commit enqueue, saturated-queue isolation, and rejection of caller-supplied cursor/source/broker values.
+    Expected: PASS for status, T+1 schedule, lag/cursor and sequence-partition checkpoint/gap visibility, queue depth/oldest age/run lag/retry/DLQ/readiness visibility, bounded manual trigger/backfill, authenticated cancel-before/inflight/after-materialization state, precise `CANCELLATION_TOO_LATE` conflict after a committed outcome, failed/DLQ replay, authentication, run-ID-only post-commit enqueue, saturated-queue isolation, and rejection of caller-supplied cursor/source/broker values.
 
 - [ ] **Step 5: Commit refresh operations.**
 
-    git add backend/app/services/v2/incremental/operations.py backend/app/routers/v2/refresh.py backend/app/main.py backend/app/routers/v2/connections.py backend/tests/v2/incremental/test_refresh_api.py backend/tests/v2/incremental/test_refresh_task_dispatch.py
+    git add backend/app/services/v2/incremental/operations.py backend/app/routers/v2/refresh.py backend/app/main.py backend/app/routers/v2/connections.py backend/tests/v2/incremental/test_refresh_api.py backend/tests/v2/incremental/test_refresh_cancellation.py backend/tests/v2/incremental/test_refresh_task_dispatch.py
     git commit -m "feat: expose enterprise refresh operations"
 
 ### Task 10A: Record measured Python refresh capacity and the extraction decision
@@ -1160,14 +1264,18 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 - Create: docs/adr/2026-08-27-python-refresh-execution-capacity.md
 - Modify: test_data/runtime/README.md
 - Modify: test_data/runtime/capacity_profile.json
+- Modify: test_data/runtime/db/docker-compose.yml
 - Modify: .github/workflows/agent-mvp.yml
 
 **Interfaces:**
 
 - `CapacityWorkloadProfile` is an immutable value loaded from `test_data/runtime/capacity_profile.json` with `seed: int`, `refresh_modes: tuple[RefreshPolicy, ...]`, `source_contracts: tuple[str, ...]`, `row_count: int`, `event_count: int`, `worker_limits: RefreshWorkerLimits`, and `deployment_limits: Mapping[str, float | None]`; the JSON `workload` object is normalized into the first four fields. `CapacityWorkloadProfile.to_dict() -> dict[str, object]` returns the canonical profile without measurements. `deployment_limits` names `max_end_to_end_latency_seconds`, `max_oldest_queued_age_seconds`, `max_source_lag_seconds`, and `max_cpu_percent`; values are supplied for the deployment being measured, not hard-coded universal thresholds.
 - `load_capacity_profile(path: Path) -> CapacityWorkloadProfile` parses the canonical JSON shape, validates the fixed seed/workload/mode/contract/worker-limit/deployment-limit fields, and rejects a universal throughput threshold.
-- `CapacityMeasurement` contains `workload: CapacityWorkloadProfile`, `started_at`, `finished_at`, `completed_runs`, `throughput_runs_per_second`, `p50_latency_seconds`, `p95_latency_seconds`, `max_oldest_queued_age_seconds`, `max_source_lag_seconds`, `retry_count`, `dead_letter_count`, `cpu_percent`, `memory_bytes`, `queue_names`, and `git_revision`. It contains no payloads, credentials, or raw source records.
-- `run_refresh_capacity(profile_path: Path, *, output_path: Path, broker_url: str, database_url: str) -> CapacityMeasurement` loads the profile, runs the same batch/micro-batch/bounded-event refresh tasks through the named queues using the deterministic corpus, samples queue/run/resource observations, and writes canonical JSON to `output_path`. It must run only against the synthetic database/Redis fixture and must not invoke a production connector or external CDC broker.
+- `CapacityQueueConsumption` is an immutable record with `queue`, `task_id`, `task_name`, `durable_run_id`, `worker_hostname`, `started_at`, `finished_at`, and `status`; `worker_hostname` must come from a live Celery worker event/inspection response and cannot be `inprocess`, `fake`, or null.
+- `CapacityMeasurement` contains `workload: CapacityWorkloadProfile`, `started_at`, `finished_at`, `completed_runs`, `throughput_runs_per_second`, `p50_latency_seconds`, `p95_latency_seconds`, `max_oldest_queued_age_seconds`, `max_source_lag_seconds`, `retry_count`, `dead_letter_count`, `cpu_percent`, `memory_bytes`, `queue_names`, `queue_consumption: tuple[CapacityQueueConsumption, ...]`, and `git_revision`. It contains no payloads, credentials, or raw source records.
+- `assert_capacity_workers_consumed_named_queues(celery_app: Celery, *, expected_queues: Sequence[str], durable_run_ids: Sequence[str], timeout_seconds: int) -> tuple[CapacityQueueConsumption, ...]` inspects live worker `active_queues`, listens for task-started/succeeded events, and joins them to the durable RefreshRun state. It fails unless every expected queue has an allowlisted worker hostname and a started task whose durable run ID completed; a broker publish, `send_task` return value, in-process eager task, or fake result alone is insufficient.
+- `run_refresh_capacity(profile_path: Path, *, output_path: Path, broker_url: str, database_url: str, compose_project: str) -> CapacityMeasurement` loads the profile, runs the same batch/micro-batch/bounded-event refresh tasks through the named queues using the deterministic corpus, samples queue/run/resource observations, calls `assert_capacity_workers_consumed_named_queues` against the live fixture workers, and writes canonical JSON to `output_path`. `broker_url` must be the reachable host URL `redis://127.0.0.1:56379/0`, never a placeholder or in-process transport; `database_url` must use the isolated fixture, and `compose_project` is recorded for cleanup/evidence. It must not invoke a production connector or external CDC broker.
+- The `run_refresh_capacity.py` CLI requires `--profile`, `--output`, `--broker-url`, `--database-url`, and `--compose-project`; it passes these exact values to `run_refresh_capacity` and fails closed if the broker URL is not the reachable fixture URL or if live queue consumption cannot be observed.
 - `compare_capacity_to_limits(measurement: CapacityMeasurement) -> Mapping[str, bool]` compares measured latency, queue age, source lag, and CPU to the profile's non-null deployment limits. An absent limit yields `False` for `breached`; no default numeric threshold is substituted.
 - `write_capacity_decision(measurement: CapacityMeasurement, comparison: Mapping[str, bool], *, output_path: Path) -> None` writes the ADR/release artifact with `decision` equal to `python_execution_plane_within_profile` or `measured_limit_breached_propose_executor_adr`. The latter is a proposal only and must state that any future executor preserves `ChangeEnvelope`, `RefreshSourceState`, `RefreshPartitionState`, `DatasetVersion`, `PipelineRun`, and `SemanticSnapshot` contracts and the same idempotency/fencing semantics.
 - The extraction trigger is explicit: propose a separate connector executor only when a measured, repeatable workload breaches a non-null deployment limit despite the queue-isolated Python topology; never trigger on a guessed row/event-per-second number. The ADR must identify the breached metric, profile, revision, and evidence artifact and must not add Go, Java, or Rust source files.
@@ -1180,9 +1288,22 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
         assert set(profile.source_contracts) >= {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
         assert "throughput_threshold" not in profile.to_dict()
 
-    def test_capacity_harness_uses_named_queues_and_emits_sanitized_measurement(tmp_path):
-        report = run_refresh_capacity(fixture_profile(), output_path=tmp_path / "capacity.json", broker_url="redis://fixture", database_url="postgresql://runtime:runtime@localhost:55432/runtime")
+    def test_capacity_fixture_declares_redis_and_real_queue_bound_workers():
+        text = Path("test_data/runtime/db/docker-compose.yml").read_text()
+        assert "redis:" in text
+        assert '"56379:6379"' in text
+        assert "runtime_fixture" in text
+        for queue in ("refresh.schedule", "refresh.poll", "refresh.event", "refresh.replay"):
+            assert f"-Q {queue}" in text
+        assert "-A app.tasks.celery_app" in text
+
+    @pytest.mark.integration
+    def test_capacity_harness_observes_live_workers_consuming_named_queues(tmp_path, capacity_compose):
+        report = run_refresh_capacity(Path("test_data/runtime/capacity_profile.json"), output_path=tmp_path / "capacity.json", broker_url="redis://127.0.0.1:56379/0", database_url=capacity_compose.postgres_url, compose_project=capacity_compose.project_name)
         assert set(report.queue_names) == {"refresh.schedule", "refresh.poll", "refresh.event", "refresh.replay"}
+        assert {item.queue for item in report.queue_consumption} == set(report.queue_names)
+        assert all(item.worker_hostname not in {None, "inprocess", "fake"} for item in report.queue_consumption)
+        assert all(item.status == "succeeded" and item.durable_run_id for item in report.queue_consumption)
         assert report.completed_runs >= 0
         assert "payload" not in (tmp_path / "capacity.json").read_text()
         assert "credential" not in (tmp_path / "capacity.json").read_text()
@@ -1207,26 +1328,52 @@ Migration ownership: `0022_refresh_contract.py` is the single refresh-state migr
 
 - [ ] **Step 3: Implement the measurement-only capacity artifact.**
 
-    Add the profile loader and harness around the existing `RefreshDispatchMessage`/named queue path. Run a deterministic finite workload for every supported refresh mode and source contract, sample Celery queue observations and durable RefreshRun lag/retry/DLQ state, and capture process CPU/memory with a standard-library-compatible sampler. Serialize only aggregate measurements, profile metadata, queue names, and git revision. Compare only against non-null limits in the profile. Write the ADR decision and explicitly state that the current implementation remains Python unless the measured evidence breaches a named deployment limit; a future executor proposal must retain the immutable envelope/state/snapshot contracts and be reviewed separately.
+    Add the profile loader and harness around the existing `RefreshDispatchMessage`/named queue path. Run a deterministic finite workload for every supported refresh mode and source contract, sample Celery queue observations and durable RefreshRun lag/retry/DLQ state, and capture process CPU/memory with a standard-library-compatible sampler. Before dispatching the workload, `assert_capacity_workers_consumed_named_queues` must verify `inspect.active_queues()` contains one live worker for each refresh queue; after dispatch it must observe task-started/succeeded events and match each task to a durable run ID. A `send_task` return value, broker publish event, Celery eager/in-process result, or fake worker does not satisfy the gate. Serialize only aggregate measurements, profile metadata, queue names, queue-consumption records (task ID/name, durable run ID, live worker hostname, status/timestamps), and git revision. Compare only against non-null limits in the profile. Write the ADR decision and explicitly state that the current implementation remains Python unless the measured evidence breaches a named deployment limit; a future executor proposal must retain the immutable envelope/state/snapshot contracts and be reviewed separately.
 
-    Update `test_data/runtime/README.md` with the root-anchored command, synthetic broker/database prerequisites, report fields, interpretation of a breached limit, and the fact that this repository does not provide an external CDC producer/broker. Add the harness to CI as a non-secret artifact-producing check; it must not call a real enterprise source.
+    Extend `test_data/runtime/db/docker-compose.yml` with a project-scoped `runtime_fixture` network and these synthetic services: `postgres` (`55432:5432`), `mysql` (`53306:3306`), and `redis` (`56379:6379`, image `redis:7-alpine`, healthcheck `redis-cli ping`). The four worker services build the existing `../../../backend/Dockerfile` at the same revision (or use an explicitly supplied equivalent image), depend on healthy databases/Redis, mount no production configuration, and use only the public test sentinels. They run the exact commands `python -m celery -A app.tasks.celery_app worker -Q refresh.schedule --concurrency=1 --prefetch-multiplier=1`, `python -m celery -A app.tasks.celery_app worker -Q refresh.poll --concurrency=1 --prefetch-multiplier=1`, `python -m celery -A app.tasks.celery_app worker -Q refresh.event --concurrency=1 --prefetch-multiplier=1`, and `python -m celery -A app.tasks.celery_app worker -Q refresh.replay --concurrency=1 --prefetch-multiplier=1`, respectively (through the guarded launcher when the image entrypoint requires it). Their container broker URL is `redis://redis:6379/0`; the host-side harness uses `redis://127.0.0.1:56379/0`. Worker health/readiness must be observable through Celery inspection, and the fixture must not enable `task_always_eager` or an in-process worker.
+
+    Update `test_data/runtime/README.md` with the root-anchored Compose startup/cleanup command, fixed local ports and project-scoped network/volumes, a preflight that fails if 55432, 53306, or 56379 is occupied, the reachable host broker/database URLs, queue-consumption evidence fields, report fields, interpretation of a breached limit, and the fact that this repository does not provide an external CDC producer/broker. The capacity gate uses a unique Compose project (for example `ontexus-capacity-${GITHUB_RUN_ID:-local}`) and CI serializes this fixed-port fixture; it must not silently remap ports or call a real enterprise source. Add the harness to CI as a non-secret artifact-producing check and always tear the isolated project down with `down -v --remove-orphans`.
 
 - [ ] **Step 4: Run capacity and artifact checks.**
 
     Run from the repository root:
 
     REPO_ROOT="$(git rev-parse --show-toplevel)"
+    CAPACITY_PROJECT="ontexus-capacity-${GITHUB_RUN_ID:-local}-$$"
+    CAPACITY_COMPOSE="$REPO_ROOT/test_data/runtime/db/docker-compose.yml"
+    set -euo pipefail
+    check_capacity_port_free() {
+      python - "$1" <<'PY'
+import socket
+import sys
+port = int(sys.argv[1])
+with socket.socket() as sock:
+    sock.settimeout(0.25)
+    if sock.connect_ex(("127.0.0.1", port)) == 0:
+        raise SystemExit(f"reserved capacity fixture port is occupied: {port}")
+PY
+    }
+    for port in 55432 53306 56379; do check_capacity_port_free "$port"; done
+    cleanup_capacity_fixture() {
+      docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans || true
+    }
+    trap cleanup_capacity_fixture EXIT
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" up -d --wait postgres mysql redis refresh_schedule_worker refresh_poll_worker refresh_event_worker refresh_replay_worker
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" ps --status running postgres mysql redis refresh_schedule_worker refresh_poll_worker refresh_event_worker refresh_replay_worker
     (cd "$REPO_ROOT" && python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime/generated --check)
     (cd "$REPO_ROOT/backend" && python -m pytest tests/v2/incremental/test_refresh_capacity.py -q)
-    (cd "$REPO_ROOT/backend" && python scripts/run_refresh_capacity.py --profile "$REPO_ROOT/test_data/runtime/capacity_profile.json" --output "$REPO_ROOT/artifacts/refresh-capacity.json" --broker-url redis://fixture --database-url postgresql://runtime:runtime@localhost:55432/runtime)
-    (cd "$REPO_ROOT" && python -c 'import json; p=json.load(open("artifacts/refresh-capacity.json")); assert p["queue_names"] == ["refresh.event", "refresh.poll", "refresh.replay", "refresh.schedule"]; assert "payload" not in json.dumps(p); assert "credential" not in json.dumps(p)')
+    (cd "$REPO_ROOT/backend" && python scripts/run_refresh_capacity.py --profile "$REPO_ROOT/test_data/runtime/capacity_profile.json" --output "$REPO_ROOT/artifacts/refresh-capacity.json" --broker-url redis://127.0.0.1:56379/0 --database-url postgresql://runtime:runtime@127.0.0.1:55432/runtime --compose-project "$CAPACITY_PROJECT")
+    (cd "$REPO_ROOT" && python -c 'import json; p=json.load(open("artifacts/refresh-capacity.json")); assert p["queue_names"] == ["refresh.event", "refresh.poll", "refresh.replay", "refresh.schedule"]; assert {x["queue"] for x in p["queue_consumption"]} == set(p["queue_names"]); assert all(x["worker_hostname"] not in (None, "inprocess", "fake") and x["status"] == "succeeded" for x in p["queue_consumption"]); assert "payload" not in json.dumps(p); assert "credential" not in json.dumps(p)')
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans
+    trap - EXIT
 
-    Expected: PASS with deterministic corpus/profile validation, aggregate-only measurement output, a decision containing the measured limits and contract-preserving extraction rule, and no production connector/broker access.
+    Expected: PASS with deterministic corpus/profile validation, real Redis-backed queue-bound worker consumption for every refresh queue, aggregate-only measurement output, a decision containing the measured limits and contract-preserving extraction rule, and no production connector/broker access. The unique Compose project isolates network/volumes; the fixed local ports are test-only, a preflight aborts on collision, CI serializes this fixture, and cleanup removes only that project with `down -v --remove-orphans`.
 
 - [ ] **Step 5: Commit capacity evidence.**
 
     REPO_ROOT="$(git rev-parse --show-toplevel)"
-    git -C "$REPO_ROOT" add backend/scripts/run_refresh_capacity.py backend/tests/v2/incremental/test_refresh_capacity.py docs/adr/2026-08-27-python-refresh-execution-capacity.md test_data/runtime/README.md test_data/runtime/capacity_profile.json .github/workflows/agent-mvp.yml
+    git -C "$REPO_ROOT" add backend/scripts/run_refresh_capacity.py backend/tests/v2/incremental/test_refresh_capacity.py docs/adr/2026-08-27-python-refresh-execution-capacity.md test_data/runtime/README.md test_data/runtime/capacity_profile.json test_data/runtime/db/docker-compose.yml .github/workflows/agent-mvp.yml
     git -C "$REPO_ROOT" commit -m "test: record Python refresh capacity evidence"
 
 ### Workstream 2B — Unified Semantic Runtime
@@ -2479,9 +2626,10 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 - refreshApi.getStatus(sourceId: string) -> RefreshStatus maps to GET /api/v2/refresh/sources/{sourceId}/status.
 - refreshApi.setSchedule(sourceId: string, request: ScheduleRequest) -> RefreshSchedule maps to PUT /api/v2/refresh/sources/{sourceId}/schedule.
 - refreshApi.trigger(sourceId: string, request: RefreshTriggerRequest) -> RefreshRun maps to POST /api/v2/refresh/sources/{sourceId}/run; it sends only the persisted policy/mode and bounded backfill window.
+- refreshApi.cancel(runId: string, reason: string) -> RefreshRun maps to POST /api/v2/refresh/runs/{runId}/cancel with body {"reason": reason}; the operator identity comes from the authenticated session and the client sends no lease/fence/cursor/source/payload.
 - refreshApi.replay(runId: string, deadLetterId?: string) -> RefreshRun maps to POST /api/v2/refresh/runs/{runId}/replay; it sends no cursor, source URL, credential, broker, or event payload.
 - Every method uses the existing authenticated API client and maps only to its listed endpoint; client code does not evaluate authorization, risk, hashes, or writes.
-- The UI displays refresh policy, source config version/cursor contract, schedule timezone/business calendar, next due time, cursor/watermark, per-partition checkpoint/expected-next sequence/gap state and claimed config version when present, source lag/SLA, latest run status, retry count, DLQ/replay state, snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It distinguishes DENY from ALLOW with no matching data and renders `CONFIGURATION_DRIFT` as a failed run requiring a new claim, never as a successful refresh.
+- The UI displays refresh policy, source config version/cursor contract, schedule timezone/business calendar, next due time, cursor/watermark, per-partition checkpoint/expected-next sequence/gap state and claimed config version when present, source lag/SLA, latest run status, retry count, DLQ/replay state, cancellation requested actor/time/reason and terminal `cancelled` or `CANCELLATION_TOO_LATE` state, snapshot ID, release ID, evidence citations, rule outcome, decision/reason code, before/after diff, impact, risk class, exact plan hash, receipt, and reconciliation state. It shows a cancel control only for an authorized active run, disables it after a durable terminal state, distinguishes `CANCELLATION_TOO_LATE` from a successful cancellation, distinguishes DENY from ALLOW with no matching data, and renders `CONFIGURATION_DRIFT` as a failed run requiring a new claim, never as a successful refresh.
 - Protected routes are added under /runtime/refresh/:sourceId, /runtime/investigate, /runtime/action-plans/:planId, /runtime/sandbox/:planId, /runtime/approvals, and /runtime/reconciliation/:planId.
 - Playwright uses test_data/runtime/playwright_seed.json and existing authenticated helpers; it never connects to a production system.
 
@@ -2502,17 +2650,19 @@ Phase 2 is acceptable only when the following evidence is present in the generat
       expect(post).toHaveBeenCalledWith('/runtime/executions/execution-001/rollback-plans', {})
     })
 
-    it('maps refresh status, schedule, trigger, and replay without accepting cursor or broker data', async () => {
+    it('maps refresh status, schedule, trigger, cancellation, and replay without accepting cursor or broker data', async () => {
       const get = vi.spyOn(apiClientV2, 'get').mockResolvedValue({ data: {} })
       const put = vi.spyOn(apiClientV2, 'put').mockResolvedValue({ data: {} })
       const post = vi.spyOn(apiClientV2, 'post').mockResolvedValue({ data: {} })
       await refreshApi.getStatus('source-001')
       await refreshApi.setSchedule('source-001', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
       await refreshApi.trigger('source-001', { mode: 'micro_batch' })
+      await refreshApi.cancel('run-running-001', 'planned source maintenance')
       await refreshApi.replay('run-dead-001', 'dlq-001')
       expect(get).toHaveBeenCalledWith('/refresh/sources/source-001/status')
       expect(put).toHaveBeenCalledWith('/refresh/sources/source-001/schedule', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
       expect(post).toHaveBeenCalledWith('/refresh/sources/source-001/run', { mode: 'micro_batch' })
+      expect(post).toHaveBeenCalledWith('/refresh/runs/run-running-001/cancel', { reason: 'planned source maintenance' })
       expect(post).toHaveBeenCalledWith('/refresh/runs/run-dead-001/replay', { dead_letter_id: 'dlq-001' })
     })
 
@@ -2561,6 +2711,27 @@ Phase 2 is acceptable only when the following evidence is present in the generat
       await expect(page.getByTestId('refresh-partition-p-0-checkpoint')).toHaveText('0')
     })
 
+    test('operator cancels an in-flight refresh and sees unchanged progress', async ({ page }) => {
+      await seedRuntimePage(page, 'cancel-inflight-page')
+      await page.goto('/runtime/refresh/source-001')
+      await expect(page.getByTestId('refresh-latest-status')).toHaveText('CANCEL_REQUESTED')
+      await page.getByTestId('cancel-refresh-run').click()
+      await expect(page.getByTestId('refresh-latest-status')).toHaveText('CANCELLED')
+      await expect(page.getByTestId('refresh-cancel-reason')).toHaveText('planned source maintenance')
+      await expect(page.getByTestId('refresh-cursor')).toHaveText('100')
+      await expect(page.getByTestId('refresh-partition-p-0-checkpoint')).toHaveText('0')
+    })
+
+    test('operator sees cancellation too late without pretending to roll back committed outcome', async ({ page }) => {
+      await seedRuntimePage(page, 'cancel-after-durable-outcome')
+      await page.goto('/runtime/refresh/source-001')
+      await expect(page.getByTestId('refresh-latest-status')).toHaveText('SUCCEEDED')
+      await page.getByTestId('cancel-refresh-run').click()
+      await expect(page.getByTestId('refresh-cancel-error')).toHaveText('CANCELLATION_TOO_LATE')
+      await expect(page.getByTestId('refresh-latest-status')).toHaveText('SUCCEEDED')
+      await expect(page.getByTestId('refresh-snapshot-id')).toHaveText('snap-refresh-committed-001')
+    })
+
 - [ ] **Step 2: Run frontend tests to verify they fail.**
 
     Run: (cd frontend && npm run test:unit -- src/api/runtime.test.ts src/api/refresh.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx src/pages/runtime/RefreshOperationsPage.test.tsx)
@@ -2571,7 +2742,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
 - [ ] **Step 3: Implement the operator surface.**
 
-    Implement every runtimeApi and refreshApi method with the exact path/body mapping above using the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Add route handlers and UI controls for schedule update, refresh trigger, lag/cursor/status display, bounded DLQ replay, Sandbox query, exact-hash approval, exact-hash execution, reconciliation query, and rollback-plan creation. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls; the UI never constructs a cursor, SQL, broker, credential, or write target.
+    Implement every runtimeApi and refreshApi method with the exact path/body mapping above using the existing API client, auth store, Layout, protected routes, i18n, and Playwright helpers. Add route handlers and UI controls for schedule update, refresh trigger, cancel request with reason, cancellation requested/cancelled/too-late display, lag/cursor/status display, bounded DLQ replay, Sandbox query, exact-hash approval, exact-hash execution, reconciliation query, and rollback-plan creation. Render all evidence and governance states from server responses, keep identity and policy decisions server-owned, and provide only operator review/approval/reconciliation controls; the UI never constructs a cursor, SQL, broker, credential, or write target.
 
 - [ ] **Step 4: Run component, build, and Playwright tests.**
 
@@ -2583,7 +2754,7 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
     (cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
 
-    Expected: PASS for every refresh/runtime endpoint mapping, T+1 schedule display, source config version/contract, cursor and per-partition checkpoint/gap/lag display, configuration-drift failed status with unchanged checkpoint, failed/DLQ replay state, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
+    Expected: PASS for every refresh/runtime endpoint mapping, authenticated cancellation mapping, T+1 schedule display, source config version/contract, cursor and per-partition checkpoint/gap/lag display, cancel-before/inflight/after-commit operator states with unchanged progress or `CANCELLATION_TOO_LATE` preservation, configuration-drift failed status with unchanged checkpoint, failed/DLQ replay state, normal investigation, allowed empty result, denied result, Sandbox diff, automatic state, exact-plan HITL, stale rejection, receipt, reconciliation query, and rollback-plan display.
 
 - [ ] **Step 5: Commit operator surfaces.**
 
@@ -2605,17 +2776,18 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 - Modify: .github/workflows/agent-mvp.yml
 - Modify: test_data/runtime/README.md
 - Modify: test_data/runtime/capacity_profile.json
+- Modify: test_data/runtime/db/docker-compose.yml
 - Modify: README.md
 - Modify: README_zh.md
 
 **Interfaces:**
 
 - test_acceptance_matrix.py loads every case from test_data/runtime/manifest.json and its registered targets from test_data/runtime/registry.py; it never calls an untyped run_case function.
-- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, `refresh_mode`/`source_contract`/`cursor_outcome` for refresh layers, `source_contract == "sequence_partition"` cases to carry partition and `sequence_outcome`, and the `config-drift-late-finish` case to carry `error_code == CONFIGURATION_DRIFT` plus unchanged cursor/checkpoint outcomes. It also requires a Playwright target descriptor for E2E layers. Task 28 additionally calls target_is_listable for every registered target after Tasks 6–27 have created the referenced pytest, SDK, and Playwright tests.
+- assert_case_registry(case: Mapping[str, object]) -> None requires case_id, expected, layers, test_targets, and coverage, checks the manifest/registry bidirectional mapping and target descriptor syntax, and requires both postgresql and mysql for database layers, all four rest/sdk/mcp/reference-agent transports for parity layers, `refresh_mode`/`source_contract`/`cursor_outcome` for refresh layers, `source_contract == "sequence_partition"` cases to carry partition and `sequence_outcome`, cancellation cases to carry `cancel_outcome` and unchanged progress metadata, and the `config-drift-late-finish` case to carry `error_code == CONFIGURATION_DRIFT` plus unchanged cursor/checkpoint outcomes. A `cancel-after-durable-outcome` case must carry `error_code == CANCELLATION_TOO_LATE` and committed-outcome preservation. It also requires a Playwright target descriptor for E2E layers. Task 28 additionally calls target_is_listable for every registered target after Tasks 6–27 have created the referenced pytest, SDK, and Playwright tests.
 - The CI workflow has dedicated steps for fixture generation/check, refresh contract/schedule/polling/event/API tests, backend Runtime unit tests, PostgreSQL/MySQL refresh and writeback integration, SDK tests, frontend test:ci, refresh/runtime Playwright governance E2E, and Compose validation; backend Python 3.11/3.12 coverage remains.
-- The CI workflow also runs the named queue/route registration, run-ID-only dispatch, graceful interruption, operability/readiness, queue-saturation-isolation, and capacity-profile tests. It validates both Compose files' queue-bound worker profiles and `app.tasks.celery_app` entry point without requiring an external CDC producer/broker.
+- The CI workflow also runs the named queue/route registration, run-ID-only dispatch, graceful interruption, operability/readiness, queue-saturation-isolation, durable cancellation, and capacity-profile tests. It validates both application Compose files' queue-bound worker profiles and `app.tasks.celery_app` entry point without requiring an external CDC producer/broker. A separate real-fixture job starts Redis plus four `-Q`-bound refresh workers from `test_data/runtime/db/docker-compose.yml` with `docker compose ... up -d --wait`, dispatches durable run IDs through reachable host Redis, asserts live worker event/hostname consumption for every named queue, and tears the unique project down with `docker compose ... down -v --remove-orphans`; it refuses reserved ports 55432/53306/56379 when occupied and never substitutes send-only, eager, or in-process fakes.
 - The CI SDK job installs the package and its declared runtime dependencies with `(cd "$REPO_ROOT" && python -m pip install -e sdk)` before running `(cd "$REPO_ROOT/sdk" && python -m pytest tests -q)`; the local release gate uses the same root-anchored install and test commands.
-- Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
+- Release evidence records the exact fixture manifest hash, Alembic head, service health, normalized parity results, database receipts, cancellation state-transition/cursor-checkpoint assertions, reconciliation IDs, test_no_pii_or_real_secret(), and the case-to-test registry result.
 - Release evidence records the exact capacity profile/report hash, measured queue/latency/lag/resource observations, deployment-limit comparison, and Python-versus-executor decision; it does not record task payloads, credentials, source rows, or a guessed throughput threshold.
 
 - [ ] **Step 1: Write the failing acceptance matrix.**
@@ -2638,9 +2810,16 @@ Phase 2 is acceptable only when the following evidence is present in the generat
                 assert case["refresh_mode"] in {"batch", "micro_batch", "event_driven"}
                 assert case["source_contract"] in {"watermark_primary_key", "opaque_source_cursor", "sequence_partition"}
                 assert case["cursor_outcome"] in {"advanced", "unchanged", "dead_lettered"}
+                if case["case_id"].startswith("cancel-"):
+                    assert case["cancel_outcome"] in {"requested", "cancelled", "cancellation_too_late"}
+                    assert case["cursor_outcome"] == "unchanged" or case["cancel_outcome"] == "cancellation_too_late"
+                    if case["cancel_outcome"] == "cancellation_too_late":
+                        assert case["error_code"] == "CANCELLATION_TOO_LATE"
                 if case["source_contract"] == "sequence_partition":
                     assert case["partition"]
                     assert case["sequence_outcome"] in {"accepted", "duplicate", "lower", "held_gap", "gap_timeout", "processed", "dead_lettered", "replayed"}
+                    if case["case_id"].startswith("cancel-"):
+                        assert case["partition_checkpoint_outcome"] == "unchanged"
             if "playwright" in case["layers"]:
                 assert any(target["kind"] == "playwright" for target in case["test_targets"])
 
@@ -2693,17 +2872,17 @@ Phase 2 is acceptable only when the following evidence is present in the generat
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_acceptance_matrix.py -q)
 
-    Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/refresh/Playwright marker, an expected assertion, a generated fixture, the configuration-drift error/progress invariants, or the named Python/Celery topology/capacity evidence.
+    Expected: FAIL for any design case without a registry target, a collectable/listable target, a required dialect/transport/refresh/Playwright marker, an expected assertion, a generated fixture, the configuration-drift or cancellation error/progress invariants, or the named Python/Celery topology/capacity evidence.
 
 - [ ] **Step 3: Wire final checks and document reproducible commands.**
 
-    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, refresh contract/schedule/polling/event/API tests, queue/route/operability/interruption tests, the capacity harness, Runtime unit/integration/parity tests, SDK tests, frontend test:ci, refresh/runtime Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands, synthetic database URLs, queue-bound worker profiles, and the external CDC producer/broker/network/credential prerequisites. The SDK CI job must install `-e sdk` (including the runtime dependencies declared by sdk/pyproject.toml) before collecting/running its tests. Its commands are:
+    Add fixture generation verification, test_no_pii_or_real_secret(), registry target collection/listing, refresh contract/schedule/polling/event/API/cancellation tests, queue/route/operability/interruption tests, the capacity harness, Runtime unit/integration/parity tests, SDK tests, frontend test:ci, refresh/runtime Playwright, and fresh-database Compose checks to the existing workflow. Keep frontend outside the Python matrix, retain backend 3.11/3.12, and document the exact local commands, synthetic database URLs, queue-bound worker profiles, and the external CDC producer/broker/network/credential prerequisites. The real capacity job must use the fixture Redis and worker services below rather than a send-only or eager fake; it uses the fixed ports only after a free-port preflight and isolates volumes/network with a unique Compose project. The SDK CI job must install `-e sdk` (including the runtime dependencies declared by sdk/pyproject.toml) before collecting/running its tests. Its commands are:
 
     REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
     (cd "$REPO_ROOT" && python -m pip install -e sdk)
     (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
-    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport/refresh mode, omits the `sequence_partition` cases or their `sequence_outcome`/partition metadata, omits the configuration-drift case or its `CONFIGURATION_DRIFT`/unchanged cursor/checkpoint metadata, points to a test target that cannot be collected/listed, or claims production CDC/broker availability that is not supplied by deployment configuration.
+    The acceptance matrix must fail closed if a manifest case is removed, lacks an assertion, loses a required dialect/transport/refresh mode, omits the `sequence_partition` cases or their `sequence_outcome`/partition metadata, omits the configuration-drift case or its `CONFIGURATION_DRIFT`/unchanged cursor/checkpoint metadata, omits cancellation cases or their `cancel_outcome`/unchanged progress/`CANCELLATION_TOO_LATE` metadata, points to a test target that cannot be collected/listed, or claims production CDC/broker availability that is not supplied by deployment configuration.
 
 - [ ] **Step 4: Run the complete release gate.**
 
@@ -2720,15 +2899,42 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
     (cd "$REPO_ROOT/backend" && python -m pytest tests/agent/test_celery_topology.py tests/v2/incremental/test_refresh_task_dispatch.py tests/v2/incremental/test_refresh_operability.py tests/v2/incremental/test_refresh_capacity.py -q)
 
-    (cd "$REPO_ROOT/backend" && python scripts/run_refresh_capacity.py --profile "$REPO_ROOT/test_data/runtime/capacity_profile.json" --output "$REPO_ROOT/artifacts/refresh-capacity.json" --broker-url redis://fixture --database-url postgresql://runtime:runtime@localhost:55432/runtime)
+    set -euo pipefail
+    CAPACITY_PROJECT="ontexus-release-capacity-${GITHUB_RUN_ID:-local}-$$"
+    CAPACITY_COMPOSE="$REPO_ROOT/test_data/runtime/db/docker-compose.yml"
+    check_capacity_port_free() {
+      python - "$1" <<'PY'
+import socket
+import sys
+port = int(sys.argv[1])
+with socket.socket() as sock:
+    sock.settimeout(0.25)
+    if sock.connect_ex(("127.0.0.1", port)) == 0:
+        raise SystemExit(f"reserved capacity fixture port is occupied: {port}")
+PY
+    }
+    for port in 55432 53306 56379; do check_capacity_port_free "$port"; done
+    cleanup_capacity_release() {
+      docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans || true
+    }
+    trap cleanup_capacity_release EXIT
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" up -d --wait postgres mysql redis refresh_schedule_worker refresh_poll_worker refresh_event_worker refresh_replay_worker
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" ps --status running postgres mysql redis refresh_schedule_worker refresh_poll_worker refresh_event_worker refresh_replay_worker
+    (cd "$REPO_ROOT/backend" && python scripts/run_refresh_capacity.py --profile "$REPO_ROOT/test_data/runtime/capacity_profile.json" --output "$REPO_ROOT/artifacts/refresh-capacity.json" --broker-url redis://127.0.0.1:56379/0 --database-url postgresql://runtime:runtime@127.0.0.1:55432/runtime --compose-project "$CAPACITY_PROJECT")
+    (cd "$REPO_ROOT" && python -c 'import json; p=json.load(open("artifacts/refresh-capacity.json")); assert p["queue_names"] == ["refresh.event", "refresh.poll", "refresh.replay", "refresh.schedule"]; assert {x["queue"] for x in p["queue_consumption"]} == set(p["queue_names"]); assert all(x["worker_hostname"] not in (None, "inprocess", "fake") and x["status"] == "succeeded" for x in p["queue_consumption"])')
+    docker compose -p "$CAPACITY_PROJECT" -f "$CAPACITY_COMPOSE" down -v --remove-orphans
+    trap - EXIT
 
     (cd "$REPO_ROOT/backend" && python -m pytest tests/runtime/test_acceptance_matrix.py -q)
 
     (cd "$REPO_ROOT" && python -m pytest test_data/runtime/test_fixture_manifest.py -q)
 
-    (cd "$REPO_ROOT" && docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait)
+    DIALECT_PROJECT="ontexus-dialect-${GITHUB_RUN_ID:-local}-$$"
+    (cd "$REPO_ROOT" && docker compose -p "$DIALECT_PROJECT" -f test_data/runtime/db/docker-compose.yml up -d --wait postgres mysql)
 
     (cd "$REPO_ROOT/backend" && RUNTIME_POSTGRES_URL=postgresql://runtime:runtime@localhost:55432/runtime RUNTIME_MYSQL_URL=mysql+pymysql://runtime:runtime@localhost:53306/runtime python -m pytest tests/v2/incremental/integration tests/runtime/integration -q)
+    (cd "$REPO_ROOT" && docker compose -p "$DIALECT_PROJECT" -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans)
 
     (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
 
@@ -2757,12 +2963,12 @@ Phase 2 is acceptable only when the following evidence is present in the generat
     curl -fsS http://127.0.0.1:5173/ >/dev/null
     docker compose -p "$SMOKE_PROJECT" -f "$REPO_ROOT/docker-compose.v2.yml" down -v --remove-orphans
 
-    Expected: all M1, Phase 2 refresh/lineage, and Phase 3 checks pass; every case points to collectable/listable tests; batch, micro-batch, and bounded event-driven cases show cursor/idempotency/lineage/freshness evidence; the Python/Celery topology shows explicit named queue routes, run-ID-only messages, bounded worker settings, graceful retry, queue saturation isolation, and sanitized readiness metrics; the capacity report records measured values and compares only to profile limits; sequence cases show independent partition progress, N+1 hold and in-order release, gap-timeout DLQ, fencing, and replay-without-regression; configuration upgrade after claim makes outcome validation compare the frozen revision/contract before lease/owner/fencing validation, produces typed `CONFIGURATION_DRIFT` with no DatasetVersion/PipelineRun lineage association, cursor, or partition-checkpoint progress, and invalidates the old lease/fence; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; external CDC prerequisites are reported rather than assumed; and the final isolated volumes are removed.
+    Expected: all M1, Phase 2 refresh/lineage, and Phase 3 checks pass; every case points to collectable/listable tests; batch, micro-batch, and bounded event-driven cases show cursor/idempotency/lineage/freshness evidence; the Python/Celery topology shows explicit named queue routes, run-ID-only messages, bounded worker settings, graceful retry, queue saturation isolation, and sanitized readiness metrics; the capacity report records measured values from live queue-bound workers on every refresh queue and compares only to profile limits; sequence cases show independent partition progress, N+1 hold and in-order release, gap-timeout DLQ, fencing, and replay-without-regression; cancellation cases prove fenced cancel-before/inflight/after-tentative-materialization safe points leave cursor/checkpoint/lineage unchanged, while a cancellation request after durable outcome returns `CANCELLATION_TOO_LATE` and preserves the committed DatasetVersion/PipelineRun/SemanticSnapshot; configuration upgrade after claim makes outcome validation compare the frozen revision/contract before lease/owner/fencing validation, produces typed `CONFIGURATION_DRIFT` with no DatasetVersion/PipelineRun lineage association, cursor, or partition-checkpoint progress, and invalidates the old lease/fence; fresh v2 Compose reaches healthy backend/frontend after migration completion; no production connector is used by Sandbox; both dialects reject binding/connection drift before a transaction; external CDC prerequisites are reported rather than assumed; and the final isolated volumes are removed.
 
 - [ ] **Step 5: Commit the release gate.**
 
     REPO_ROOT="$(git rev-parse --show-toplevel)"
-    git -C "$REPO_ROOT" add backend/tests/runtime/test_acceptance_matrix.py .github/workflows/agent-mvp.yml test_data/runtime/README.md README.md README_zh.md
+    git -C "$REPO_ROOT" add backend/tests/runtime/test_acceptance_matrix.py backend/tests/v2/incremental/test_refresh_cancellation.py backend/tests/v2/incremental/integration/test_refresh_cancellation_dialects.py .github/workflows/agent-mvp.yml test_data/runtime/README.md test_data/runtime/db/docker-compose.yml README.md README_zh.md
 
     git -C "$REPO_ROOT" commit -m "ci: add semantic runtime acceptance gates"
 
@@ -2770,19 +2976,19 @@ Phase 2 is acceptable only when the following evidence is present in the generat
 
 The implementation sequence covers the design in this order:
 
-- Product boundary, source refresh policy, authoritative source/partition state, durable cursor/checkpoint lease/fencing/configuration-revision/idempotency/inbox state, Python/Celery execution topology, queue isolation, backpressure/operability, T+1 schedules, bounded polling/event ingestion, retry/DLQ/replay, and refresh status operations: Tasks 1 and 6–10.
+- Product boundary, source refresh policy, authoritative source/partition state, durable cursor/checkpoint lease/fencing/configuration-revision/idempotency/inbox state, fenced cancellation state machine and safe-point rule, Python/Celery execution topology, queue isolation, backpressure/operability, T+1 schedules, bounded polling/event ingestion, retry/DLQ/replay, and refresh status/cancellation operations: Tasks 1 and 6–10.
 - Pipeline and semantic foundation, separate immutable release/snapshot contracts, quality/evidence, full dataset-version and pipeline-run lineage: Tasks 1, 11, and 12.
 - Trusted registered Agent/service identity, credential-derived user delegation, audience, scope, TTL, revocation, and same-security-domain checks: Task 13.
 - Effective capability ∩ entitlement ∩ runtime policy, structured ALLOW/DENY, stable reason codes, evidence, rules, empty-result distinction, and snapshot-pinned investigation/action plans: Tasks 14 and 15.
 - Versioned REST/API, Python SDK v1, MCP OAuth adapters, built-in reference Agent, compatibility paths, and transport normalization/hash parity: Tasks 16–19.
 - Refresh freshness/lag/cursor/lineage propagation, stale/unknown ALLOW/DENY/HITL routing, and historical evidence immutability: Task 20.
-- Python remains the Phase 2 control and governed execution plane, with FastAPI request-only persistence/authentication and Celery worker execution; queue-bound Compose reference roles, graceful interruption, capacity measurement, and contract-preserving executor extraction decision: Tasks 2, 6A, 8, 10, 10A, and 28.
+- Python remains the Phase 2 control and governed execution plane, with FastAPI request-only persistence/authentication and Celery worker execution; queue-bound Compose reference roles, graceful interruption, durable cancellation, live capacity-fixture worker evidence, and contract-preserving executor extraction decision: Tasks 2, 6A, 8, 9, 10, 10A, and 28.
 - Snapshot-backed Sandbox boundary and immutable simulation output: Task 22.
 - Managed binding, frozen target/parameters, before-image/version hashes, canonical plan_hash, secret exclusion, and drift rejection: Tasks 21 and 26.
 - Automatic, human-approved, and rejected policy classes; exact-plan HITL; expiry and revalidation: Tasks 23 and 26.
 - PostgreSQL/MySQL parameterized single-target updates, minimum privilege, dialect transactions/timeouts, exact row counts, optimistic locking, idempotency, fencing, audit, reconciliation, and governed rollback plan: Tasks 24–26.
 - Governed Sandbox/approval/execute/reconciliation/rollback REST endpoints with RuntimeContext and structured DENY responses: Task 26A.
-- Operator refresh/runtime lineage, diff/approval/receipt/reconciliation surfaces, and full normal/edge/security/Playwright evidence: Tasks 1, 10, 26A, 27, and 28.
+- Operator refresh/runtime lineage, diff/approval/receipt/reconciliation surfaces, durable cancellation visibility, and full normal/edge/security/Playwright evidence: Tasks 1, 10, 26A, 27, and 28.
 
 The following remain explicit non-goals: generic Agent orchestration, chat UX replacement, separate MCP policy, release-only evidence, arbitrary code/prompt/tool sandboxing, Agent-supplied SQL or secrets, arbitrary SQL/DDL, multi-target transactions, destructive deletes, arbitrary Kafka/broker sources or a general stream-processing platform, a repository-owned CDC producer/broker, broad connector expansion, Python-to-Go/Java/Rust rewrites, Kubernetes/autoscaling implementation, and unrelated refactoring. Production CDC is gated on enterprise source availability, network, credentials, retention, schema compatibility, and operations ownership.
 
@@ -2793,15 +2999,21 @@ Before committing or handing this plan to a coding agent, verify from the curren
 - `backend/app/tasks/celery_app.py` has no `task_routes`/`task_queues` contract and includes `app.tasks.extraction`, so Task 2/6A explicitly repair the stale app entry point and add named routes rather than assuming queue isolation already exists.
 - `docker-compose.v2.yml` has one `celery_worker`/beat path and invokes `app.tasks.extraction`; Task 2/6A explicitly replace that path with `app.tasks.celery_app` and declare queue-bound profiles.
 - `docker-compose.agent.yml` has dispatcher/artifact/beat/watchdog/sweeper role names but no refresh `-Q` route; Task 6A explicitly binds queues and adds refresh/interactive roles.
+- `test_data/runtime/db/docker-compose.yml` is a database-only fixture in the review baseline and does not provide Redis or live refresh workers; Task 1/10A/28 now define the project-scoped Redis service, fixed test port/network, four `-Q`-bound `app.tasks.celery_app` workers, live-consumption assertion, collision preflight, and `down -v` cleanup.
 - `backend/app/routers/v2/connections.py` currently dispatches from the request path and `backend/app/tasks/v2/connection_sync.py` is a stub; Task 7/10 define the durable-run-first, run-ID-only dispatch and connector-free FastAPI test.
 - `backend/app/tasks/v2/pipeline_run.py` currently accepts a pipeline/run pair and can load a fixed version; Task 8 retains the explicit pinned-input contract and places materialization in workers.
+- Task 6 now owns the durable `cancel_requested`/`cancelled` state and `request_refresh_cancellation`; Tasks 8/9 must check it at connector/CDC/materialization boundaries and in `record_refresh_outcome`, while Task 10/27 expose authorized cancellation and `CANCELLATION_TOO_LATE` without rollback claims.
 
 The following consistency checks are mandatory and have no placeholder outcome:
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 (cd "$REPO_ROOT" && rg -n "app\.tasks\.extraction|task_routes|task_queues|celery_worker|dispatcher|artifact_worker" backend/app/tasks/celery_app.py docker-compose.v2.yml docker-compose.agent.yml)
-(cd "$REPO_ROOT" && rg -n 'TO''DO|T''BD|add appropriate|implement later|write tests for the above' docs/superpowers/plans/2026-08-26-agent-semantic-infrastructure-implementation.md)
+PLACEHOLDER_A='TO''DO'
+PLACEHOLDER_B='T''BD'
+PLACEHOLDER_C='add'" appropriate"
+PLACEHOLDER_D='write tests for the '"above"
+(cd "$REPO_ROOT" && rg -n "$PLACEHOLDER_A|$PLACEHOLDER_B|$PLACEHOLDER_C|$PLACEHOLDER_D" docs/superpowers/plans/2026-08-26-agent-semantic-infrastructure-implementation.md)
 (cd "$REPO_ROOT" && python - <<'PY'
 from pathlib import Path
 import re
@@ -2813,9 +3025,22 @@ for name in ("refresh.schedule", "refresh.poll", "refresh.event", "refresh.repla
     assert plan.count(name) >= 3, name
 assert "RefreshDispatchMessage" in plan and "enqueue_refresh_run" in plan
 assert "CapacityMeasurement" in plan and "run_refresh_capacity" in plan
+assert "CapacityQueueConsumption" in plan and "assert_capacity_workers_consumed_named_queues" in plan
+assert "redis://127.0.0.1:56379/0" in plan and "up -d --wait" in plan and "down -v --remove-orphans" in plan
+assert "refresh_schedule_worker" in plan and "refresh_poll_worker" in plan and "refresh_event_worker" in plan and "refresh_replay_worker" in plan
+assert "request_refresh_cancellation" in plan and "finalize_refresh_cancellation" in plan
+assert "cancel_requested_at" in plan and "CANCELLATION_TOO_LATE" in plan
+assert "test_refresh_cancellation_dialects.py" in plan
+assert "redis://" + "fixture" not in plan
+assert plan.index("RefreshDispatchMessage` is an immutable") < plan.index("enqueue_refresh_run")
+assert plan.index("request_refresh_cancellation(db: Session") < plan.index("cancel_refresh_run(db: Session")
+assert plan.index("finalize_refresh_cancellation(db: Session") < plan.index("Celery task `refresh.poll")
+assert plan.index("assert_refresh_not_cancelled(db: Session") < plan.index("Celery task `refresh.poll")
+assert plan.index("CapacityQueueConsumption` is an immutable") < plan.index("def test_capacity_harness_observes_live_workers_consuming_named_queues")
+assert plan.index("CancelRefreshRequest` contains exactly") < plan.index("POST /api/v2/refresh/runs/{run_id}/cancel")
 print("plan coverage/placeholder/type-order self-review passed")
 PY
 )
 ```
 
-The self-review must report the current evidence, task ordering, absence of placeholders, exact queue names, run-ID dispatch interface, and capacity interfaces before the plan is considered ready. No code, Compose file, design document, or unrelated user change is modified by this plan update.
+The self-review must report the current evidence, task ordering, absence of placeholders, exact queue names, run-ID dispatch interface, capacity fixture/worker-consumption interfaces, cancellation functions and API, and definition-before-use ordering before the plan is considered ready. No code, Compose file, design document, or unrelated user change is modified by this plan update.
