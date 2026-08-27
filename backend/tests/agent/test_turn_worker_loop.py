@@ -155,6 +155,17 @@ def schema():
     assert _alembic(schema, "upgrade", "0019_agent_memory_long_term").returncode == 0
     yield schema
     with engine.begin() as connection:
+        # A test that raises between a raw session.execute() and its
+        # session.close() (e.g. a failing assert) leaves that session's
+        # transaction "idle in transaction", which would otherwise block
+        # this DROP SCHEMA indefinitely and hang the entire test run —
+        # reproduced: a single failing assertion here hung `pytest -q` for
+        # 12+ minutes until manually killed. Clear any such stale
+        # connections first so a test failure fails fast instead of hanging.
+        connection.execute(text(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE state = 'idle in transaction' AND pid != pg_backend_pid()"
+        ))
         connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
     engine.dispose()
 
