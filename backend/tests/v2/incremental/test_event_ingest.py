@@ -11,7 +11,7 @@ import pytest
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import DatasetVersion
 from app.models.v2.pipeline import PipelineRunInput
-from app.models.v2.refresh import RefreshInboxEvent, RefreshRun, RefreshSourceState
+from app.models.v2.refresh import RefreshDeadLetter, RefreshInboxEvent, RefreshRun, RefreshSourceState
 from app.schemas.refresh import ChangeEnvelope, RefreshLeaseError
 from app.services.v2.incremental import event_ingest
 from app.services.v2.incremental.contract import update_source_configuration
@@ -286,6 +286,87 @@ def test_second_event_waits_for_source_lease_then_drains(db):
     second_run_id = recovered[0].run_id
     assert second_run_id is not None
     assert service.process(db, run_id=second_run_id, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(minutes=1)).status == "succeeded"
+
+
+def test_lease_contended_event_with_later_config_drift_is_dead_lettered_and_replayable(db):
+    _source(db, schema_hash="schema-v1")
+    service = EventIngestService()
+    first = ManagedOutboxAdapter.normalize(_record(event_id="evt-first"), source_id="source-001", received_at=FIXED_NOW)
+    second = ManagedOutboxAdapter.normalize(
+        _record(event_id="evt-second", watermark="2026-08-26T02:00:00Z"),
+        source_id="source-001", received_at=FIXED_NOW,
+    )
+
+    first_receipt = service.accept(db, first, lease_owner="event-worker-001", now=FIXED_NOW)
+    pending = service.accept(db, second, lease_owner="event-worker-002", now=FIXED_NOW)
+    assert pending.run_id is None
+
+    update_source_configuration(
+        db, source_id="source-001", resource="orders", cursor_contract="watermark_primary_key",
+        configuration={"schema_hash": "schema-v2"}, now=FIXED_NOW + timedelta(seconds=1),
+    )
+    drained = service.drain_pending(
+        db, dispatch=lambda _run_id: None, lease_owner="event-dispatcher", now=FIXED_NOW + timedelta(minutes=1),
+        source_id="source-001", resource="orders",
+    )
+
+    second_drained = next(receipt for receipt in drained if receipt.event_id == "evt-second")
+    assert second_drained.status == "dead_lettered"
+    assert second_drained.reason_code == "SCHEMA_DRIFT"
+    assert second_drained.dead_letter_id is not None
+    inbox = db.query(RefreshInboxEvent).filter(RefreshInboxEvent.event_id == "evt-second").one()
+    assert inbox.state == "dead_lettered"
+    assert inbox.run_id is None
+    assert db.query(RefreshRun).filter(RefreshRun.id == first_receipt.run_id).one().status == "running"
+    assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.event_id == "evt-second").count() == 1
+    assert db.query(RefreshSourceState).one().cursor is None
+
+    replay = service.replay_dead_letter(
+        db, dead_letter_id=second_drained.dead_letter_id, operator_id="operator-001", now=FIXED_NOW + timedelta(minutes=2),
+    )
+
+    assert replay.id != first_receipt.run_id
+    assert replay.trigger == "replay"
+    replayed_inbox = db.query(RefreshInboxEvent).filter(RefreshInboxEvent.event_id == "evt-second").one()
+    assert replayed_inbox.state == "received"
+    assert replayed_inbox.run_id == replay.id
+    assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.event_id == "evt-second").one().replay_run_id == replay.id
+
+
+def test_broker_publish_failures_exhaust_delivery_budget_into_replayable_dlq(db):
+    _source(db)
+    service = EventIngestService(max_attempts=2)
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    fail = lambda _run_id: (_ for _ in ()).throw(RuntimeError("broker down"))
+
+    first = service.dispatch_pending(db, run_id=receipt.run_id, dispatch=fail, now=FIXED_NOW)
+    assert first.status == "publish_failed"
+    assert db.query(RefreshInboxEvent).one().delivery_attempts == 1
+    assert db.query(RefreshDeadLetter).count() == 0
+    retry_at = db.get(RefreshRun, receipt.run_id).dispatch_retry_at
+    assert retry_at == (FIXED_NOW + timedelta(seconds=15)).replace(tzinfo=None)
+
+    second = service.dispatch_pending(
+        db, run_id=receipt.run_id, dispatch=fail, now=FIXED_NOW + timedelta(seconds=16),
+    )
+
+    assert second.status == "dead_lettered"
+    assert second.reason_code == "PUBLISH_EXHAUSTED"
+    assert second.dead_letter_id is not None
+    assert db.query(RefreshInboxEvent).one().state == "dead_lettered"
+    assert db.query(RefreshInboxEvent).one().delivery_attempts == 2
+    assert db.get(RefreshRun, receipt.run_id).status == "dead_lettered"
+    dead_letter = db.query(RefreshDeadLetter).one()
+    assert dead_letter.reason == "PUBLISH_FAILED"
+    assert dead_letter.delivery_attempts == 2
+
+    replay = service.replay_dead_letter(
+        db, dead_letter_id=dead_letter.id, operator_id="operator-001", now=FIXED_NOW + timedelta(minutes=1),
+    )
+    assert replay.id != receipt.run_id
+    assert db.query(RefreshRun).filter(RefreshRun.idempotency_key == f"replay:event:{dead_letter.id}").count() == 1
+    assert db.query(RefreshInboxEvent).one().state == "received"
 
 
 def test_dlq_replay_recovers_a_run_persisted_before_crash(db, monkeypatch):

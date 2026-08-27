@@ -120,9 +120,20 @@ def _dead_letter_for_run(db: Session, run_id: str) -> RefreshDeadLetter | None:
     ).scalars().first()
 
 
+def _dead_letter_for_inbox(db: Session, row: RefreshInboxEvent) -> RefreshDeadLetter | None:
+    return db.execute(
+        select(RefreshDeadLetter).where(
+            RefreshDeadLetter.source_id == row.source_id,
+            RefreshDeadLetter.resource == row.resource,
+            RefreshDeadLetter.event_id == row.event_id,
+            RefreshDeadLetter.run_id.is_(None),
+        ).order_by(RefreshDeadLetter.created_at.desc())
+    ).scalars().first()
+
+
 def _receipt(db: Session, row: RefreshInboxEvent, *, status: str, reason_code: str = "ACCEPTED") -> IngestReceipt:
     run = db.get(RefreshRun, row.run_id) if row.run_id else None
-    letter = _dead_letter_for_run(db, run.id) if run is not None else None
+    letter = _dead_letter_for_run(db, run.id) if run is not None else _dead_letter_for_inbox(db, row)
     state = db.execute(
         select(RefreshSourceState).where(
             RefreshSourceState.source_id == row.source_id,
@@ -150,7 +161,15 @@ class EventIngestService:
     dead_letter_model = RefreshDeadLetter
 
     def __init__(self, *, max_attempts: int = 3):
+        # The durable inbox delivery counter is bounded by the same explicit
+        # retry budget used by refresh execution.  This prevents a broker
+        # outage from keeping a row retryable forever.
         self.max_attempts = max(1, min(20, int(max_attempts)))
+
+    @staticmethod
+    def _publish_retry_delay(attempt: int) -> int:
+        """Return a bounded exponential delay for broker redelivery."""
+        return min(300, 15 * (2 ** max(0, attempt - 1)))
 
     def _validate_source_contract(
         self, db: Session, *, state: RefreshSourceState, envelope: ChangeEnvelope,
@@ -301,7 +320,8 @@ class EventIngestService:
         letter = RefreshDeadLetter(
             id=str(uuid.uuid4()), source_id=run.source_id, resource=run.resource,
             event_id=inbox.event_id if inbox is not None else None, run_id=run.id,
-            reason=reason, delivery_attempts=run.retry_count,
+            reason=reason,
+            delivery_attempts=max(run.retry_count, inbox.delivery_attempts if inbox is not None else 0),
         )
         db.add(letter)
         if inbox is not None:
@@ -326,6 +346,39 @@ class EventIngestService:
         db.commit()
         db.refresh(run)
         return run
+
+    def _dead_letter_inbox_event(
+        self, db: Session, *, inbox_id: str, reason: str, now: datetime,
+    ) -> RefreshDeadLetter:
+        """Terminally retain a runless inbox event when its frozen envelope
+        can no longer be admitted under the current source revision.
+
+        No cursor or source lease is changed here: the accepted envelope and
+        its reason remain available for an operator replay after reconciliation.
+        """
+        inbox = db.execute(
+            select(RefreshInboxEvent).where(RefreshInboxEvent.id == inbox_id).with_for_update()
+        ).scalar_one()
+        letter = db.execute(
+            select(RefreshDeadLetter).where(
+                RefreshDeadLetter.source_id == inbox.source_id,
+                RefreshDeadLetter.resource == inbox.resource,
+                RefreshDeadLetter.event_id == inbox.event_id,
+                RefreshDeadLetter.run_id.is_(None),
+            ).with_for_update()
+        ).scalars().first()
+        if letter is None:
+            letter = RefreshDeadLetter(
+                id=str(uuid.uuid4()), source_id=inbox.source_id, resource=inbox.resource,
+                event_id=inbox.event_id, reason=reason,
+                delivery_attempts=inbox.delivery_attempts,
+            )
+            db.add(letter)
+        inbox.state = "dead_lettered"
+        inbox.processed_at = None
+        db.commit()
+        db.refresh(letter)
+        return letter
 
     def dead_letter(self, db: Session, *, run_id: str, reason: str, now: datetime) -> RefreshRun:
         return self._dead_letter_event(db, run_id=run_id, reason=reason, now=_as_utc(now))
@@ -406,12 +459,23 @@ class EventIngestService:
                 select(RefreshInboxEvent).where(RefreshInboxEvent.run_id == current.id).with_for_update()
             ).scalar_one()
             if current.dispatch_claim_owner == claim_owner:
+                current_row.delivery_attempts += 1
+                if current_row.delivery_attempts >= self.max_attempts:
+                    # Flush the persisted attempt before the terminal helper
+                    # commits the run/inbox/DLQ state together.
+                    db.flush()
+                    self._dead_letter_event(db, run_id=current.id, reason="PUBLISH_FAILED", now=now)
+                    durable = db.get(RefreshInboxEvent, current_row.id)
+                    return _receipt(
+                        db, durable, status="dead_lettered", reason_code="PUBLISH_EXHAUSTED",
+                    )
                 current.dispatch_state = "publish_failed"
                 current.dispatch_reason = "PUBLISH_FAILED"
-                current.dispatch_retry_at = now + timedelta(seconds=15)
+                current.dispatch_retry_at = now + timedelta(
+                    seconds=self._publish_retry_delay(current_row.delivery_attempts),
+                )
                 current.dispatch_claim_owner = None
                 current.dispatch_claim_expires_at = None
-                current_row.delivery_attempts += 1
             db.commit()
             return _receipt(db, current_row, status="publish_failed", reason_code="PUBLISH_FAILED")
 
@@ -486,12 +550,18 @@ class EventIngestService:
                         db.rollback()
                         continue
                     self._validate_source_contract(db, state=state, envelope=envelope)
-                except (EventIngressError, RefreshError):
+                except (EventIngressError, RefreshError) as exc:
                     # The original acceptance remains durable and auditable;
-                    # a current config/schema change must not erase it.  A
-                    # future operator replay can decide whether to resend.
+                    # a current config/schema change must not erase it.  Move
+                    # the runless row to the durable DLQ so an operator can
+                    # reconcile the source and replay the stored envelope.
+                    reason_code = getattr(exc, "reason_code", "SCHEMA_DRIFT")
                     db.rollback()
-                    receipts.append(_receipt(db, db.get(RefreshInboxEvent, row.id), status="received", reason_code="SCHEMA_DRIFT"))
+                    letter = self._dead_letter_inbox_event(
+                        db, inbox_id=row.id, reason=reason_code, now=now,
+                    )
+                    durable = db.get(RefreshInboxEvent, row.id)
+                    receipts.append(_receipt(db, durable, status="dead_lettered", reason_code=reason_code))
                     continue
 
                 existing = db.execute(
@@ -655,13 +725,13 @@ class EventIngestService:
         if letter is None:
             raise RefreshError("DEAD_LETTER_NOT_FOUND", f"no dead letter {dead_letter_id}")
         old = db.get(RefreshRun, letter.run_id) if letter.run_id else None
-        if old is None:
-            raise RefreshError("REFRESH_RUN_NOT_FOUND", "dead letter has no source run")
+        source_id = old.source_id if old is not None else letter.source_id
+        resource = old.resource if old is not None else letter.resource
         replay_key = f"replay:event:{letter.id}"
         existing = db.execute(
             select(RefreshRun).where(
-                RefreshRun.source_id == old.source_id,
-                RefreshRun.resource == old.resource,
+                RefreshRun.source_id == source_id,
+                RefreshRun.resource == resource,
                 RefreshRun.idempotency_key == replay_key,
             ).order_by(RefreshRun.created_at.desc())
         ).scalars().first()
@@ -672,6 +742,7 @@ class EventIngestService:
                     db.commit()
                     return linked
             if existing is not None:
+                letter.replay_run_id = existing.id
                 db.commit()
                 return existing
             db.rollback()
@@ -688,10 +759,25 @@ class EventIngestService:
         # The idempotency key is derived solely from the immutable DLQ ID.  If
         # a process crashed after claim_refresh_run committed but before the
         # replay audit update, this lookup recovers the same run.
+        if old is None:
+            state = db.execute(
+                select(RefreshSourceState).where(
+                    RefreshSourceState.source_id == source_id,
+                    RefreshSourceState.resource == resource,
+                )
+            ).scalar_one_or_none()
+            if state is None:
+                db.rollback()
+                raise RefreshError("SOURCE_STATE_MISSING", "dead letter source has no current state")
+            policy = RefreshPolicy.EVENT_DRIVEN
+            default_cursor_contract = state.cursor_contract
+        else:
+            policy = old.policy
+            default_cursor_contract = old.cursor_contract
         new = existing or claim_refresh_run(
-            db, source_id=old.source_id, resource=old.resource, policy=old.policy,
+            db, source_id=source_id, resource=resource, policy=policy,
             idempotency_key=replay_key, lease_owner=f"{operator_id}:replay",
-            now=now, default_cursor_contract=old.cursor_contract,
+            now=now, default_cursor_contract=default_cursor_contract,
         )
         new.trigger = "replay"
         new.dispatch_queue = QUEUE_REFRESH_EVENT
