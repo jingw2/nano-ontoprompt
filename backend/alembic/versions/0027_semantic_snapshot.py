@@ -230,7 +230,18 @@ def upgrade() -> None:
     # remove only that trigger while backfilling the new status column; the
     # manifest bytes and schema hash are never touched.
     _drop_release_immutability_guard()
-    op.add_column("ontology_releases", sa.Column("status", sa.String(20), nullable=True))
+    if _dialect_name() == "sqlite":
+        # SQLite can add a constrained column without recreating the parent
+        # table.  Keep this path in-place because mcp_write_requests and
+        # other legacy tables may hold foreign keys to ontology_releases.
+        op.execute(
+            "ALTER TABLE ontology_releases ADD COLUMN status VARCHAR(20) "
+            "NOT NULL DEFAULT 'published' "
+            "CONSTRAINT ck_ontology_releases_status "
+            "CHECK (status IN ('draft', 'published', 'revoked'))"
+        )
+    else:
+        op.add_column("ontology_releases", sa.Column("status", sa.String(20), nullable=True))
     op.execute(
         """
         UPDATE ontology_releases AS release
@@ -249,17 +260,7 @@ def upgrade() -> None:
            END
         """
     )
-    if _dialect_name() == "sqlite":
-        with op.batch_alter_table("ontology_releases", recreate="always") as batch_op:
-            batch_op.alter_column(
-                "status", nullable=False,
-                server_default=sa.text("'published'"), existing_type=sa.String(20),
-            )
-            batch_op.create_check_constraint(
-                "ck_ontology_releases_status",
-                "status IN ('draft', 'published', 'revoked')",
-            )
-    else:
+    if _dialect_name() != "sqlite":
         op.alter_column(
             "ontology_releases", "status", nullable=False,
             server_default=sa.text("'published'"), existing_type=sa.String(20),
@@ -407,9 +408,9 @@ def downgrade() -> None:
         with op.batch_alter_table("v2_pipeline_runs", recreate="always") as batch_op:
             batch_op.drop_constraint("ck_v2_pipeline_runs_success_completion", type_="check")
             batch_op.drop_constraint("ck_v2_pipeline_runs_status", type_="check")
-        with op.batch_alter_table("ontology_releases", recreate="always") as batch_op:
-            batch_op.drop_constraint("ck_ontology_releases_status", type_="check")
-            batch_op.drop_column("status")
+        # DROP COLUMN is supported by SQLite 3.35+ and, unlike batch table
+        # recreation, preserves existing FK references to ontology_releases.
+        op.execute("ALTER TABLE ontology_releases DROP COLUMN status")
     else:
         op.drop_constraint("ck_v2_pipeline_runs_success_completion", "v2_pipeline_runs", type_="check")
         op.drop_constraint("ck_v2_pipeline_runs_status", "v2_pipeline_runs", type_="check")

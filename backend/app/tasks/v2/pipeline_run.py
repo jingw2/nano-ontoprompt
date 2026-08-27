@@ -250,14 +250,17 @@ def _load_source_rows(
     source: dict,
     limit: int = 10000,
     input_dataset_version_ids=None,
+    selected_version=None,
 ) -> list[dict]:
-    from app.services.v2.incremental.polling import select_pinned_dataset_version
+    if selected_version is None:
+        from app.services.v2.incremental.polling import select_pinned_dataset_version
 
-    version = select_pinned_dataset_version(
-        db,
-        dataset_id=source["dataset_id"],
-        input_dataset_version_ids=input_dataset_version_ids,
-    )
+        selected_version = select_pinned_dataset_version(
+            db,
+            dataset_id=source["dataset_id"],
+            input_dataset_version_ids=input_dataset_version_ids,
+        )
+    version = selected_version
     if source["route"] == "C":
         if not version or not version.storage_uri:
             return []
@@ -447,14 +450,15 @@ def pipeline_run_task(
                 version = db.get(DatasetVersion, version_id)
                 if version is not None and version.dataset_id == source["dataset_id"]:
                     source_version_ids.append(version.id)
-            data = _load_source_rows(
-                db, svc, source,
-                input_dataset_version_ids=source_version_ids or None,
-            )
             source_version = select_pinned_dataset_version(
                 db,
                 dataset_id=source["dataset_id"],
                 input_dataset_version_ids=source_version_ids or None,
+            )
+            data = _load_source_rows(
+                db, svc, source,
+                input_dataset_version_ids=source_version_ids or None,
+                selected_version=source_version,
             )
             if source_version is not None and source_version.id not in lineage_version_ids:
                 lineage_version_ids.append(source_version.id)

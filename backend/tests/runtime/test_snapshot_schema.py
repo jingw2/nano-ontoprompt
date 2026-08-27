@@ -346,6 +346,90 @@ def test_manual_pipeline_run_without_pins_persists_output_and_lineage(db, monkey
     db.commit()
 
 
+def test_manual_pipeline_run_pins_one_source_version_for_load_and_lineage(db, monkeypatch):
+    from app.services.v2 import dataset_service
+    from app.services.v2.incremental import polling
+    from app.tasks.v2 import pipeline_run as pipeline_module
+
+    class MemoryStorage:
+        def put_bytes(self, bucket, key, data, content_type="application/octet-stream"):
+            return f"s3://{bucket}/{key}"
+
+    monkeypatch.setattr("app.database.SessionLocal", sessionmaker(bind=db.get_bind()))
+    monkeypatch.setattr(dataset_service, "get_storage_service", lambda: MemoryStorage())
+    monkeypatch.setattr(
+        pipeline_module,
+        "_execute_route",
+        lambda route, context, data: (data, context),
+    )
+
+    pipeline = Pipeline(
+        id="pipeline-race-001",
+        name="racing pipeline",
+        source_dataset_id="dataset-race-001",
+        route="A",
+        spec={},
+        status="active",
+    )
+    source_dataset = Dataset(id="dataset-race-001", name="race source", kind="structured")
+    source_version_a = DatasetVersion(
+        id="dataset-race-version-a",
+        dataset_id=source_dataset.id,
+        version_no=1,
+        rowcount=1,
+    )
+    source_version_b = DatasetVersion(
+        id="dataset-race-version-b",
+        dataset_id=source_dataset.id,
+        version_no=2,
+        rowcount=1,
+    )
+    source_dataset.latest_version_id = source_version_a.id
+    run = PipelineRun(
+        id="pipeline-run-race-001",
+        pipeline_id=pipeline.id,
+        status="pending",
+    )
+    db.add_all([pipeline, source_dataset, source_version_a, source_version_b, run])
+    db.commit()
+
+    selector_calls = 0
+    loaded_version_ids = []
+
+    def select_version_with_later_update(*args, **kwargs):
+        nonlocal selector_calls
+        selector_calls += 1
+        return source_version_a if selector_calls == 1 else source_version_b
+
+    monkeypatch.setattr(polling, "select_pinned_dataset_version", select_version_with_later_update)
+
+    def load_rows_using_selected_version(*args, selected_version=None, **kwargs):
+        if selected_version is None:
+            selected_version = polling.select_pinned_dataset_version(
+                args[0], dataset_id=args[2]["dataset_id"], input_dataset_version_ids=None,
+            )
+        loaded_version_ids.append(selected_version.id)
+        return [{"version_id": selected_version.id}]
+
+    monkeypatch.setattr(pipeline_module, "_load_source_rows", load_rows_using_selected_version)
+
+    pipeline_module.pipeline_run_task.run(pipeline.id, run.id)
+    db.expire_all()
+
+    persisted_run = db.get(PipelineRun, run.id)
+    assert persisted_run.status == "success"
+    assert loaded_version_ids == [source_version_a.id]
+    assert selector_calls == 1
+    assert db.query(PipelineRunInput).filter(
+        PipelineRunInput.pipeline_run_id == run.id,
+        PipelineRunInput.dataset_version_id == source_version_a.id,
+    ).one()
+    assert db.query(PipelineRunInput).filter(
+        PipelineRunInput.pipeline_run_id == run.id,
+        PipelineRunInput.dataset_version_id == source_version_b.id,
+    ).first() is None
+
+
 def _load_task_11_migration():
     migration_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0027_semantic_snapshot.py"
     spec = importlib.util.spec_from_file_location("task_11_snapshot_migration", migration_path)
@@ -433,7 +517,7 @@ def test_sqlite_migration_guards_reject_direct_snapshot_dml(db):
     db.rollback()
 
 
-def _sqlite_pre_0027_engine():
+def _sqlite_pre_0027_engine(*, foreign_keys=False):
     engine = create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()
     sa.Table("users", metadata, sa.Column("id", sa.String, primary_key=True))
@@ -475,12 +559,25 @@ def _sqlite_pre_0027_engine():
         sa.Column("dataset_version_id", sa.String, nullable=False),
         sa.Column("input_ordinal", sa.Integer, nullable=False),
     )
+    if foreign_keys:
+        sa.Table(
+            "mcp_write_requests", metadata,
+            sa.Column("id", sa.String, primary_key=True),
+            sa.Column(
+                "release_id", sa.String(36),
+                sa.ForeignKey("ontology_releases.id", ondelete="RESTRICT"),
+                nullable=False,
+            ),
+        )
     metadata.create_all(engine)
+    if foreign_keys:
+        with engine.connect() as connection:
+            connection.execute(text("PRAGMA foreign_keys=ON"))
     return engine
 
 
 def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
-    engine = _sqlite_pre_0027_engine()
+    engine = _sqlite_pre_0027_engine(foreign_keys=True)
     now = datetime.now(timezone.utc)
     with engine.begin() as connection:
         connection.execute(text(
@@ -499,6 +596,10 @@ def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
             "schema_hash": b"schema-hash",
             "created_at": now,
         })
+        connection.execute(text(
+            "INSERT INTO mcp_write_requests (id, release_id) "
+            "VALUES ('mcp-write-001', 'release-001')"
+        ))
         connection.execute(text(
             "INSERT INTO v2_pipelines (id) VALUES ('pipeline-001')"
         ))
@@ -538,6 +639,9 @@ def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
         assert connection.execute(text(
             "SELECT status FROM ontology_releases WHERE id='release-001'"
         )).scalar_one() == "published"
+        assert connection.execute(text(
+            "SELECT release_id FROM mcp_write_requests WHERE id='mcp-write-001'"
+        )).scalar_one() == "release-001"
         remediated = connection.execute(text(
             "SELECT status, error_log FROM v2_pipeline_runs WHERE id='pipeline-run-invalid'"
         )).one()
@@ -569,6 +673,9 @@ def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
         assert connection.execute(text(
             "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'semantic_snapshot%'"
         )).first() is None
+        assert connection.execute(text(
+            "SELECT release_id FROM mcp_write_requests WHERE id='mcp-write-001'"
+        )).scalar_one() == "release-001"
 
 
 def test_task_11_migration_is_next_linear_head():
