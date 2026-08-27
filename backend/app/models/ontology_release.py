@@ -36,6 +36,10 @@ class OntologyRelease(Base):
         CheckConstraint("version_no > 0", name="ck_ontology_releases_version_no"),
         CheckConstraint("octet_length(schema_hash) = 32", name="ck_ontology_releases_schema_hash_length"),
         CheckConstraint("digest(manifest_bytes, 'sha256') = schema_hash", name="ck_ontology_releases_manifest_integrity"),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'revoked')",
+            name="ck_ontology_releases_status",
+        ),
         Index("ix_ontology_releases_schema_hash", "schema_hash"),
     )
 
@@ -46,5 +50,8 @@ class OntologyRelease(Base):
     manifest_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     manifest_projection: Mapped[str] = mapped_column(CanonicalJSONB(), nullable=False)
     schema_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'published'"),
+    )
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"))

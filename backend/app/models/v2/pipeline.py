@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, JSON, Text, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, String, DateTime, JSON, Text, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -39,6 +39,16 @@ class PipelineVersion(Base):
 
 class PipelineRun(Base):
     __tablename__ = "v2_pipeline_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'success', 'failed', 'cancelled')",
+            name="ck_v2_pipeline_runs_status",
+        ),
+        CheckConstraint(
+            "status <> 'success' OR finished_at IS NOT NULL OR dataset_version_id IS NULL",
+            name="ck_v2_pipeline_runs_success_completion",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     pipeline_id: Mapped[str] = mapped_column(String, ForeignKey("v2_pipelines.id", ondelete="CASCADE"), nullable=False)
@@ -49,6 +59,15 @@ class PipelineRun(Base):
     error_log: Mapped[str | None] = mapped_column(Text, nullable=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_dataset_versions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def is_governed(self) -> bool:
+        """Whether this run has a completed, durable output for snapshot use."""
+        return (
+            self.status == "success"
+            and self.finished_at is not None
+            and self.dataset_version_id is not None
+        )
 
 
 class PipelineRunInput(Base):

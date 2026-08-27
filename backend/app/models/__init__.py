@@ -15,6 +15,7 @@ from app.models.entity_instance_relation import EntityInstanceRelation
 from app.models.security_domain import SecurityDomain
 from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken
 from app.models.ontology_release import OntologyRelease
+from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput
 from app.models.governance_audit import (
     GovernanceAuditLog,
     GovernanceAuditOutbox,
@@ -90,6 +91,7 @@ def load_all_models():
     from app.models.security_domain import SecurityDomain  # noqa: F401
     from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken  # noqa: F401
     from app.models.ontology_release import OntologyRelease  # noqa: F401
+    from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput  # noqa: F401
     from app.models.governance_audit import (  # noqa: F401
         GovernanceAuditLog,
         GovernanceAuditOutbox,
@@ -188,6 +190,8 @@ __all__ = [
     "AuthRefreshFamily",
     "AuthRefreshToken",
     "OntologyRelease",
+    "SemanticSnapshot",
+    "SemanticSnapshotInput",
     "GovernanceAuditLog",
     "GovernanceAuditOutbox",
     "GovernanceAuditChainHead",

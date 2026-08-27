@@ -23,6 +23,7 @@ from sqlalchemy import (
     DateTime,
     Integer,
     JSON,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -44,11 +45,11 @@ from app.services.v2.incremental.event_ingest import EventIngestService
 NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
 BACKEND_DIR = Path(__file__).resolve().parents[4]
 MIGRATION_BASE = "0021_mapping_entity_class_cn"
-MIGRATION_HEAD = "0026_refresh_event_inbox"
+MIGRATION_HEAD = "0027_semantic_snapshot"
 
 
 def _pre_refresh_tables() -> MetaData:
-    """Return the small baseline needed by migrations 0022-0026.
+    """Return the small baseline needed by migrations 0022-0027.
 
     The fixture schema is intentionally not a copy of the application
     database. These are the v2 tables that existed before the refresh
@@ -56,6 +57,27 @@ def _pre_refresh_tables() -> MetaData:
     Task 9 columns under test.
     """
     metadata = MetaData()
+    # Task 11's migration backfills OntologyRelease.status from the current
+    # publication pointer and adds snapshot foreign keys.  This integration
+    # fixture starts at 0021 with only the tables needed by the refresh path,
+    # so provide the small semantic foundation it references.
+    Table(
+        "users", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    Table(
+        "ontology_projects", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("latest_published_release_id", String(36), nullable=True),
+    )
+    Table(
+        "ontology_releases", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("manifest_bytes", LargeBinary(), nullable=False),
+        Column("schema_hash", LargeBinary(), nullable=False),
+        Column("created_by", String(36), nullable=False),
+    )
     for table_name, columns in {
         "v2_connections": [
             Column("id", String(36), primary_key=True),

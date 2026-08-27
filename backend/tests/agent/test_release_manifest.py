@@ -286,6 +286,7 @@ print(json.dumps({
     assert set(metadata["columns"]) == {
         "id", "ontology_id", "version_no", "version", "manifest_bytes",
         "manifest_projection", "schema_hash", "created_by", "created_at",
+        "status",
     }
     constraints = set(metadata["constraints"])
     assert constraints >= {
@@ -294,6 +295,7 @@ print(json.dumps({
         "ck_ontology_releases_manifest_integrity",
         "ck_ontology_releases_id_uuid",
         "ck_ontology_releases_version_no",
+        "ck_ontology_releases_status",
     }
     assert metadata["indexes"]["ix_ontology_releases_schema_hash"] is False
 
