@@ -2,12 +2,15 @@
 
 Every Python service process starts through this check before the guarded
 launcher execs its role command: the manifest must be structurally valid, its
-HMAC signature must match the canonical payload, and (when `--expect-head` is
-given) the pinned Alembic head must equal the declared core head.  Fails
-closed with stable codes; never mutates anything.
+HMAC signature must match the canonical payload, and the pinned Alembic head
+must equal the expected core head.  The expected head is resolved dynamically
+from the Alembic script directory (`--alembic-dir`) rather than a hand-
+maintained constant, so a new migration can never leave a stale pin behind;
+`--expect-head` remains for an explicit static check.  Fails closed with
+stable codes; never mutates anything.
 
     python scripts/verify_build_manifest.py \
-        --manifest /tmp/agent-manifest.signed.json --expect-head 0008_agent_tool_selection
+        --manifest /tmp/agent-manifest.signed.json --alembic-dir /app/alembic
 """
 from __future__ import annotations
 
@@ -29,7 +32,24 @@ REQUIRED_FIELDS = ("schema_contract_version", "manifest_version", "alembic_head"
                    "frontend_manifest_digest", "images", "signature")
 
 
-def verify_manifest(manifest: dict, expect_head: str | None = None) -> None:
+def resolve_alembic_head(alembic_dir: pathlib.Path) -> str:
+    """Read the single current Alembic head from a script directory. Fails
+    closed if there are zero or multiple heads (an unresolved branch)."""
+    from alembic.script import ScriptDirectory
+
+    heads = ScriptDirectory(str(alembic_dir)).get_heads()
+    if len(heads) != 1:
+        raise SystemExit(
+            f"BUILD_MANIFEST_INVALID: expected exactly one Alembic head in {alembic_dir}, got {sorted(heads)}"
+        )
+    return heads[0]
+
+
+def verify_manifest(
+    manifest: dict,
+    expect_head: str | None = None,
+    alembic_dir: pathlib.Path | None = None,
+) -> None:
     for field in REQUIRED_FIELDS:
         if field not in manifest:
             raise SystemExit(f"BUILD_MANIFEST_INVALID: missing field {field}")
@@ -47,6 +67,8 @@ def verify_manifest(manifest: dict, expect_head: str | None = None) -> None:
     actual = hmac.new(signing_key(), canonical_payload(manifest), "sha256").hexdigest()
     if not hmac.compare_digest(expected, actual):
         raise SystemExit("BUILD_MANIFEST_SIGNATURE_MISMATCH: manifest was tampered")
+    if alembic_dir is not None:
+        expect_head = resolve_alembic_head(alembic_dir)
     if expect_head is not None and manifest["alembic_head"] != expect_head:
         raise SystemExit(
             f"BUILD_MANIFEST_HEAD_MISMATCH: manifest {manifest['alembic_head']} != expected {expect_head}"
@@ -57,9 +79,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Verify the signed Agent build manifest")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--expect-head", default=None)
+    parser.add_argument("--alembic-dir", default=None)
     args = parser.parse_args(argv)
     manifest = json.loads(pathlib.Path(args.manifest).read_text())
-    verify_manifest(manifest, expect_head=args.expect_head)
+    alembic_dir = pathlib.Path(args.alembic_dir) if args.alembic_dir else None
+    verify_manifest(manifest, expect_head=args.expect_head, alembic_dir=alembic_dir)
     print(f"manifest OK (head={manifest['alembic_head']})")
     return 0
 

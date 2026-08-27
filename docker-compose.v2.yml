@@ -63,13 +63,22 @@ services:
       timeout: 5s
       retries: 5
 
+  migration:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes: [./backend:/app]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
+
   backend:
     build: ./backend
     ports: ["8000:8000"]
     env_file: .env
     depends_on:
-      db:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -79,14 +88,14 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   celery_worker:
     build: ./backend
     env_file: .env
     depends_on:
-      db:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -96,14 +105,14 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction worker --loglevel=info"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info"
 
   celery_beat:
     build: ./backend
     env_file: .env
     depends_on:
-      db:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -113,7 +122,7 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.extraction beat --loglevel=info"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=info"
 
   frontend:
     build: ./frontend

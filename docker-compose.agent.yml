@@ -36,7 +36,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
 
   api:
     image: ontexus-agent-api:agent-v1
@@ -49,7 +49,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   dispatcher:
     image: ontexus-agent-dispatcher:agent-v1
@@ -61,7 +61,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n dispatcher@%h"
 
   artifact_worker:
     image: ontexus-agent-worker:agent-v1
@@ -73,7 +73,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n worker@%h"
 
   beat:
     image: ontexus-agent-beat:agent-v1
@@ -85,7 +85,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=warning"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=warning"
 
   watchdog:
     image: ontexus-agent-watchdog:agent-v1
@@ -97,7 +97,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n watchdog@%h"
 
   sweeper:
     image: ontexus-agent-sweeper:agent-v1
@@ -109,7 +109,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ontexus:ontexus@db:5432/ontexus
       REDIS_URL: redis://redis:6379/0
-    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --expect-head 0021_mapping_entity_class_cn && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 -n sweeper@%h"
 
   frontend:
     image: ontexus-agent-frontend:agent-v1
