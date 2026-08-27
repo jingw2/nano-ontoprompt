@@ -11,6 +11,8 @@ from app.models.v2.refresh import RefreshRun
 from app.schemas.refresh import RefreshPolicy
 from app.services.v2.incremental import polling
 from app.services.v2.incremental.contract import claim_refresh_run, request_refresh_cancellation
+from app.services.v2.incremental.event_adapters import ManagedOutboxAdapter
+from app.services.v2.incremental.event_ingest import EventIngestService
 from app.services.v2.incremental.polling import poll_source
 
 from .test_refresh_polling import _SourceConnector, _cursor, _envelope, _polling_source
@@ -135,3 +137,41 @@ def test_cancellation_after_success_is_plain_already_terminal(db):
     assert cancelled.status == "succeeded"
     assert result.input_dataset_version_ids
     assert result.pipeline_run_id is not None
+
+
+def test_event_cancel_before_materialization_preserves_inbox_and_cursor(db):
+    event = _envelope("evt-event-1", "2026-08-26T01:00:00Z", "100", {"id": "100"})
+    _polling_source(db, connector=_SourceConnector(page=None))
+    service = EventIngestService()
+    receipt = service.accept(db, event, lease_owner="event-worker-001", now=NOW)
+    request_refresh_cancellation(
+        db, run_id=receipt.run_id, requested_by="operator-001", reason="stop", now=NOW,
+    )
+
+    result = service.process(db, run_id=receipt.run_id, lease_owner="event-worker-001", now=NOW)
+
+    assert result.status == "cancelled"
+    assert result.cursor_after == result.cursor_before
+    assert result.input_dataset_version_ids == []
+
+
+def test_event_outbox_envelope_uses_the_same_cancellation_contract(db):
+    _polling_source(db, connector=_SourceConnector(page=None))
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(
+        {
+            "version": 1, "event_id": "evt-event-2", "source_id": "source-001",
+            "resource": "orders", "operation": "upsert", "primary_key": "101",
+            "payload": {"id": "101"}, "watermark": "2026-08-26T01:00:00Z",
+            "schema_hash": "schema-v1", "occurred_at": NOW.isoformat(),
+        }, source_id="source-001", received_at=NOW,
+    )
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=NOW)
+    result = service.process(db, run_id=receipt.run_id, lease_owner="event-worker-001", now=NOW)
+
+    cancelled = request_refresh_cancellation(
+        db, run_id=result.run_id, requested_by="operator-001", reason="too late", now=NOW,
+    )
+    assert result.status == "succeeded"
+    assert cancelled.already_terminal is True
+    assert cancelled.status == "succeeded"

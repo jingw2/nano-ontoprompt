@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from celery.exceptions import SoftTimeLimitExceeded, WorkerShutdown
 
 from app.tasks.celery_app import celery_app
-from app.tasks.topology import QUEUE_REFRESH_POLL, enqueue_refresh_run
+from app.tasks.topology import QUEUE_REFRESH_EVENT, QUEUE_REFRESH_POLL, enqueue_refresh_run
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,89 @@ def _refresh_poll(run_id: str) -> dict:
 def refresh_poll_task(run_id: str) -> dict:
     """Run-ID-only polling worker entry."""
     return _refresh_poll(run_id)
+
+
+def _refresh_event(run_id: str) -> dict:
+    """Execute one durable inbox event; the worker receives only ``run_id``."""
+    import app.models  # noqa: F401
+    from app.database import SessionLocal
+    from app.models.v2.refresh import RefreshRun, RefreshRunTransition, RefreshSourceState
+    from app.schemas.refresh import ConfigurationDriftError, RefreshCancellationRequested
+    from app.services.v2.incremental.contract import finalize_refresh_cancellation, mark_refresh_retryable
+    from app.services.v2.incremental.event_ingest import EventIngestService
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        run = db.get(RefreshRun, run_id)
+        if run is None:
+            return {"run_id": run_id, "status": "missing"}
+        owner = run.lease_owner or f"refresh-event-worker:{uuid.uuid4()}"
+        try:
+            result = EventIngestService().process(
+                db, run_id=run_id, lease_owner=owner, now=datetime.now(timezone.utc),
+            )
+            return result.to_dict()
+        except RefreshCancellationRequested:
+            db.rollback()
+            current = db.get(RefreshRun, run_id)
+            finalized = finalize_refresh_cancellation(
+                db, run_id=run_id, lease_owner=current.lease_owner or owner,
+                fencing_token=current.fencing_token, now=datetime.now(timezone.utc),
+            )
+            return {"run_id": finalized.id, "status": finalized.status}
+        except SoftTimeLimitExceeded:
+            db.rollback()
+            retried = mark_refresh_retryable(
+                db, run_id=run_id, reason="WORKER_INTERRUPTED", now=datetime.now(timezone.utc),
+            )
+            return {"run_id": retried.id, "status": retried.status, "retry_count": retried.retry_count}
+        except (WorkerShutdown, KeyboardInterrupt, SystemExit):
+            db.rollback()
+            retried = mark_refresh_retryable(
+                db, run_id=run_id, reason="WORKER_INTERRUPTED", now=datetime.now(timezone.utc),
+            )
+            return {"run_id": retried.id, "status": retried.status, "retry_count": retried.retry_count}
+        except ConfigurationDriftError as exc:
+            # The frozen revision is authoritative.  Release only this run's
+            # matching ownership and leave the source cursor/lineage untouched.
+            db.rollback()
+            current = db.get(RefreshRun, run_id)
+            source_state = db.execute(
+                select(RefreshSourceState).where(
+                    RefreshSourceState.source_id == current.source_id,
+                    RefreshSourceState.resource == current.resource,
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if (
+                source_state is not None
+                and current.lease_owner is not None
+                and source_state.lease_owner == current.lease_owner
+                and source_state.fencing_token == current.fencing_token
+            ):
+                source_state.lease_owner = None
+                source_state.lease_expires_at = None
+                source_state.updated_at = datetime.now(timezone.utc)
+            old_status = current.status
+            current.status = "failed"
+            current.retry_reason = exc.reason_code
+            current.terminal_at = datetime.now(timezone.utc)
+            current.lease_owner = None
+            current.lease_expires_at = None
+            db.add(RefreshRunTransition(
+                id=str(uuid.uuid4()), run_id=current.id, from_status=old_status,
+                to_status="failed", reason=exc.reason_code, actor=owner,
+            ))
+            db.commit()
+            return {"run_id": current.id, "status": current.status, "error_code": exc.reason_code}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="refresh.event")
+def refresh_event_task(run_id: str) -> dict:
+    """Run-ID-only managed webhook/outbox worker entry."""
+    return _refresh_event(run_id)
 
 
 @celery_app.task(name="refresh.connection")

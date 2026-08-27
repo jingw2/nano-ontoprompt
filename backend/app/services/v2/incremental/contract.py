@@ -211,7 +211,7 @@ def record_refresh_outcome(
     cursor_contract: str, input_dataset_version_ids: Sequence[str], pipeline_run_id: str,
     next_cursor: SourceCursor | None, quality_summary: Mapping[str, object], provenance: Mapping[str, object],
     now: datetime, input_source_cursor: SourceCursor | None = None,
-    input_provenance: Mapping[str, object] | None = None,
+    input_provenance: Mapping[str, object] | None = None, commit: bool = True,
 ) -> RefreshRun:
     """Commit a successful refresh outcome, or reject it without side effects.
 
@@ -291,8 +291,14 @@ def record_refresh_outcome(
     run.status = "succeeded"
     run.terminal_at = now
 
-    db.commit()
-    db.refresh(run)
+    if commit:
+        db.commit()
+        db.refresh(run)
+    else:
+        # Event ingestion extends this fenced transaction with the durable
+        # inbox state transition, so DatasetVersion/PipelineRun, cursor, run,
+        # and inbox are committed atomically by the caller.
+        db.flush()
     return run
 
 

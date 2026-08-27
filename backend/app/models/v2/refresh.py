@@ -233,6 +233,13 @@ class RefreshInboxEvent(Base):
     source_id: Mapped[str] = mapped_column(String(200), nullable=False)
     resource: Mapped[str] = mapped_column(String(200), nullable=False)
     event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    # The accepted envelope is retained so a worker can be redelivered by
+    # durable run ID and an operator can replay a dead letter without asking
+    # the source to resend credentials or payloads.
+    run_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("refresh_runs.id", ondelete="SET NULL"), nullable=True,
+    )
+    envelope_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="received")
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -283,6 +290,9 @@ class RefreshDeadLetter(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     replay_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replayed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    replay_run_id: Mapped[str | None] = mapped_column(String, ForeignKey("refresh_runs.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
