@@ -14,7 +14,7 @@ import pytest
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
-from app.models.v2.refresh import RefreshDeadLetter, RefreshRun, RefreshSourceState
+from app.models.v2.refresh import RefreshDeadLetter, RefreshInboxEvent, RefreshRun, RefreshSourceState
 from app.schemas.refresh import ChangeEnvelope, ConfigurationDriftError, SourceCursor, cursor_order
 from app.services.v2.incremental import polling
 from app.services.v2.incremental.contract import claim_refresh_run, request_refresh_cancellation, update_source_configuration
@@ -242,6 +242,126 @@ def test_configuration_drift_after_source_pull_is_typed_and_has_no_lineage(db):
     assert exc.value.reason_code == "CONFIGURATION_DRIFT"
     assert db.query(DatasetVersion).count() == 0
     assert db.query(PipelineRun).count() == 0
+
+
+def test_refresh_task_configuration_drift_releases_source_lease_without_progress(db, monkeypatch):
+    _polling_source(db, connector=_SourceConnector(page=DeltaPage(
+        envelopes=[], candidate_cursor=_cursor("", ""), source_observed_at=NOW,
+        source_lag_seconds=0,
+    )))
+    run = claim_refresh_run(
+        db, source_id="source-001", resource="orders", policy="micro_batch",
+        idempotency_key="config-drift-worker", lease_owner="worker-001", now=NOW,
+    )
+
+    def raise_drift(*_args, **_kwargs):
+        raise ConfigurationDriftError("source changed while polling")
+
+    monkeypatch.setattr(polling, "poll_source", raise_drift)
+    from app import database as app_database
+    from sqlalchemy.orm import sessionmaker
+
+    worker_session = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr(app_database, "SessionLocal", worker_session)
+    from app.tasks.v2 import refresh_tasks
+
+    result = refresh_tasks._refresh_poll(run.id)
+
+    db.expire_all()
+    state = db.query(RefreshSourceState).filter(
+        RefreshSourceState.source_id == "source-001",
+        RefreshSourceState.resource == "orders",
+    ).one()
+    failed = db.get(RefreshRun, run.id)
+    assert result["status"] == "failed"
+    assert failed.status == "failed"
+    assert state.lease_owner is None
+    assert state.lease_expires_at is None
+    assert state.cursor_json is None
+    assert db.query(PipelineRunInput).count() == 0
+
+    replacement = claim_refresh_run(
+        db, source_id="source-001", resource="orders", policy="micro_batch",
+        idempotency_key="config-drift-replacement", lease_owner="worker-002",
+        now=NOW + timedelta(seconds=1),
+    )
+    assert replacement.status == "running"
+
+
+def test_polling_deduplicates_processed_overlap_across_runs(db):
+    event_one = _envelope("evt-overlap-1", "2026-08-26T01:00:00Z", "100", {"id": "100"})
+    first_connector = _SourceConnector(page=DeltaPage(
+        envelopes=[event_one], candidate_cursor=_cursor("2026-08-26T01:00:00Z", "100"),
+        source_observed_at=NOW, source_lag_seconds=1,
+    ))
+    _polling_source(db, connector=first_connector)
+    first = poll_source(
+        db, source_id="source-001", resource="orders", lease_owner="worker-001", now=NOW,
+    )
+
+    event_two = _envelope("evt-overlap-2", "2026-08-26T02:00:00Z", "101", {"id": "101"})
+    second_connector = _SourceConnector(page=DeltaPage(
+        envelopes=[event_one, event_two], candidate_cursor=_cursor("2026-08-26T02:00:00Z", "101"),
+        source_observed_at=NOW + timedelta(minutes=1), source_lag_seconds=1,
+    ))
+    polling._connector_for_source = lambda *_args, **_kwargs: second_connector
+    second = poll_source(
+        db, source_id="source-001", resource="orders", lease_owner="worker-002",
+        now=NOW + timedelta(minutes=1),
+    )
+
+    assert first.status == "succeeded"
+    assert second.status == "succeeded"
+    assert second.cursor_before == first.cursor_after
+    assert second.cursor_after.watermark == "2026-08-26T02:00:00Z"
+    assert second.cursor_after.primary_key == "101"
+    assert second.duplicate_count == 1
+    assert len(second.input_dataset_version_ids) == 1
+    latest = db.query(DatasetVersion).order_by(DatasetVersion.version_no.desc()).first()
+    assert latest.rowcount == 1
+    inbox = db.query(RefreshInboxEvent).filter(
+        RefreshInboxEvent.source_id == "source-001",
+        RefreshInboxEvent.resource == "orders",
+    ).all()
+    assert {event.event_id for event in inbox} == {"evt-overlap-1", "evt-overlap-2"}
+    assert all(event.state == "processed" for event in inbox)
+
+
+def test_dataset_version_refresh_provenance_survives_commit_and_reload(db):
+    from app.services.v2.dataset_service import DatasetService
+
+    dataset = Dataset(id="dataset-provenance", name="provenance", kind="structured")
+    db.add(dataset)
+    db.commit()
+
+    class _Storage:
+        def put_bytes(self, bucket: str, key: str, data: bytes) -> str:
+            return f"memory://{bucket}/{key}"
+
+    cursor = _cursor("2026-08-26T01:00:00Z", "100")
+    version = DatasetService(db, storage=_Storage()).create_version(
+        dataset.id, b'{"id":"100"}', rowcount=1,
+        refresh_run_id="refresh-run-provenance", source_cursor=cursor,
+        observed_at=NOW,
+    )
+    version_id = version.id
+    db.expunge_all()
+    loaded = db.get(DatasetVersion, version_id)
+
+    assert loaded.refresh_run_id == "refresh-run-provenance"
+    assert loaded.source_cursor == {
+        "source_id": "source-001",
+        "resource": "orders",
+        "contract": "watermark_primary_key",
+        "watermark": "2026-08-26T01:00:00Z",
+        "primary_key": "100",
+        "opaque_value": None,
+        "observed_at": NOW.isoformat(),
+    }
+    observed_at = loaded.observed_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    assert observed_at == NOW
 
 
 def test_structured_pipeline_uses_explicit_pinned_input_version(db):

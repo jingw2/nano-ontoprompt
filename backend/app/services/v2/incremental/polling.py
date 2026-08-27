@@ -21,7 +21,13 @@ from sqlalchemy.orm import Session
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
-from app.models.v2.refresh import RefreshDeadLetter, RefreshRun, RefreshRunTransition, RefreshSourceState
+from app.models.v2.refresh import (
+    RefreshDeadLetter,
+    RefreshInboxEvent,
+    RefreshRun,
+    RefreshRunTransition,
+    RefreshSourceState,
+)
 from app.schemas.refresh import (
     CURSOR_CONTRACTS,
     ChangeEnvelope,
@@ -263,6 +269,49 @@ def _envelope_sort_key(envelope: ChangeEnvelope, contract: str) -> tuple[str, st
     if contract == "opaque_source_cursor":
         return ("" if envelope.source_cursor is None else str(envelope.source_cursor), envelope.primary_key)
     return ("" if envelope.watermark is None else str(envelope.watermark), envelope.primary_key)
+
+
+def _deduplicate_persisted_events(
+    db: Session, *, source_id: str, resource: str,
+    envelopes: Sequence[ChangeEnvelope], now: datetime,
+) -> tuple[list[ChangeEnvelope], int]:
+    """Exclude event identities already materialized by an earlier poll.
+
+    The source lease serializes polls for one source/resource. Locking the
+    durable inbox row additionally makes the event identity explicit and
+    lets a failed/cancelled outcome roll back any newly staged identity.
+    ``received``/``dead_lettered`` rows remain eligible for this poll; only
+    identities already marked ``processed`` or ``duplicate`` are excluded.
+    """
+    materialized: list[ChangeEnvelope] = []
+    duplicate_count = 0
+    for envelope in envelopes:
+        row = db.execute(
+            select(RefreshInboxEvent).where(
+                RefreshInboxEvent.source_id == source_id,
+                RefreshInboxEvent.resource == resource,
+                RefreshInboxEvent.event_id == envelope.event_id,
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if row is not None and row.state in {"processed", "duplicate"}:
+            duplicate_count += 1
+            continue
+
+        event_hash = dedupe_key(envelope)
+        if row is None:
+            row = RefreshInboxEvent(
+                id=str(uuid.uuid4()), source_id=source_id, resource=resource,
+                event_id=envelope.event_id, event_hash=event_hash,
+                state="received", received_at=envelope.received_at,
+            )
+            db.add(row)
+        else:
+            row.event_hash = event_hash
+        row.state = "processed"
+        row.processed_at = now
+        materialized.append(envelope)
+    db.flush()
+    return materialized, duplicate_count
 
 
 def _assert_configuration_current(db: Session, run: RefreshRun) -> None:
@@ -563,6 +612,10 @@ def poll_source(
             event_cursor = _event_cursor(envelope, contract)
             if before is not None and event_cursor is not None and _safe_cursor_compare(event_cursor, before) <= 0:
                 late_count += 1
+        unique, durable_duplicate_count = _deduplicate_persisted_events(
+            db, source_id=run.source_id, resource=run.resource, envelopes=unique, now=now,
+        )
+        duplicate_count += durable_duplicate_count
         unique.sort(key=lambda envelope: _envelope_sort_key(envelope, contract))
         candidate = page.candidate_cursor if page.cursor_outcome != "unchanged" else before
         next_cursor = _max_cursor(before, candidate)

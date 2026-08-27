@@ -11,6 +11,20 @@ from app.schemas.refresh import SourceCursor
 from app.services.storage_service import StorageService, get_storage_service
 
 
+def _source_cursor_to_json(cursor: SourceCursor | None) -> dict | None:
+    if cursor is None:
+        return None
+    return {
+        "source_id": cursor.source_id,
+        "resource": cursor.resource,
+        "contract": cursor.contract,
+        "watermark": cursor.watermark,
+        "primary_key": cursor.primary_key,
+        "opaque_value": cursor.opaque_value,
+        "observed_at": cursor.observed_at.isoformat() if cursor.observed_at else None,
+    }
+
+
 class DatasetService:
     def __init__(self, db: Session, storage: StorageService | None = None):
         self._db = db
@@ -64,12 +78,11 @@ class DatasetService:
             storage_uri=uri,
             checksum=checksum,
         )
-        # DatasetVersion predates the refresh tables and intentionally keeps
-        # its schema stable in this migration. Keep the provenance on the
-        # version object for callers in this transaction; durable refresh
-        # lineage is recorded on RefreshRun/PipelineRunInput.
+        # Keep source provenance on the immutable version as well as the
+        # refresh lineage rows, so a reloaded DatasetVersion remains
+        # self-describing.
         ver.refresh_run_id = refresh_run_id
-        ver.source_cursor = source_cursor
+        ver.source_cursor = _source_cursor_to_json(source_cursor)
         ver.observed_at = observed_at
         self._db.add(ver)
         ds.latest_version_id = ver.id

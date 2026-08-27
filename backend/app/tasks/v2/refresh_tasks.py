@@ -115,6 +115,26 @@ def _refresh_poll(run_id: str) -> dict:
             # the typed reason remains visible to the worker caller.
             db.rollback()
             current = db.get(RefreshRun, run_id)
+            from sqlalchemy import select
+            from app.models.v2.refresh import RefreshSourceState
+
+            source_state = db.execute(
+                select(RefreshSourceState).where(
+                    RefreshSourceState.source_id == current.source_id,
+                    RefreshSourceState.resource == current.resource,
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if (
+                source_state is not None
+                and current.lease_owner is not None
+                and source_state.lease_owner == current.lease_owner
+                and source_state.fencing_token == current.fencing_token
+            ):
+                # The source state is authoritative. Clear only the stale
+                # run's matching ownership; never release a newer fence.
+                source_state.lease_owner = None
+                source_state.lease_expires_at = None
+                source_state.updated_at = datetime.now(timezone.utc)
             current.status = "failed"
             current.retry_reason = exc.reason_code
             current.terminal_at = datetime.now(timezone.utc)

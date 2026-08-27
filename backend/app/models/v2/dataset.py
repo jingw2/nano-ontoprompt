@@ -30,6 +30,9 @@ class DatasetVersion(Base):
     rowcount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)  # MinIO s3://bucket/key
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    refresh_run_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_cursor: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class MediaItem(Base):
