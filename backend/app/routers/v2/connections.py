@@ -199,28 +199,44 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db), _=Depen
     db.commit()
 
 
+class ScheduleUpdate(BaseModel):
+    """Enterprise timing controls for a connection's persisted refresh
+    schedule — mirrors `schedule_service.ScheduleRequest`'s optional fields
+    so `cron_expr` alone keeps behaving exactly as before."""
+    cron_expr: str
+    timezone: str = "UTC"
+    business_calendar: list[str] = []
+    sla_seconds: int = 0
+    retry_policy: Optional[dict] = None
+    backfill_window_seconds: int = 0
+    max_pending_runs: int = 1
+    enabled: bool = True
+
+
 @router.post("/{connection_id}/schedule")
-def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db), _=Depends(require_editor)):
+def set_schedule(connection_id: str, body: ScheduleUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     """Compatibility delegate for the typed refresh schedule operation."""
     from app.services.v2.incremental.operations import RefreshError, update_refresh_schedule
     from app.services.v2.scheduler.cron_service import CronService
 
-    if not CronService().validate_cron(cron_expr):
-        raise HTTPException(400, f"无效的 cron 表达式: {cron_expr}")
     try:
         schedule = update_refresh_schedule(
-            db, source_id=connection_id, cron_expr=cron_expr,
-            timezone_name="UTC", business_calendar=[], sla_seconds=0,
-            backfill_window_seconds=0, max_pending_runs=1, enabled=True,
+            db, source_id=connection_id, cron_expr=body.cron_expr,
+            timezone_name=body.timezone, business_calendar=body.business_calendar,
+            sla_seconds=body.sla_seconds, retry_policy=body.retry_policy,
+            backfill_window_seconds=body.backfill_window_seconds,
+            max_pending_runs=body.max_pending_runs, enabled=body.enabled,
         )
     except RefreshError as exc:
         if exc.reason_code == "SOURCE_NOT_FOUND":
             raise HTTPException(404, "Connection not found") from exc
         raise HTTPException(422, detail=exc.reason_code) from exc
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
     return {
         "connection_id": connection_id,
-        "cron": cron_expr,
-        "celery_crontab": CronService().parse_cron(cron_expr),
+        "cron": body.cron_expr,
+        "celery_crontab": CronService().parse_cron(body.cron_expr),
         "status": "scheduled",
         "next_due_at": schedule.next_due_at.isoformat() if schedule.next_due_at else None,
     }
