@@ -82,6 +82,7 @@ from app.models.skill import (
 from app.models.mcp import McpConnectionSchema, McpOauthToken
 from app.models.mcp_write_request import McpWriteRequest
 from app.models.oauth import OAuthClient, OAuthAuthorizationCode, OAuthRefreshFamily, OAuthRefreshToken
+from app.models.runtime_identity import RuntimeDelegatedCredential
 
 
 def load_all_models():
@@ -168,6 +169,7 @@ def load_all_models():
         OAuthRefreshFamily,
         OAuthRefreshToken,
     )
+    from app.models.runtime_identity import RuntimeDelegatedCredential  # noqa: F401
 
     return Base.metadata
 
@@ -252,5 +254,6 @@ __all__ = [
     "OAuthAuthorizationCode",
     "OAuthRefreshFamily",
     "OAuthRefreshToken",
+    "RuntimeDelegatedCredential",
     "load_all_models",
 ]

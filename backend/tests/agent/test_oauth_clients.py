@@ -34,7 +34,10 @@ def oauth_db():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    result = _alembic(schema, "upgrade", "0016_oauth_pkce")
+    # "head", not the 0016 revision that introduced oauth_clients: these
+    # tests exercise the live ORM model (app.models.oauth.OAuthClient),
+    # which Task 13 (0029_runtime_identity) extended with new columns.
+    result = _alembic(schema, "upgrade", "head")
     assert result.returncode == 0, result.stderr
     session_engine = create_engine(_scoped_url(schema))
     Session = sessionmaker(bind=session_engine)

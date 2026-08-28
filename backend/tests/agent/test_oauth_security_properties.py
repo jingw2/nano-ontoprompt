@@ -45,6 +45,28 @@ def test_oauth_access_jwt_carries_a_distinguishable_token_use_claim():
     assert jwt.decode(oauth, settings.secret_key, algorithms=["HS256"])["client_id"] == "c-1"
 
 
+def test_runtime_delegated_jwt_carries_a_distinguishable_token_use_claim():
+    """Task 13: a Runtime delegated credential's `token_use` claim
+    (`runtime_delegated`) must be distinct from both an interactive
+    session's (absent) and an OAuth access token's (`oauth_access`) — the
+    signal `verify_delegated_credential` relies on to reject either being
+    replayed as a delegated credential. No DB needed: this only exercises
+    claim decoding, not the client/user/domain lookups
+    tests/runtime/test_runtime_credentials.py already covers."""
+    from app.services.auth_service import create_access_token, create_oauth_access_token, decode_token
+    from app.services.runtime.credentials import RUNTIME_ISSUER, RUNTIME_TOKEN_USE
+
+    interactive = create_access_token({"sub": "u-1", "role": "viewer"})
+    oauth = create_oauth_access_token("u-1", "c-1", "a")
+    assert decode_token(interactive).get("token_use") != RUNTIME_TOKEN_USE
+    assert decode_token(oauth)["token_use"] != RUNTIME_TOKEN_USE
+    # neither pre-existing token type carries the Runtime issuer claim either,
+    # so even a forged token_use could not smuggle a stale claims shape past
+    # verify_delegated_credential's issuer check
+    assert decode_token(interactive).get("iss") != RUNTIME_ISSUER
+    assert decode_token(oauth).get("iss") != RUNTIME_ISSUER
+
+
 def test_scope_resolution_never_grants_more_than_the_client_allowlist():
     from app.models.oauth import OAuthClient
 

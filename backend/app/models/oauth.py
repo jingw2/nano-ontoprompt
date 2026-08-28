@@ -8,6 +8,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.models.security_domain import DEFAULT_SECURITY_DOMAIN_ID
 
 UUID_CHECK = (
     "id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -27,6 +28,17 @@ class OAuthClient(Base):
     allowed_scopes: Mapped[list] = mapped_column(JSON, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    # Task 13 (Runtime trusted delegation): a registered client doubles as a
+    # registered Agent/service identity for delegated-credential issuance.
+    # `security_domain_id` binds the identity for the same-domain check
+    # against the delegated user; `allowed_audiences`/`capability_names` are
+    # the registration-time allowlists the credential layer consults.
+    security_domain_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("security_domains.id", ondelete="RESTRICT"),
+        nullable=False, default=DEFAULT_SECURITY_DOMAIN_ID,
+    )
+    allowed_audiences: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    capability_names: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
