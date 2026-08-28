@@ -435,11 +435,19 @@ def test_manual_pipeline_run_loads_exact_duplicate_version_id(db, monkeypatch):
     from app.tasks.v2 import pipeline_run as pipeline_module
 
     class MemoryStorage:
+        def __init__(self):
+            self.objects = {}
+
         def put_bytes(self, bucket, key, data, content_type="application/octet-stream"):
+            self.objects[f"s3://{bucket}/{key}"] = data
             return f"s3://{bucket}/{key}"
 
+        def get_object(self, uri):
+            return self.objects[uri]
+
     monkeypatch.setattr("app.database.SessionLocal", sessionmaker(bind=db.get_bind()))
-    monkeypatch.setattr(dataset_service, "get_storage_service", lambda: MemoryStorage())
+    storage = MemoryStorage()
+    monkeypatch.setattr(dataset_service, "get_storage_service", lambda: storage)
     captured_context = []
     monkeypatch.setattr(
         pipeline_module,
@@ -495,6 +503,11 @@ def test_manual_pipeline_run_loads_exact_duplicate_version_id(db, monkeypatch):
 
     persisted_run = db.get(PipelineRun, run.id)
     assert persisted_run.status == "success"
+    output_version = db.get(DatasetVersion, persisted_run.dataset_version_id)
+    assert output_version is not None
+    output_bytes = storage.get_object(output_version.storage_uri)
+    assert b"from-A" in output_bytes
+    assert b"from-B" not in output_bytes
     context, loaded_rows = captured_context[0]
     assert loaded_rows == [{"source_version_id": source_version_a.id, "value": "from-A"}]
     assert context.dataset_version_id == source_version_a.id
