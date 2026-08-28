@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.v2.connection import Connection
@@ -131,6 +133,32 @@ def _dead_letter_for_inbox(db: Session, row: RefreshInboxEvent) -> RefreshDeadLe
     ).scalars().first()
 
 
+def _fold_into_existing_inbox_row(db: Session, row: RefreshInboxEvent, *, event_hash: str) -> IngestReceipt:
+    """Acknowledge an already-durable inbox row as the current delivery.
+
+    Shared by the normal "row already existed" lookup and by the losing side
+    of a concurrent-insert race on a brand-new event identity (see `accept`):
+    both must resolve to the same duplicate/processed/dead-lettered outcome.
+    """
+    if row.event_hash and row.event_hash != event_hash:
+        db.rollback()
+        raise EventIngressError("REPLAY_DETECTED", "event identity was reused with a different payload")
+    if row.event_hash is None:
+        row.event_hash = event_hash
+    if row.state == "dead_lettered":
+        status = "dead_lettered"
+        reason_code = "DEAD_LETTERED"
+    elif row.state == "processed":
+        status = "processed"
+        reason_code = "DUPLICATE_EVENT"
+    else:
+        row.state = "duplicate"
+        status = "duplicate"
+        reason_code = "DUPLICATE_EVENT"
+    db.commit()
+    return _receipt(db, row, status=status, reason_code=reason_code)
+
+
 def _receipt(db: Session, row: RefreshInboxEvent, *, status: str, reason_code: str = "ACCEPTED") -> IngestReceipt:
     run = db.get(RefreshRun, row.run_id) if row.run_id else None
     letter = _dead_letter_for_run(db, run.id) if run is not None else _dead_letter_for_inbox(db, row)
@@ -211,23 +239,7 @@ class EventIngestService:
             ).with_for_update()
         ).scalar_one_or_none()
         if row is not None:
-            if row.event_hash and row.event_hash != event_hash:
-                db.rollback()
-                raise EventIngressError("REPLAY_DETECTED", "event identity was reused with a different payload")
-            if row.event_hash is None:
-                row.event_hash = event_hash
-            if row.state == "dead_lettered":
-                status = "dead_lettered"
-                reason_code = "DEAD_LETTERED"
-            elif row.state == "processed":
-                status = "processed"
-                reason_code = "DUPLICATE_EVENT"
-            else:
-                row.state = "duplicate"
-                status = "duplicate"
-                reason_code = "DUPLICATE_EVENT"
-            db.commit()
-            return _receipt(db, row, status=status, reason_code=reason_code)
+            return _fold_into_existing_inbox_row(db, row, event_hash=event_hash)
 
         connection = db.get(Connection, envelope.source_id)
         connection_config = dict(connection.config or {}) if connection is not None else {}
@@ -263,7 +275,26 @@ class EventIngestService:
             event_id=envelope.event_id, event_hash=event_hash, state="received",
             received_at=_as_utc(envelope.received_at), envelope_json=_envelope_to_json(envelope),
         )
-        db.add(row)
+        # Two genuinely concurrent deliveries of a brand-new event identity
+        # can both reach this point after observing `row is None` above (a
+        # `SELECT ... FOR UPDATE` cannot lock a row that does not exist yet).
+        # Race the insert inside a SAVEPOINT; the loser folds into the same
+        # durable `duplicate` outcome as an existing row instead of
+        # surfacing an unhandled IntegrityError.
+        savepoint = db.begin_nested()
+        try:
+            db.add(row)
+            savepoint.commit()
+        except IntegrityError:
+            savepoint.rollback()
+            existing = db.execute(
+                select(RefreshInboxEvent).where(
+                    RefreshInboxEvent.source_id == envelope.source_id,
+                    RefreshInboxEvent.resource == envelope.resource,
+                    RefreshInboxEvent.event_id == envelope.event_id,
+                ).with_for_update()
+            ).scalar_one()
+            return _fold_into_existing_inbox_row(db, existing, event_hash=event_hash)
         # This commit is the durable inbox-before-dispatch boundary.  A
         # broker outage or source lease conflict leaves the event replayable.
         db.commit()
@@ -706,6 +737,9 @@ class EventIngestService:
                 finalized = db.get(RefreshRun, run.id)
             return polling._result(db, finalized)
         except ConfigurationDriftError:
+            db.rollback()
+            raise
+        except SoftTimeLimitExceeded:
             db.rollback()
             raise
         except (RefreshFencingError, RefreshLeaseError):

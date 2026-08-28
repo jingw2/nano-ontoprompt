@@ -4,15 +4,20 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import DatasetVersion
-from app.models.v2.pipeline import PipelineRunInput
+from app.models.v2.pipeline import PipelineRun, PipelineRunInput
 from app.models.v2.refresh import RefreshDeadLetter, RefreshInboxEvent, RefreshRun, RefreshSourceState
-from app.schemas.refresh import ChangeEnvelope, RefreshLeaseError
+from app.schemas.refresh import ChangeEnvelope, ConfigurationDriftError, RefreshLeaseError
 from app.services.v2.incremental import event_ingest
 from app.services.v2.incremental.contract import update_source_configuration
 from app.services.v2.incremental.event_adapters import (
@@ -25,6 +30,67 @@ from app.services.v2.incremental.event_ingest import (
     replay_dead_letter,
 )
 from app.tasks.topology import build_refresh_dispatch_message
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+
+class _ConcurrentEventDB:
+    """A real Session (used directly like `db`) that also exposes an
+    independent `.new_session()` for a genuine two-connection race, mirroring
+    `test_refresh_contract.py`'s `concurrent_refresh_db` fixture. Kept local
+    to this file rather than shared/imported so this Task 9 fix does not
+    touch Task 6/8 test infrastructure."""
+
+    def __init__(self, engine):
+        self._engine = engine
+        self.session = sessionmaker(bind=engine)()
+
+    def new_session(self):
+        return sessionmaker(bind=self._engine)()
+
+    def __getattr__(self, name):
+        return getattr(self.session, name)
+
+
+@pytest.fixture
+def concurrent_event_db():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
+    schema = "event_" + uuid.uuid4().hex
+    admin_engine = create_engine(TEST_DATABASE_URL)
+    try:
+        with admin_engine.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    finally:
+        admin_engine.dispose()
+
+    import subprocess
+    import sys
+    from pathlib import Path
+    from urllib.parse import quote
+
+    backend_dir = Path(__file__).resolve().parents[3]
+    scoped_url = f"{TEST_DATABASE_URL}?options={quote(f'-csearch_path={schema},public', safe='-=,')}"
+    result = subprocess.run(
+        [sys.executable, "scripts/run_migrations.py", "upgrade", "head"],
+        cwd=backend_dir, env=dict(os.environ, DATABASE_URL=scoped_url),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"migration failed:\n{result.stdout}\n{result.stderr}"
+
+    engine = create_engine(scoped_url)
+    wrapper = _ConcurrentEventDB(engine)
+    try:
+        yield wrapper
+    finally:
+        wrapper.session.close()
+        engine.dispose()
+        cleanup_engine = create_engine(TEST_DATABASE_URL)
+        try:
+            with cleanup_engine.begin() as conn:
+                conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        finally:
+            cleanup_engine.dispose()
 
 
 FIXED_NOW = datetime(2026, 8, 26, 0, 0, tzinfo=timezone.utc)
@@ -113,20 +179,37 @@ def test_webhook_accepts_unix_timestamp_headers():
     assert envelope.event_id == "evt-001"
 
 
-def test_event_ingest_rejects_replayed_event_id():
-    adapter = ManagedWebhookAdapter()
+def test_webhook_adapter_has_no_in_memory_replay_state():
+    """The router instantiates a fresh `ManagedWebhookAdapter()` per request
+    (see `refresh_events.py`), so any in-memory replay cache on the adapter
+    would never persist across requests and would be misleading, dead
+    weight. Real replay protection is the durable inbox comparison in
+    `EventIngestService.accept()` (see the test below), not an ephemeral
+    per-instance cache."""
+    assert not hasattr(ManagedWebhookAdapter(), "_seen_event_hashes")
+
+
+def test_event_ingest_rejects_replayed_event_id_via_durable_inbox(db):
+    """Two deliveries of the same `event_id` with different payloads are
+    rejected as REPLAY_DETECTED by the durable inbox in
+    `EventIngestService.accept()`, using two independent adapter instances
+    (as the router does per-request) to prove this protection does not rely
+    on adapter-instance reuse."""
+    _source(db)
     first_body = _body()
-    adapter.verify_and_normalize(
+    first_envelope = ManagedWebhookAdapter().verify_and_normalize(
         first_body, source_id="source-001", signature=_signature(first_body),
         timestamp=FIXED_NOW.isoformat(), secret_ref=SECRET, now=FIXED_NOW,
     )
-    replayed = _body()
-    replayed = replayed.replace(b"ready", b"tampered")
+    EventIngestService().accept(db, first_envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+
+    replayed = _body().replace(b"ready", b"tampered")
+    replayed_envelope = ManagedWebhookAdapter().verify_and_normalize(
+        replayed, source_id="source-001", signature=_signature(replayed),
+        timestamp=FIXED_NOW.isoformat(), secret_ref=SECRET, now=FIXED_NOW,
+    )
     with pytest.raises(EventIngressError) as exc:
-        adapter.verify_and_normalize(
-            replayed, source_id="source-001", signature=_signature(replayed),
-            timestamp=FIXED_NOW.isoformat(), secret_ref=SECRET, now=FIXED_NOW,
-        )
+        EventIngestService().accept(db, replayed_envelope, lease_owner="event-worker-002", now=FIXED_NOW)
     assert exc.value.reason_code == "REPLAY_DETECTED"
 
 
@@ -437,6 +520,62 @@ def test_event_worker_materializes_lineage_and_advances_cursor(db):
     assert inbox.state == "processed"
 
 
+def test_event_config_drift_late_finish_has_no_lineage_or_cursor_progress(db):
+    """Mirrors polling's `test_configuration_drift_after_source_pull_is_typed_and_has_no_lineage`
+    for the event path: the source configuration is bumped after the event's
+    run was claimed but before `process()` finishes, so the frozen
+    config_version/cursor_contract no longer matches the live source
+    revision by the time materialization would happen."""
+    _source(db, schema_hash="schema-v1")
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+
+    update_source_configuration(
+        db, source_id="source-001", resource="orders", cursor_contract="watermark_primary_key",
+        configuration={"schema_hash": "schema-v2"}, now=FIXED_NOW + timedelta(seconds=1),
+    )
+
+    with pytest.raises(ConfigurationDriftError) as exc:
+        service.process(db, run_id=receipt.run_id, lease_owner="event-worker-001", now=FIXED_NOW + timedelta(seconds=2))
+
+    assert exc.value.reason_code == "CONFIGURATION_DRIFT"
+    assert db.query(DatasetVersion).count() == 0
+    assert db.query(PipelineRun).count() == 0
+    assert db.query(RefreshSourceState).one().cursor is None
+
+
+def test_event_out_of_order_cursor_is_unchanged_with_late_provenance(db):
+    """Mirrors polling's "out-of-order" case for the event path: an event
+    whose cursor is behind the source's already-advanced cursor must not
+    regress the cursor, and is recorded as late in provenance/late_count."""
+    _source(db)
+    service = EventIngestService()
+    first = ManagedOutboxAdapter.normalize(
+        _record(event_id="evt-first", watermark="2026-08-26T02:00:00Z"),
+        source_id="source-001", received_at=FIXED_NOW,
+    )
+    first_receipt = service.accept(db, first, lease_owner="event-worker-001", now=FIXED_NOW)
+    first_result = service.process(db, run_id=first_receipt.run_id, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert first_result.status == "succeeded"
+    assert first_result.cursor_after.watermark == "2026-08-26T02:00:00Z"
+
+    late = ManagedOutboxAdapter.normalize(
+        _record(event_id="evt-late", watermark="2026-08-26T01:00:00Z"),
+        source_id="source-001", received_at=FIXED_NOW,
+    )
+    late_receipt = service.accept(db, late, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(seconds=1))
+    late_result = service.process(
+        db, run_id=late_receipt.run_id, lease_owner="event-worker-002", now=FIXED_NOW + timedelta(seconds=1),
+    )
+
+    assert late_result.status == "succeeded"
+    assert late_result.late_event_count == 1
+    assert late_result.provenance["cursor_outcome"] == "unchanged"
+    assert late_result.cursor_after == late_result.cursor_before
+    assert late_result.cursor_after.watermark == "2026-08-26T02:00:00Z"
+
+
 def test_duplicate_after_processing_reports_processed_and_current_cursor(db):
     _source(db)
     service = EventIngestService()
@@ -466,6 +605,35 @@ def test_event_worker_cancellation_leaves_inbox_and_cursor_unchanged(db):
     assert db.query(DatasetVersion).count() == 0
     assert db.query(PipelineRunInput).count() == 0
     assert db.query(RefreshInboxEvent).one().state == "received"
+
+
+def test_event_process_propagates_soft_time_limit_exceeded_instead_of_swallowing_it(db, monkeypatch):
+    """A Celery soft-timeout raised deep inside ``process()`` must propagate to
+    ``_refresh_event``'s dedicated ``except SoftTimeLimitExceeded`` handler,
+    not be caught by ``process()``'s own blanket ``except Exception`` and
+    turned into a counted-against-retry-budget failure/dead-letter."""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+
+    def raise_soft_timeout(*_args, **_kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(event_ingest.polling, "_resolve_dataset", raise_soft_timeout)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        service.process(db, run_id=receipt.run_id, lease_owner="event-worker-001", now=FIXED_NOW)
+
+    # The run must remain in its pre-timeout state: no retry/dead-letter
+    # bookkeeping was performed by `process()` itself for this exception.
+    db.rollback()
+    run = db.get(RefreshRun, receipt.run_id)
+    assert run.status == "running"
+    assert run.retry_count == 0
+    assert db.query(RefreshDeadLetter).count() == 0
 
 
 def test_refresh_event_worker_message_contains_only_durable_run_id():
@@ -571,3 +739,67 @@ def test_dlq_replay_creates_new_run_and_retains_original(db):
 
     assert replay.id != receipt.run_id
     assert db.get(service.dead_letter_model, dead_letter_id).replay_status == "replayed"
+
+
+def test_accept_concurrent_brand_new_event_id_yields_one_row_and_graceful_duplicate(concurrent_event_db):
+    """`accept()`'s `SELECT ... FOR UPDATE` on RefreshInboxEvent only locks
+    *existing* rows. Two genuinely concurrent deliveries of the same
+    brand-new event identity can both observe `row is None` and race on the
+    insert; the loser must fold into the same durable `duplicate` outcome
+    instead of surfacing an unhandled IntegrityError.
+
+    No RefreshSourceState is pre-seeded: if it already existed, `accept()`'s
+    own `SELECT ... FOR UPDATE` on that row would serialize the two threads
+    long before the RefreshInboxEvent insert and the race would never occur.
+    Leaving the state unseeded lets both threads race genuinely, matching
+    a real pair of concurrent first-time webhook deliveries for a source.
+    """
+    seed = concurrent_event_db.new_session()
+    try:
+        seed.add(Connection(
+            id="source-001", name="orders-source", kind="rest",
+            config={"cursor_contract": "watermark_primary_key"}, status="active",
+        ))
+        seed.commit()
+    finally:
+        seed.close()
+
+    envelope = ManagedOutboxAdapter.normalize(
+        _record(event_id="evt-race"), source_id="source-001", received_at=FIXED_NOW,
+    )
+    barrier = threading.Barrier(2)
+    results: dict[str, object] = {}
+    errors: dict[str, Exception] = {}
+    lock = threading.Lock()
+
+    def attempt(owner: str) -> None:
+        session = concurrent_event_db.new_session()
+        try:
+            barrier.wait(timeout=10)
+            receipt = EventIngestService().accept(session, envelope, lease_owner=owner, now=FIXED_NOW)
+            with lock:
+                results[owner] = receipt
+        except Exception as exc:  # pragma: no cover - captured as a failure below
+            with lock:
+                errors[owner] = exc
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=attempt, args=(owner,)) for owner in ("racer-a", "racer-b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert not errors, f"expected graceful duplicate handling for both racers, got errors: {errors!r}"
+    assert len(results) == 2
+    statuses = sorted(receipt.status for receipt in results.values())
+    assert statuses == ["duplicate", "received"]
+
+    verify = concurrent_event_db.new_session()
+    try:
+        rows = verify.query(RefreshInboxEvent).filter(RefreshInboxEvent.event_id == "evt-race").all()
+        assert len(rows) == 1
+        assert rows[0].state == "duplicate"
+    finally:
+        verify.close()

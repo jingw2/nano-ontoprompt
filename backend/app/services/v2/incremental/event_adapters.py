@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Callable, Mapping
 
-from app.schemas.refresh import ChangeEnvelope, RefreshError, dedupe_key, normalize_change_envelope
+from app.schemas.refresh import ChangeEnvelope, RefreshError, normalize_change_envelope
 
 
 class EventIngressError(RefreshError):
@@ -200,7 +200,6 @@ class ManagedWebhookAdapter:
     ):
         self.max_age_seconds = max(1, int(max_age_seconds))
         self.secret_resolver = secret_resolver
-        self._seen_event_hashes: dict[tuple[str, str], str] = {}
 
     def verify_and_normalize(
         self,
@@ -243,14 +242,11 @@ class ManagedWebhookAdapter:
             raise EventIngressError("INVALID_CHANGE_ENVELOPE", "invalid webhook JSON") from exc
         if not isinstance(record, Mapping):
             raise EventIngressError("INVALID_CHANGE_ENVELOPE", "webhook payload must be an object")
-        envelope = _normalize_record(record, source_id=source_id, received_at=now)
-        identity = (source_id, envelope.event_id)
-        prior_hash = self._seen_event_hashes.get(identity)
-        event_hash = dedupe_key(envelope)
-        if prior_hash is not None and prior_hash != event_hash:
-            raise EventIngressError("REPLAY_DETECTED", "event identity was reused with a different payload")
-        self._seen_event_hashes[identity] = event_hash
-        return envelope
+        # Replay/duplicate-with-different-payload detection is the durable
+        # inbox comparison in `EventIngestService.accept()`, not an
+        # in-memory cache here: the router constructs a fresh adapter per
+        # request, so any per-instance cache would never persist.
+        return _normalize_record(record, source_id=source_id, received_at=now)
 
 
 class ManagedOutboxAdapter:
