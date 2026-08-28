@@ -22,7 +22,7 @@ REPO_ROOT = BACKEND_DIR.parent
 SCRIPTS = BACKEND_DIR / "scripts"
 COMPOSE_FILES = [REPO_ROOT / "docker-compose.v2.yml", REPO_ROOT / "docker-compose.agent.yml"]
 # the ops Alembic head the signed manifest must pin
-OPS_ALEMBIC_HEAD = "0027_semantic_snapshot"
+OPS_ALEMBIC_HEAD = "0028_snapshot_release_published"
 
 
 def test_e0_images_red_contract():

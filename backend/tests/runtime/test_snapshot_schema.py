@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -14,8 +15,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from app.models.ontology import OntologyProject
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput
+from app.models.user import User
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
 
@@ -30,6 +33,54 @@ def _snapshot(*, snapshot_id: str = "snap-valid-001") -> SemanticSnapshot:
         status="materialized",
         created_by="user-001",
     )
+
+
+def _seed_ontology_release(
+    db, *, release_id: str, status: str = "published", ontology_id: str | None = None,
+) -> None:
+    """Seed the User/OntologyProject/OntologyRelease chain a snapshot pins to.
+
+    Inserts ontology_releases via raw SQL (mirroring
+    app/services/publication/compiler.py) rather than the ORM model: the
+    manifest_projection column's CanonicalJSONB type always renders a
+    PostgreSQL `CAST(... AS JSONB)` in its bind_expression, which the SQLite
+    test harness cannot compile.
+    """
+    if db.get(User, "user-001") is None:
+        db.add(User(
+            id="user-001", username="user-001", email="user-001@test.com",
+            password_hash="x", role="editor",
+        ))
+    ontology_id = ontology_id or f"ontology-{release_id}"
+    if db.get(OntologyProject, ontology_id) is None:
+        db.add(OntologyProject(id=ontology_id, name="ontology", domain="test", created_by="user-001"))
+    db.flush()
+    manifest_bytes = f"manifest-{release_id}".encode()
+    db.execute(
+        text(
+            "INSERT INTO ontology_releases "
+            "(id, ontology_id, version_no, version, manifest_bytes, manifest_projection, "
+            "schema_hash, status, created_by, created_at) "
+            "VALUES (:id, :ontology_id, 1, 'v1', :manifest_bytes, '{}', :schema_hash, "
+            ":status, 'user-001', :created_at)"
+        ),
+        {
+            "id": release_id,
+            "ontology_id": ontology_id,
+            "manifest_bytes": manifest_bytes,
+            "schema_hash": hashlib.sha256(manifest_bytes).digest(),
+            "status": status,
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+    db.flush()
+
+
+@pytest.fixture(autouse=True)
+def _default_published_release(db):
+    """Every test in this module pins snapshots to a published release unless
+    it explicitly seeds a different one."""
+    _seed_ontology_release(db, release_id="release-valid-001", status="published")
 
 
 def _seed_governed_run(db) -> None:
@@ -224,6 +275,45 @@ def test_snapshot_inputs_capture_all_versions_from_one_governed_multi_source_run
     db.commit()
 
     assert db.query(SemanticSnapshotInput).count() == 2
+
+
+def test_snapshot_rejects_draft_ontology_release(db):
+    """SNAPSHOT_RELEASE_NOT_PUBLISHED: a snapshot cannot pin a draft release."""
+    _seed_ontology_release(db, release_id="release-draft-001", status="draft")
+    db.add(SemanticSnapshot(
+        id="snap-draft-001",
+        ontology_release_id="release-draft-001",
+        quality_summary={},
+        evidence_summary={},
+        materialization_hash="c" * 64,
+        created_by="user-001",
+    ))
+    with pytest.raises(ValueError, match="SNAPSHOT_RELEASE_NOT_PUBLISHED"):
+        db.commit()
+    db.rollback()
+
+
+def test_snapshot_rejects_revoked_ontology_release(db):
+    """SNAPSHOT_RELEASE_NOT_PUBLISHED: a snapshot cannot pin a revoked release."""
+    _seed_ontology_release(db, release_id="release-revoked-001", status="revoked")
+    db.add(SemanticSnapshot(
+        id="snap-revoked-001",
+        ontology_release_id="release-revoked-001",
+        quality_summary={},
+        evidence_summary={},
+        materialization_hash="d" * 64,
+        created_by="user-001",
+    ))
+    with pytest.raises(ValueError, match="SNAPSHOT_RELEASE_NOT_PUBLISHED"):
+        db.commit()
+    db.rollback()
+
+
+def test_snapshot_accepts_published_ontology_release(db):
+    """The passing case: a snapshot pinning a published release commits cleanly."""
+    db.add(_snapshot())
+    db.commit()
+    assert db.get(SemanticSnapshot, "snap-valid-001").ontology_release_id == "release-valid-001"
 
 
 def test_ontology_release_status_contract_is_registered():
@@ -608,6 +698,48 @@ def test_sqlite_migration_guards_reject_direct_snapshot_dml(db):
     db.rollback()
 
 
+def _load_task_11_fix_migration():
+    migration_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0028_snapshot_release_published.py"
+    spec = importlib.util.spec_from_file_location("task_11_fix_snapshot_release_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def test_sqlite_migration_guard_rejects_snapshot_with_unpublished_release(db):
+    """SNAPSHOT_RELEASE_NOT_PUBLISHED must also hold for raw SQL that bypasses the ORM."""
+    _seed_ontology_release(db, release_id="release-draft-guard-001", status="draft")
+    db.commit()
+
+    migration = _load_task_11_fix_migration()
+    context = MigrationContext.configure(db.connection())
+    migration.op = Operations(context)
+    migration._create_sqlite_guard()
+
+    with pytest.raises(IntegrityError, match="SNAPSHOT_RELEASE_NOT_PUBLISHED"):
+        db.execute(text(
+            "INSERT INTO semantic_snapshots "
+            "(id, ontology_release_id, quality_summary, evidence_summary, "
+            "materialization_hash, status, created_by, created_at) "
+            "VALUES ('snap-guard-draft-001', 'release-draft-guard-001', '{}', '{}', "
+            f"'{'e' * 64}', 'materialized', 'user-001', CURRENT_TIMESTAMP)"
+        ))
+        db.commit()
+    db.rollback()
+
+    # A published release still inserts cleanly through the same guard.
+    db.execute(text(
+        "INSERT INTO semantic_snapshots "
+        "(id, ontology_release_id, quality_summary, evidence_summary, "
+        "materialization_hash, status, created_by, created_at) "
+        "VALUES ('snap-guard-published-001', 'release-valid-001', '{}', '{}', "
+        f"'{'f' * 64}', 'materialized', 'user-001', CURRENT_TIMESTAMP)"
+    ))
+    db.commit()
+    assert db.get(SemanticSnapshot, "snap-guard-published-001") is not None
+
+
 def _sqlite_pre_0027_engine(*, foreign_keys=False):
     engine = create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()
@@ -769,11 +901,54 @@ def test_sqlite_migration_upgrade_and_downgrade_round_trip_remediates_rows():
         )).scalar_one() == "release-001"
 
 
+def test_sqlite_migration_backfill_orders_draft_and_revoked_by_version_no():
+    """A release strictly newer than the currently-published one (in-progress
+    draft work created after publication) must backfill to 'draft', not
+    'revoked'; a release strictly older than the published one must still
+    backfill to 'revoked'."""
+    engine = _sqlite_pre_0027_engine()
+    now = datetime.now(timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO users (id) VALUES ('user-001')"))
+        connection.execute(text(
+            "INSERT INTO ontology_projects (id, latest_published_release_id) "
+            "VALUES ('ontology-001', 'release-published-001')"
+        ))
+        connection.execute(text(
+            "INSERT INTO ontology_releases "
+            "(id, ontology_id, version_no, version, manifest_bytes, manifest_projection, schema_hash, created_by, created_at) "
+            "VALUES "
+            "('release-published-001', 'ontology-001', 2, 'v2', :manifest, '{}', :schema_hash, 'user-001', :created_at), "
+            "('release-older-001', 'ontology-001', 1, 'v1', :manifest, '{}', :schema_hash, 'user-001', :created_at), "
+            "('release-newer-001', 'ontology-001', 3, 'v3', :manifest, '{}', :schema_hash, 'user-001', :created_at)"
+        ), {"manifest": b"immutable-manifest", "schema_hash": b"schema-hash", "created_at": now})
+
+    migration = _load_task_11_migration()
+    with engine.begin() as connection:
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+
+    with engine.connect() as connection:
+        statuses = dict(connection.execute(text(
+            "SELECT id, status FROM ontology_releases WHERE ontology_id='ontology-001'"
+        )).all())
+    assert statuses["release-published-001"] == "published"
+    assert statuses["release-older-001"] == "revoked"
+    assert statuses["release-newer-001"] == "draft"
+
+
 def test_task_11_migration_is_next_linear_head():
     migration = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0027_semantic_snapshot.py"
     source = migration.read_text()
     assert 'revision = "0027_semantic_snapshot"' in source
     assert 'down_revision = "0026_refresh_event_inbox"' in source
+
+
+def test_task_11_fix_migration_chains_off_semantic_snapshot_head():
+    migration = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0028_snapshot_release_published.py"
+    source = migration.read_text()
+    assert 'revision = "0028_snapshot_release_published"' in source
+    assert 'down_revision = "0027_semantic_snapshot"' in source
 
 
 def test_snapshot_hash_has_sha256_shape_constraint():

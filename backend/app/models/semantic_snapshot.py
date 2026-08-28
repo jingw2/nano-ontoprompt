@@ -98,6 +98,17 @@ def _validate_snapshot_hash(_mapper, _connection, target) -> None:
         raise ValueError("INVALID_MATERIALIZATION_HASH")
 
 
+@event.listens_for(SemanticSnapshot, "before_insert")
+def _validate_snapshot_release_published(_mapper, connection, target) -> None:
+    """Reject snapshots pinned to a draft or revoked ontology release."""
+    status = connection.execute(
+        text("SELECT status FROM ontology_releases WHERE id = :ontology_release_id"),
+        {"ontology_release_id": target.ontology_release_id},
+    ).scalar_one_or_none()
+    if status != "published":
+        raise ValueError("SNAPSHOT_RELEASE_NOT_PUBLISHED")
+
+
 @event.listens_for(SemanticSnapshotInput, "before_insert")
 def _validate_snapshot_input(_mapper, connection, target) -> None:
     """Reject ungoverned inputs on ORM/database paths without trigger support."""

@@ -253,8 +253,11 @@ def upgrade() -> None:
              ) THEN 'published'
              WHEN EXISTS (
                SELECT 1 FROM ontology_projects AS project
+               JOIN ontology_releases AS published_release
+                 ON published_release.id = project.latest_published_release_id
                 WHERE project.id = release.ontology_id
                   AND project.latest_published_release_id IS NOT NULL
+                  AND published_release.version_no > release.version_no
              ) THEN 'revoked'
              ELSE 'draft'
            END

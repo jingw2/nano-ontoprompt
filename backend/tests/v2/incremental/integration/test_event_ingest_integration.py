@@ -45,7 +45,7 @@ from app.services.v2.incremental.event_ingest import EventIngestService
 NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
 BACKEND_DIR = Path(__file__).resolve().parents[4]
 MIGRATION_BASE = "0021_mapping_entity_class_cn"
-MIGRATION_HEAD = "0027_semantic_snapshot"
+MIGRATION_HEAD = "0028_snapshot_release_published"
 
 
 def _pre_refresh_tables() -> MetaData:
