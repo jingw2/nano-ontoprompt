@@ -288,6 +288,52 @@ def test_refresh_task_configuration_drift_releases_source_lease_without_progress
     assert replacement.status == "running"
 
 
+def test_refresh_task_worker_interrupted_requeues_without_cursor_or_checkpoint_progress(db, monkeypatch):
+    _polling_source(db, connector=_SourceConnector(page=DeltaPage(
+        envelopes=[], candidate_cursor=_cursor("", ""), source_observed_at=NOW,
+        source_lag_seconds=0,
+    )))
+    run = claim_refresh_run(
+        db, source_id="source-001", resource="orders", policy="micro_batch",
+        idempotency_key="worker-interrupted", lease_owner="worker-001", now=NOW,
+    )
+    state_before = db.query(RefreshSourceState).filter(
+        RefreshSourceState.source_id == "source-001",
+        RefreshSourceState.resource == "orders",
+    ).one()
+    cursor_before_snapshot = state_before.cursor_json
+
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    def raise_soft_timeout(*_args, **_kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(polling, "poll_source", raise_soft_timeout)
+    from app import database as app_database
+    from sqlalchemy.orm import sessionmaker
+
+    worker_session = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr(app_database, "SessionLocal", worker_session)
+    from app.tasks.v2 import refresh_tasks
+
+    result = refresh_tasks._refresh_poll(run.id)
+
+    db.expire_all()
+    requeued = db.get(RefreshRun, run.id)
+    state_after = db.query(RefreshSourceState).filter(
+        RefreshSourceState.source_id == "source-001",
+        RefreshSourceState.resource == "orders",
+    ).one()
+    assert result["status"] == "queued"
+    assert requeued.status == "queued"
+    assert requeued.dispatch_state == "pending"
+    assert requeued.retry_reason == "WORKER_INTERRUPTED"
+    assert requeued.cursor_before == requeued.cursor_after
+    assert state_after.cursor_json == cursor_before_snapshot
+    assert db.query(DatasetVersion).count() == 0
+    assert db.query(PipelineRun).count() == 0
+
+
 def test_polling_deduplicates_processed_overlap_across_runs(db):
     event_one = _envelope("evt-overlap-1", "2026-08-26T01:00:00Z", "100", {"id": "100"})
     first_connector = _SourceConnector(page=DeltaPage(

@@ -1,7 +1,6 @@
 """增量更新编排器 — 触发链路：Connection→Pipeline→Curated→Ontology"""
 from __future__ import annotations
 import logging
-import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
@@ -22,34 +21,13 @@ class IncrementalOrchestrator:
 
     # ── 触发点 1：Connection 同步完成 ────────────────────────────────
 
-    def on_connection_sync(self, connection_id: str | object | None = None, dataset_id: str | None = None,
-                           refresh_result=None) -> dict:
+    def on_connection_sync(self, connection_id: str, dataset_id: str) -> dict:
         """
         数据连接同步完成后：
         - 找到以该 dataset 为输入的所有 Pipeline
         - 若 Pipeline.spec.trigger.on_dataset_version = true，触发增量运行
-
-        ``refresh_result`` is the durable polling result.  When supplied, its
-        pinned input DatasetVersion IDs and refresh run ID are carried into
-        the PipelineRun instead of creating an unpinned run.
         """
         from app.models.v2.pipeline import Pipeline
-
-        if refresh_result is None and not isinstance(connection_id, str):
-            refresh_result = connection_id
-            connection_id = getattr(refresh_result, "provenance", {}).get("source_id")
-        if refresh_result is not None:
-            connection_id = connection_id or getattr(refresh_result, "provenance", {}).get("source_id")
-            if dataset_id is None:
-                input_ids = list(getattr(refresh_result, "input_dataset_version_ids", ()) or ())
-                if input_ids:
-                    from app.models.v2.dataset import DatasetVersion
-
-                    version = self._db.query(DatasetVersion).filter(DatasetVersion.id == input_ids[0]).first()
-                    dataset_id = version.dataset_id if version else None
-                dataset_id = dataset_id or getattr(refresh_result, "provenance", {}).get("dataset_id")
-        if dataset_id is None:
-            return {"triggered_pipelines": [], "dataset_id": None}
 
         triggered = []
         pipelines = self._db.query(Pipeline).filter(
@@ -62,15 +40,7 @@ class IncrementalOrchestrator:
             spec = pl.spec or {}
             trigger_config = spec.get("trigger", {})
             if trigger_config.get("on_dataset_version", False):
-                if refresh_result is None:
-                    run_id = self._trigger_pipeline(pl.id, mode="incremental")
-                else:
-                    run_id = self._trigger_pipeline(
-                        pl.id,
-                        mode="incremental",
-                        input_dataset_version_ids=list(getattr(refresh_result, "input_dataset_version_ids", ()) or ()),
-                        refresh_run_id=getattr(refresh_result, "run_id", None),
-                    )
+                run_id = self._trigger_pipeline(pl.id, mode="incremental")
                 if run_id:
                     triggered.append({"pipeline_id": pl.id, "run_id": run_id})
                     logger.info(f"增量触发 Pipeline {pl.id}，run_id={run_id}")
@@ -153,42 +123,18 @@ class IncrementalOrchestrator:
 
     # ── 幂等性保障 ────────────────────────────────────────────────────
 
-    def _trigger_pipeline(
-        self,
-        pipeline_id: str,
-        mode: str = "incremental",
-        input_dataset_version_ids=None,
-        refresh_run_id: str | None = None,
-    ) -> str | None:
+    def _trigger_pipeline(self, pipeline_id: str, mode: str = "incremental") -> str | None:
         """触发 Pipeline 运行，返回 run_id"""
-        from app.models.v2.pipeline import PipelineRun, PipelineRunInput
+        from app.models.v2.pipeline import PipelineRun
 
-        pinned_ids = list(input_dataset_version_ids or [])
-        run = PipelineRun(
-            pipeline_id=pipeline_id,
-            status="pending",
-            dataset_version_id=pinned_ids[0] if pinned_ids else None,
-            stats={"refresh_run_id": refresh_run_id} if refresh_run_id else None,
-        )
+        run = PipelineRun(pipeline_id=pipeline_id, status="pending")
         self._db.add(run)
-        self._db.flush()
-        for ordinal, version_id in enumerate(pinned_ids):
-            self._db.add(PipelineRunInput(
-                id=str(uuid.uuid4()),
-                pipeline_run_id=run.id,
-                dataset_version_id=version_id,
-                input_ordinal=ordinal,
-                provenance={"refresh_run_id": refresh_run_id} if refresh_run_id else None,
-            ))
         self._db.commit()
         self._db.refresh(run)
 
         try:
             from app.tasks.v2.pipeline_run import pipeline_run_task
-            if pinned_ids:
-                pipeline_run_task.delay(pipeline_id, run.id, pinned_ids)
-            else:
-                pipeline_run_task.delay(pipeline_id, run.id)
+            pipeline_run_task.delay(pipeline_id, run.id)
         except Exception:
             pass  # Celery 不可用时仍保留 PipelineRun 记录
 
