@@ -430,6 +430,84 @@ def test_manual_pipeline_run_pins_one_source_version_for_load_and_lineage(db, mo
     ).first() is None
 
 
+def test_manual_pipeline_run_loads_exact_duplicate_version_id(db, monkeypatch):
+    from app.services.v2 import dataset_service
+    from app.tasks.v2 import pipeline_run as pipeline_module
+
+    class MemoryStorage:
+        def put_bytes(self, bucket, key, data, content_type="application/octet-stream"):
+            return f"s3://{bucket}/{key}"
+
+    monkeypatch.setattr("app.database.SessionLocal", sessionmaker(bind=db.get_bind()))
+    monkeypatch.setattr(dataset_service, "get_storage_service", lambda: MemoryStorage())
+    captured_context = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "_execute_route",
+        lambda route, context, data: (captured_context.append((context, data)) or (data, context)),
+    )
+
+    pipeline = Pipeline(
+        id="pipeline-duplicate-version-001",
+        name="duplicate version pipeline",
+        source_dataset_id="dataset-duplicate-version-001",
+        route="A",
+        spec={},
+        status="active",
+    )
+    source_dataset = Dataset(
+        id="dataset-duplicate-version-001",
+        name="duplicate version source",
+        kind="structured",
+    )
+    source_version_a = DatasetVersion(
+        id="dataset-duplicate-version-a",
+        dataset_id=source_dataset.id,
+        version_no=1,
+        rowcount=1,
+    )
+    source_version_b = DatasetVersion(
+        id="dataset-duplicate-version-b",
+        dataset_id=source_dataset.id,
+        version_no=1,
+        rowcount=1,
+    )
+    source_dataset.latest_version_id = source_version_a.id
+    run = PipelineRun(
+        id="pipeline-run-duplicate-version-001",
+        pipeline_id=pipeline.id,
+        status="pending",
+    )
+    db.add_all([pipeline, source_dataset, source_version_a, source_version_b, run])
+    db.commit()
+
+    def preview_ambiguous_version(self, dataset_id, version_no, limit=100, *, version_id=None):
+        loaded_id = version_id or source_version_b.id
+        return [{
+            "source_version_id": loaded_id,
+            "value": "from-A" if loaded_id == source_version_a.id else "from-B",
+        }]
+
+    monkeypatch.setattr(dataset_service.DatasetService, "preview", preview_ambiguous_version)
+
+    pipeline_module.pipeline_run_task.run(pipeline.id, run.id)
+    db.expire_all()
+
+    persisted_run = db.get(PipelineRun, run.id)
+    assert persisted_run.status == "success"
+    context, loaded_rows = captured_context[0]
+    assert loaded_rows == [{"source_version_id": source_version_a.id, "value": "from-A"}]
+    assert context.dataset_version_id == source_version_a.id
+    assert db.query(PipelineRunInput).filter(
+        PipelineRunInput.pipeline_run_id == run.id,
+        PipelineRunInput.dataset_version_id == source_version_a.id,
+    ).one()
+    assert db.query(PipelineRunInput).filter(
+        PipelineRunInput.pipeline_run_id == run.id,
+        PipelineRunInput.dataset_version_id == source_version_b.id,
+    ).first() is None
+
+
 def _load_task_11_migration():
     migration_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0027_semantic_snapshot.py"
     spec = importlib.util.spec_from_file_location("task_11_snapshot_migration", migration_path)

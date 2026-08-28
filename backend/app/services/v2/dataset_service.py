@@ -106,12 +106,21 @@ class DatasetService:
             DatasetVersion.dataset_id == dataset_id
         ).order_by(DatasetVersion.version_no).all()
 
-    def preview(self, dataset_id: str, version_no: int, limit: int = 100) -> list[dict]:
+    def preview(
+        self,
+        dataset_id: str,
+        version_no: int,
+        limit: int = 100,
+        *,
+        version_id: str | None = None,
+    ) -> list[dict]:
         """CSV/JSON 数据预览。无需 DuckDB, 纯 Python 处理。"""
-        ver = self._db.query(DatasetVersion).filter(
-            DatasetVersion.dataset_id == dataset_id,
-            DatasetVersion.version_no == version_no,
-        ).first()
+        query = self._db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id)
+        if version_id is not None:
+            query = query.filter(DatasetVersion.id == version_id)
+        else:
+            query = query.filter(DatasetVersion.version_no == version_no)
+        ver = query.first()
         if not ver or not ver.storage_uri:
             return []
 

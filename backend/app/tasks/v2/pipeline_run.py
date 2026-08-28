@@ -273,7 +273,9 @@ def _load_source_rows(
         }]
     if version is None:
         return []
-    return svc.preview(source["dataset_id"], version.version_no, limit=limit)
+    return svc.preview(
+        source["dataset_id"], version.version_no, limit=limit, version_id=version.id,
+    )
 
 
 def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], object]:
@@ -465,6 +467,7 @@ def pipeline_run_task(
             ctx = PipelineContext(
                 dataset_id=source["dataset_id"],
                 version_no=source_version.version_no if source_version is not None else None,
+                dataset_version_id=source_version.id if source_version is not None else None,
                 route=source["route"],
                 spec=runtime_spec,
             )

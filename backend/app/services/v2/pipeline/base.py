@@ -15,6 +15,7 @@ class PipelineContext:
     rows_in: int = 0
     rows_out: int = 0
     error: str | None = None
+    dataset_version_id: str | None = None
 
 class PipelineStep(ABC):
     @abstractmethod
