@@ -35,7 +35,10 @@ def mcp_db():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    result = _alembic(schema, "upgrade", "0017_mcp_write_requests")
+    # "head", not the 0017 revision that introduced mcp_write_requests: this
+    # test creates OAuthClient rows via app.services.oauth_clients, which
+    # Task 13 (0029_runtime_identity) extended with new non-nullable columns.
+    result = _alembic(schema, "upgrade", "head")
     assert result.returncode == 0, result.stderr
     session_engine = create_engine(_scoped_url(schema))
     Session = sessionmaker(bind=session_engine)
