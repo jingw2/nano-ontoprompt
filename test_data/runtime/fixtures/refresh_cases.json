@@ -1,0 +1,152 @@
+{
+  "cases": {
+    "backfill": {
+      "case_id": "backfill",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-13"
+    },
+    "cancel-after-tentative-materialization": {
+      "case_id": "cancel-after-tentative-materialization",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-17"
+    },
+    "cancel-before-pull": {
+      "case_id": "cancel-before-pull",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-15"
+    },
+    "cancel-inflight-page": {
+      "case_id": "cancel-inflight-page",
+      "expected": {
+        "cancel_outcome": "cancelled",
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-16"
+    },
+    "config-drift-late-finish": {
+      "case_id": "config-drift-late-finish",
+      "expected": {
+        "cursor_outcome": "unchanged",
+        "error_code": "CONFIGURATION_DRIFT"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-12"
+    },
+    "cursor-nonadvance": {
+      "case_id": "cursor-nonadvance",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-07"
+    },
+    "dlq-replay": {
+      "case_id": "dlq-replay",
+      "expected": {
+        "cursor_outcome": "dead_lettered"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-08"
+    },
+    "duplicate": {
+      "case_id": "duplicate",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-04"
+    },
+    "empty": {
+      "case_id": "empty",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "equal-watermark": {
+      "case_id": "equal-watermark",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-03"
+    },
+    "expired-webhook": {
+      "case_id": "expired-webhook",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-09"
+    },
+    "failed-retry": {
+      "case_id": "failed-retry",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-06"
+    },
+    "late": {
+      "case_id": "late",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-02"
+    },
+    "normal": {
+      "case_id": "normal",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    },
+    "out-of-order": {
+      "case_id": "out-of-order",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-05"
+    },
+    "replay-attack": {
+      "case_id": "replay-attack",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-10"
+    },
+    "schema-drift": {
+      "case_id": "schema-drift",
+      "expected": {
+        "cursor_outcome": "unchanged"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-11"
+    },
+    "t1-timezone": {
+      "case_id": "t1-timezone",
+      "expected": {
+        "cursor_outcome": "advanced"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-14"
+    }
+  }
+}

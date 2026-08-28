@@ -326,6 +326,7 @@ def build_fixture_files(cases: list[dict]) -> dict[str, dict]:
             }
         },
         "fixtures/transport_cases.json": {"cases": _fixture_records(cases, "parity")},
+        "fixtures/refresh_cases.json": {"cases": _fixture_records(cases, "refresh")},
     }
 
 
@@ -539,8 +540,8 @@ fails loudly instead of silently drifting from the generator.
 - `manifest.json` -- the case registry: every case's `case_id`, `expected`
   outcome, `coverage` tags, `layers`, `execution_mode`, and exactly one
   `test_targets` descriptor (see `registry.py`).
-- `fixtures/{{snapshots,identities,runtime_cases,execution_cases,transport_cases}}.json`
-  -- the synthetic records each case's non-refresh layer is built from.
+- `fixtures/{{snapshots,identities,runtime_cases,execution_cases,transport_cases,refresh_cases}}.json`
+  -- the synthetic records each case's layer is built from.
 - `playwright_seed.json` -- static state (schedule/cursor/config-version/lag,
   cancellation-requested/cancelled/already-terminal, dead-letter/replay/
   configuration-drift) that a later task's Playwright governance specs seed

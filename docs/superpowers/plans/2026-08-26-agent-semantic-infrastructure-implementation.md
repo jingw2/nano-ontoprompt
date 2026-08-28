@@ -294,6 +294,7 @@ registry.py exposes targets_for(case_id: str) -> list[TestTarget], target_is_exe
 - Create: test_data/runtime/fixtures/runtime_cases.json
 - Create: test_data/runtime/fixtures/execution_cases.json
 - Create: test_data/runtime/fixtures/transport_cases.json
+- Create: test_data/runtime/fixtures/refresh_cases.json
 - Create: test_data/runtime/registry.py
 - Create: test_data/runtime/playwright_seed.json
 - Create: test_data/runtime/db/docker-compose.yml
