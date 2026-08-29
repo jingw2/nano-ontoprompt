@@ -194,7 +194,10 @@ def test_initialize_and_tools_list_require_no_special_scope(pg_client, mcp_db):
                              headers={"Authorization": f"Bearer {token}"})
     assert listed.status_code == 200
     tool_names = {t["name"] for t in listed.json()["result"]["tools"]}
-    assert tool_names == {"ontology_read_instances", "ontology_traverse_relations", "ontology_propose_write", "ontology_check_write_status"}
+    assert tool_names == {
+        "ontology_read_instances", "ontology_traverse_relations", "ontology_propose_write", "ontology_check_write_status",
+        "runtime_investigate", "runtime_create_action_plan", "runtime_get_action_plan", "runtime_get_execution_status",
+    }
 
 
 def test_rpc_rejects_missing_or_wrong_token_type(pg_client):
@@ -282,6 +285,50 @@ def test_propose_write_tool_call_requires_write_scope_and_grant(pg_client, mcp_d
     )
     checked_payload = jsonlib.loads(checked.json()["result"]["content"][0]["text"])
     assert checked_payload["status"] == "pending"
+
+
+def test_runtime_create_action_plan_tool_call_requires_write_scope(pg_client, mcp_db):
+    """Critical-finding regression test: an MCP OAuth session whose access
+    token was granted only `ontology:read` must not be able to call the
+    `runtime_create_action_plan` tool — REST's equivalent path
+    (`_require_runtime_context(WRITE_SCOPE)` in `app.routers.v2.runtime`)
+    rejects the identical under-scoped request with `SCOPE_DENIED` before
+    ever reaching `RuntimeService`, and MCP must match that exactly. Uses a
+    real access token minted through the full PKCE flow (not a mock), so
+    this exercises the actual `get_oauth_context` -> `get_runtime_context`
+    -> `call_runtime_tool` path exactly as a real MCP client would hit it."""
+    admin_id = _add_user(mcp_db, "admin-" + uuid.uuid4().hex[:8], role="admin")
+    username = "user-" + uuid.uuid4().hex[:8]
+    _add_user(mcp_db, username)
+    read_only_client = _add_client(mcp_db, admin_id, scopes=["ontology:read"])
+    read_token = _mint_oauth_token(pg_client, read_only_client, username, "ontology:read")
+
+    denied = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+              "params": {"name": "runtime_create_action_plan",
+                         "arguments": {"semantic_snapshot_id": "snap-does-not-matter", "action_id": "action-does-not-matter", "parameters": {}}}},
+        headers={"Authorization": f"Bearer {read_token}"},
+    )
+    assert denied.status_code == 200
+    assert denied.json()["result"]["isError"] is True
+    assert "SCOPE_DENIED" in denied.json()["result"]["content"][0]["text"]
+
+    # A write-scoped token for the same tool call is not itself blocked by
+    # the scope check (it will fail later, for lack of a real governed
+    # snapshot/action — proving the denial above was scope-specific, not
+    # incidental to the dummy arguments).
+    write_client = _add_client(mcp_db, admin_id, scopes=["ontology:write"])
+    write_token = _mint_oauth_token(pg_client, write_client, username, "ontology:write")
+    not_scope_denied = pg_client.post(
+        "/api/v1/mcp",
+        json={"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+              "params": {"name": "runtime_create_action_plan",
+                         "arguments": {"semantic_snapshot_id": "snap-does-not-matter", "action_id": "action-does-not-matter", "parameters": {}}}},
+        headers={"Authorization": f"Bearer {write_token}"},
+    )
+    assert not_scope_denied.json()["result"]["isError"] is True
+    assert "SCOPE_DENIED" not in not_scope_denied.json()["result"]["content"][0]["text"]
 
 
 def test_unknown_rpc_method_returns_top_level_json_rpc_error(pg_client, mcp_db):

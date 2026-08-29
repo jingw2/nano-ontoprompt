@@ -17,7 +17,14 @@ Task 18 adds `call_runtime_tool`, a second dispatch entry point for the
 request model from caller-supplied arguments only (never from a caller-
 asserted `agent_id`/`user_id`, which the shared request models don't even
 have a field for) and calls `RuntimeService` directly; no policy or query
-logic is duplicated here.
+logic is duplicated here. Like the legacy tools, each `runtime_*` tool is
+scope-checked before dispatch (`_require_runtime_scope`, mirroring
+`_require_scope`) — `runtime_investigate`/`runtime_get_action_plan`/
+`runtime_get_execution_status` require `ontology:read`,
+`runtime_create_action_plan` requires `ontology:write`, exactly matching
+REST's `_require_runtime_context(READ_SCOPE)`/`(WRITE_SCOPE)` in
+`app.routers.v2.runtime`, so an MCP session scoped only for reads can never
+reach `RuntimeService.create_action_plan`.
 """
 from __future__ import annotations
 
@@ -85,6 +92,55 @@ TOOLS = [
             "type": "object",
             "properties": {"request_id": {"type": "string"}},
             "required": ["request_id"],
+        },
+    },
+    {
+        "name": "runtime_investigate",
+        "description": "Policy-checked, snapshot-pinned read investigation through the shared Runtime service (requires ontology:read).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "semantic_snapshot_id": {"type": "string"},
+                "ontology_id": {"type": "string"},
+                "query": {"type": "string"},
+                "entity_type": {"type": "string"},
+                "filters": {"type": "object"},
+                "limit": {"type": "integer", "default": 20},
+            },
+            "required": ["semantic_snapshot_id"],
+        },
+    },
+    {
+        "name": "runtime_create_action_plan",
+        "description": "Propose an immutable, policy-checked action plan against a governed snapshot through the shared Runtime service. Never executes anything (requires ontology:write).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "semantic_snapshot_id": {"type": "string"},
+                "action_id": {"type": "string"},
+                "parameters": {"type": "object"},
+                "target_selector": {"type": "object"},
+                "idempotency_key": {"type": "string"},
+            },
+            "required": ["semantic_snapshot_id", "action_id"],
+        },
+    },
+    {
+        "name": "runtime_get_action_plan",
+        "description": "Fetch a previously created action plan by id, visibility-checked against the caller's verified identity (requires ontology:read).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"plan_id": {"type": "string"}},
+            "required": ["plan_id"],
+        },
+    },
+    {
+        "name": "runtime_get_execution_status",
+        "description": "Check the execution status of a previously created action plan by id (requires ontology:read).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"plan_id": {"type": "string"}},
+            "required": ["plan_id"],
         },
     },
 ]
@@ -172,6 +228,24 @@ def call_tool(db, ctx: OAuthContext, name: str, arguments: dict) -> dict:
 
 _runtime_service = RuntimeService()
 
+
+def _require_runtime_scope(context: RuntimeContext, scope: str) -> None:
+    """Enforce the same scope-membership check REST's
+    `verify_delegated_credential` (`app.services.runtime.credentials`)
+    performs — `if required_scope not in granted_scope: raise ...
+    "SCOPE_DENIED"` — against the verified `RuntimeContext.principal.scope`
+    MCP's `get_runtime_context` bridges from the caller's real OAuth access
+    token. `get_runtime_context` cannot do this check itself: it is built
+    once per JSON-RPC request, before the tool name (hence the required
+    scope) inside the request body is known, exactly like the legacy
+    `_require_scope` above cannot run until `call_tool` knows which tool
+    name was requested. Raising the identical `SCOPE_DENIED` reason code
+    here (mirrors `_require_scope`'s message shape too) gives MCP the same
+    denial REST would give for the same under-scoped credential."""
+    if scope not in context.principal.scope:
+        raise McpToolError("SCOPE_DENIED", f"token missing required scope: {scope}")
+
+
 _INVESTIGATE_FIELDS = frozenset({"semantic_snapshot_id", "query", "ontology_id", "entity_type", "filters", "limit"})
 _ACTION_PLAN_FIELDS = frozenset({"semantic_snapshot_id", "action_id", "parameters", "target_selector", "idempotency_key"})
 
@@ -247,6 +321,7 @@ def call_runtime_tool(
     caller's own `arguments` assert.
     """
     if name == "runtime_investigate":
+        _require_runtime_scope(context, _READ_SCOPE)
         request = _investigation_request_from_arguments(arguments)
         try:
             result = _runtime_service.investigate(request, context, db)
@@ -263,6 +338,7 @@ def call_runtime_tool(
             "user_id": context.principal.user_id,
         }
     if name == "runtime_create_action_plan":
+        _require_runtime_scope(context, _WRITE_SCOPE)
         request = _action_plan_request_from_arguments(arguments)
         try:
             plan = _runtime_service.create_action_plan(request, context, db)
@@ -270,6 +346,7 @@ def call_runtime_tool(
             raise McpToolError(exc.reason_code, str(exc)) from exc
         return _plan_to_dict(plan)
     if name in ("runtime_get_action_plan", "runtime_get_execution_status"):
+        _require_runtime_scope(context, _READ_SCOPE)
         plan_id = arguments.get("plan_id")
         if not plan_id:
             raise McpToolError("MISSING_ARGUMENT", "plan_id is required")

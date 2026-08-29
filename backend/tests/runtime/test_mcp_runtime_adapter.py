@@ -133,9 +133,14 @@ def governed_snapshot(db):
 
 @pytest.fixture
 def runtime_context():
+    # A properly-authorized caller for these tests carries both scopes — the
+    # scope-*enforcement* itself (a read-only-scoped principal must be denied
+    # `runtime_create_action_plan`) is exercised separately below by
+    # `test_mcp_runtime_create_action_plan_denies_read_only_scope`, which
+    # builds its own deliberately read-only-scoped `RuntimeContext`.
     principal = RuntimePrincipal(
         agent_id=AGENT_ID, user_id=USER_ID, security_domain_id=DOMAIN,
-        audience="ontexus-mcp", scope=frozenset({"ontology:read"}), token_id="tok-mcp-001",
+        audience="ontexus-mcp", scope=frozenset({"ontology:read", "ontology:write"}), token_id="tok-mcp-001",
     )
     return RuntimeContext(principal=principal, correlation_id="corr-mcp-001")
 
@@ -239,6 +244,66 @@ def test_mcp_get_action_plan_denies_other_principal(db, governed_snapshot, runti
     with pytest.raises(McpToolError) as exc:
         call_runtime_tool(db, other_context, "runtime_get_action_plan", {"plan_id": created["id"]})
     assert exc.value.code == "POLICY_DENIED"
+
+
+def test_mcp_runtime_create_action_plan_denies_read_only_scope(db, governed_snapshot):
+    """The critical-finding regression test: an MCP session whose access
+    token was granted only `ontology:read` must not be able to call
+    `runtime_create_action_plan` (a write operation) — REST's equivalent
+    path (`_require_runtime_context(WRITE_SCOPE)` in
+    `app.routers.v2.runtime`) rejects the identical request with
+    `SCOPE_DENIED` before ever reaching `RuntimeService`, and MCP must
+    match that exactly. Uses a real, fully-governed snapshot/action/grant
+    (the same fixture a genuinely authorized call in this file would
+    succeed against) so the denial is proven to come from the scope check
+    itself, not from missing setup."""
+    principal = RuntimePrincipal(
+        agent_id=AGENT_ID, user_id=USER_ID, security_domain_id=DOMAIN,
+        audience="ontexus-mcp", scope=frozenset({"ontology:read"}), token_id="tok-mcp-readonly",
+    )
+    read_only_context = RuntimeContext(principal=principal, correlation_id="corr-mcp-readonly")
+
+    with pytest.raises(McpToolError) as exc:
+        call_runtime_tool(
+            db, read_only_context, "runtime_create_action_plan",
+            {"semantic_snapshot_id": SNAPSHOT_ID, "action_id": ACTION_ID, "parameters": {"status": "confirmed"}},
+        )
+    assert exc.value.code == "SCOPE_DENIED"
+
+    # No `RuntimePlan` was ever persisted for the denied call.
+    from app.models.runtime_plan import RuntimePlan
+    assert db.query(RuntimePlan).filter(RuntimePlan.agent_id == AGENT_ID).count() == 0
+
+
+def test_mcp_runtime_investigate_denies_write_only_scope(db, governed_snapshot):
+    """Symmetric check: a write-only-scoped session cannot call
+    `runtime_investigate` (a read operation), matching REST's
+    `_require_runtime_context(READ_SCOPE)` for `POST /investigate`."""
+    principal = RuntimePrincipal(
+        agent_id=AGENT_ID, user_id=USER_ID, security_domain_id=DOMAIN,
+        audience="ontexus-mcp", scope=frozenset({"ontology:write"}), token_id="tok-mcp-writeonly",
+    )
+    write_only_context = RuntimeContext(principal=principal, correlation_id="corr-mcp-writeonly")
+
+    with pytest.raises(McpToolError) as exc:
+        call_runtime_tool(db, write_only_context, "runtime_investigate", valid_investigation_dict())
+    assert exc.value.code == "SCOPE_DENIED"
+
+
+def test_mcp_runtime_get_action_plan_denies_read_scope_missing(db, governed_snapshot, runtime_context):
+    created = call_runtime_tool(
+        db, runtime_context, "runtime_create_action_plan",
+        {"semantic_snapshot_id": SNAPSHOT_ID, "action_id": ACTION_ID, "parameters": {}},
+    )
+    principal = RuntimePrincipal(
+        agent_id=AGENT_ID, user_id=USER_ID, security_domain_id=DOMAIN,
+        audience="ontexus-mcp", scope=frozenset({"ontology:write"}), token_id="tok-mcp-writeonly-2",
+    )
+    write_only_context = RuntimeContext(principal=principal, correlation_id="corr-mcp-writeonly-2")
+
+    with pytest.raises(McpToolError) as exc:
+        call_runtime_tool(db, write_only_context, "runtime_get_action_plan", {"plan_id": created["id"]})
+    assert exc.value.code == "SCOPE_DENIED"
 
 
 def test_mcp_runtime_tool_unknown_name_rejected(db, runtime_context):
