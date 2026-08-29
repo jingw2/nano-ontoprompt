@@ -106,10 +106,13 @@ def normalize_investigation(result: Any) -> dict[str, Any]:
 # principals, evidence/rules, binding identity/version, frozen typed
 # parameters, the normalized target, before-image/version hashes,
 # risk/policy, preconditions, expiry, and the idempotency key. Deliberately
-# excluded: `id` (a generated storage id), `plan_hash` (the field this
-# module's own digest supersedes for parity purposes), `input_facts`,
-# `predicted_diff`, and `impact_scope` (derived/presentation projections of
-# the same pinned facts, not independent semantic inputs).
+# excluded: `id` (a generated storage id) and `plan_hash` itself (this
+# module's own digest is an independent, externally-recomputable transport-
+# parity check — it is NOT the persisted `plan_hash` and is not expected to
+# equal it; the two intentionally cover different field sets and serve
+# different purposes). Also excluded: `input_facts`, `predicted_diff`, and
+# `impact_scope` (derived/presentation projections of the same pinned facts,
+# not independent semantic inputs).
 _PLAN_SCALAR_FIELDS = (
     "semantic_snapshot_id",
     "ontology_release_id",
