@@ -58,6 +58,11 @@ class EvidenceCitation(BaseModel):
     source_type: str
     locator: str
     content_hash: str
+    # Task 20: set only for citations derived from a governed RefreshRun's
+    # `source_provenance` — the exact refresh that produced this evidence,
+    # kept alongside (never instead of) `source_id`/`locator` so refresh
+    # lineage is not lost when a citation is refresh-sourced.
+    refresh_run_id: str | None = None
 
 
 class RuleOutcome(BaseModel):

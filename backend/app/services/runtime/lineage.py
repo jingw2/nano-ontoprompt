@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Sequence
 
 from sqlalchemy import select
@@ -46,20 +48,16 @@ _QUALITY_KEYS = {
     "schema_hash",
     "checksum",
 }
+# Exactly the keys `app.schemas.runtime.EvidenceCitation` accepts. Domain
+# and tenant metadata (`_DOMAIN_KEYS`) is deliberately excluded here — it is
+# security-scoping metadata read separately by `_provenance_domains`, never
+# a citation field, and `EvidenceCitation` is `extra="forbid"`, so any other
+# key surviving into a citation dict would crash construction.
 _EVIDENCE_KEYS = {
-    "id",
     "source_id",
     "source_type",
     "locator",
     "content_hash",
-    "source_hash",
-    "citation_id",
-    "document_id",
-    "dataset_version_id",
-    "pipeline_run_id",
-    "security_domain_id",
-    "tenant_id",
-    "tenant",
     "refresh_run_id",
 }
 _DOMAIN_KEYS = {"security_domain_id", "tenant_id", "tenant"}
@@ -95,6 +93,19 @@ def _safe_quality(source: Any) -> dict[str, Any]:
     return result
 
 
+def _synthesized_content_hash(source: dict[str, Any]) -> str:
+    """A deterministic fingerprint of the raw provenance record itself.
+
+    Real refresh-run/pipeline-input provenance (`polling.py`, `event_ingest.py`)
+    never carries a `content_hash` — that is a Task 14/15 governed-entity
+    citation concept. Rather than inventing a fake hash or dropping the
+    citation, fingerprint what was actually observed so the citation is
+    still hashable/comparable and changes if the observed provenance does.
+    """
+    payload = json.dumps(source, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _safe_citation(source: Any) -> dict[str, Any] | None:
     if not isinstance(source, dict):
         return None
@@ -103,7 +114,22 @@ def _safe_citation(source: Any) -> dict[str, Any] | None:
         for key in sorted(_EVIDENCE_KEYS)
         if key in source and isinstance(source[key], (str, int, float, bool))
     }
-    return citation or None
+    source_id = citation.get("source_id")
+    if not isinstance(source_id, str) or not source_id:
+        # No source identity to point at — never fabricate one.
+        return citation or None
+    # Real refresh-run/pipeline-input provenance carries `source_id` and
+    # `resource` but not `source_type`/`locator`/`content_hash`. Describe the
+    # provenance record itself instead of dropping this real lineage or
+    # inventing unrelated content.
+    citation.setdefault("source_type", "refresh_source")
+    resource = source.get("resource")
+    citation.setdefault(
+        "locator",
+        f"{source_id}/{resource}" if isinstance(resource, str) and resource else source_id,
+    )
+    citation.setdefault("content_hash", _synthesized_content_hash(source))
+    return citation
 
 
 def _citations_from_provenance(provenance: Any) -> tuple[dict[str, Any], ...]:

@@ -33,6 +33,7 @@ from app.models.user import User
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
 from app.models.v2.refresh import RefreshRun, RefreshSourceState
+from app.schemas.runtime import InvestigationRequest
 from app.services.runtime.credentials import RuntimeAccessError, RuntimeContext, RuntimePrincipal
 from app.services.runtime.policy import DEFAULT_FRESHNESS_POLICY, FreshnessPolicy, compute_snapshot_freshness
 from app.services.runtime.service import ActionPlanRequest, RuntimeService
@@ -343,6 +344,92 @@ def test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot(case_id, 
     result = evaluate_fixture_runtime_freshness(case_id, db, runtime_context)
     assert result.reason_code in {"ALLOW", "SNAPSHOT_FRESHNESS_HITL", "SNAPSHOT_STALE"}
     assert snapshot.freshness_lag_seconds == before
+
+
+def test_investigate_succeeds_with_real_production_shaped_refresh_provenance(db, runtime_context):
+    """Regression test for a reviewer-reproduced crash: real `RefreshRun`/
+    `PipelineRunInput` provenance, exactly as `polling.py` (line ~630) and
+    `event_ingest.py` (line ~668) actually build it, carries
+    `refresh_run_id`, `source_id`, `resource`, `config_version`,
+    `cursor_contract`, `cursor_outcome`, `source_observed_at` — never
+    `source_type`/`locator`/`content_hash`. Before the fix,
+    `materialize_refresh_snapshot` on a `RefreshRun` shaped like that,
+    followed by `RuntimeService.investigate`, crashed with an unhandled
+    `pydantic.ValidationError` inside `EvidenceCitation(**citation)`
+    (missing required fields plus `extra_forbidden` on `refresh_run_id`).
+    This proves the real end-to-end flow now succeeds and that the refresh
+    lineage survives into the returned citations rather than being
+    silently dropped.
+    """
+    release = _ensure_release(db)
+    refresh_run_id = "refresh-provenance-shape-001"
+    dataset_version_id = f"dv-{refresh_run_id}"
+    pipeline_run_id = f"pr-{refresh_run_id}"
+
+    # The exact dict shape production code builds — no source_type/locator/
+    # content_hash key anywhere (see polling.py:630-638, event_ingest.py:668-678).
+    provenance = {
+        "refresh_run_id": refresh_run_id,
+        "source_id": "source-shape-001",
+        "resource": "orders",
+        "config_version": 1,
+        "cursor_contract": "watermark_primary_key",
+        "cursor_outcome": "advanced",
+        "source_observed_at": (FIXED_NOW - timedelta(seconds=60)).isoformat(),
+    }
+
+    pipeline = Pipeline(id=f"pipeline-{pipeline_run_id}", name=pipeline_run_id, spec={})
+    dataset = Dataset(id=f"dataset-{pipeline_run_id}", name=pipeline_run_id, kind="structured")
+    version = DatasetVersion(
+        id=dataset_version_id, dataset_id=dataset.id, version_no=1, rowcount=2,
+        checksum="a" * 64, refresh_run_id=refresh_run_id,
+    )
+    pipeline_run = PipelineRun(
+        id=pipeline_run_id, pipeline_id=pipeline.id, status="success",
+        finished_at=datetime.now(timezone.utc), dataset_version_id=version.id,
+        stats={"row_count": 2},
+    )
+    # `PipelineRunInput.provenance` is populated from this exact same dict in
+    # real code (`contract.py`'s `input_provenance=provenance` call sites),
+    # not a hand-picked clean shape — mirror that here.
+    input_row = PipelineRunInput(
+        id=f"input-{pipeline_run_id}", pipeline_run_id=pipeline_run.id,
+        dataset_version_id=version.id, input_ordinal=0, provenance=dict(provenance),
+    )
+    db.add_all([pipeline, dataset, version, pipeline_run, input_row])
+    run = RefreshRun(
+        id=refresh_run_id, source_id="source-shape-001", resource="orders",
+        policy="batch", config_version=1, cursor_contract="watermark_primary_key",
+        status="succeeded", dispatch_state="dispatched",
+        idempotency_key=f"idem-{refresh_run_id}",
+        cursor_after_json={
+            "watermark": None, "primary_key": "100", "opaque_value": None,
+            "observed_at": (FIXED_NOW - timedelta(seconds=60)).isoformat(),
+        },
+        fencing_token=1, lag_seconds=60, pipeline_run_id=pipeline_run_id,
+        source_provenance=dict(provenance),
+    )
+    db.add(run)
+    db.commit()
+
+    snapshot = materialize_refresh_snapshot(
+        db, refresh_run_id=run.id, ontology_release_id=release.id,
+        dataset_version_ids=[dataset_version_id], created_by=USER_ID,
+    )
+
+    result = RuntimeService().investigate(
+        InvestigationRequest(
+            semantic_snapshot_id=snapshot.id, query=None,
+            ontology_id=ONTOLOGY_ID, entity_type=None, filters={}, limit=20,
+        ),
+        runtime_context, db,
+    )
+
+    assert result.decision == "ALLOW"
+    assert result.evidence_citations
+    refresh_citations = [c for c in result.evidence_citations if c.refresh_run_id == refresh_run_id]
+    assert refresh_citations, "refresh lineage must survive into the returned evidence citations"
+    assert {c.source_id for c in refresh_citations} == {"source-shape-001"}
 
 
 def test_new_refresh_creates_new_snapshot_and_preserves_old_plan_and_approval(db, runtime_context):
