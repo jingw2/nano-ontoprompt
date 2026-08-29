@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
-from app.deps.oauth import OAuthContext, get_oauth_context
+from app.deps.oauth import OAuthContext, get_oauth_context, get_runtime_context
 from app.services import mcp_tools
 from app.services.mcp_tools import McpToolError
+from app.services.runtime.credentials import RuntimeContext
 
 router = APIRouter()
 
@@ -32,6 +33,7 @@ def mcp_rpc(
     body: dict,
     db: Session = Depends(get_db),
     ctx: OAuthContext = Depends(get_oauth_context),
+    runtime_context: RuntimeContext = Depends(get_runtime_context),
 ):
     request_id = body.get("id")
     if request_id is None:
@@ -54,7 +56,10 @@ def mcp_rpc(
         if not isinstance(arguments, dict):
             return _error(request_id, -32602, "arguments must be an object")
         try:
-            output = mcp_tools.call_tool(db, ctx, name, arguments)
+            if isinstance(name, str) and name.startswith("runtime_"):
+                output = mcp_tools.call_runtime_tool(db, runtime_context, name, arguments)
+            else:
+                output = mcp_tools.call_tool(db, ctx, name, arguments)
         except McpToolError as exc:
             return _result(request_id, {
                 "content": [{"type": "text", "text": f"{exc.code}: {exc.message}"}],

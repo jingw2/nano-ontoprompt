@@ -6,10 +6,19 @@ assemble_context -> call_model -> inspect_tool_calls (no tools -> finalize;
 ambiguity -> clarification interrupt).  Only the pinned worker holding the
 live PostgreSQL lease invokes this; it never falls back to API execution and
 never writes Actions.
+
+Task 18: the built-in reference Agent's Runtime investigation/action-plan
+calls route through `ReferenceAgentRuntime` (`app.services.runtime.
+reference_agent`), the same non-writing entry point onto `RuntimeService`
+that MCP (`app.services.mcp_tools.call_runtime_tool`) and REST
+(`app.routers.v2.runtime`) use — no separate policy or query logic lives
+here, only a pass-through.
 """
 from __future__ import annotations
 
 from typing import Any
+
+from sqlalchemy.orm import Session
 
 from app.runtime.fake import FakeAgentRuntime
 from app.runtime.protocol import (
@@ -18,6 +27,10 @@ from app.runtime.protocol import (
     RuntimeEvent,
     TurnRuntimeContext,
 )
+from app.schemas.runtime import InvestigationRequest, InvestigationResult
+from app.services.runtime.credentials import RuntimeContext
+from app.services.runtime.reference_agent import ReferenceAgentRuntime
+from app.services.runtime.service import ActionPlan, ActionPlanRequest
 
 
 class WorkerFenceError(Exception):
@@ -27,8 +40,9 @@ class WorkerFenceError(Exception):
 class LangGraphRuntimeAdapter:
     """Pins the runtime contract to the fixed read-only graph transcript."""
 
-    def __init__(self, runtime: AgentRuntime | None = None):
+    def __init__(self, runtime: AgentRuntime | None = None, reference_agent: ReferenceAgentRuntime | None = None):
         self._runtime = runtime or FakeAgentRuntime()
+        self._reference_agent = reference_agent or ReferenceAgentRuntime()
 
     async def start(self, context: TurnRuntimeContext) -> list[RuntimeEvent]:
         events = await self._runtime.start_turn(context)
@@ -38,6 +52,16 @@ class LangGraphRuntimeAdapter:
 
     async def resume(self, turn_id: str, signal: ResumeSignal) -> list[RuntimeEvent]:
         return await self._runtime.resume_turn(turn_id, signal)
+
+    def investigate(self, request: InvestigationRequest, context: RuntimeContext, db: Session) -> InvestigationResult:
+        """The built-in Agent's Runtime investigation call — routed through
+        `ReferenceAgentRuntime` onto the shared `RuntimeService`."""
+        return self._reference_agent.investigate(request, context, db)
+
+    def create_action_plan(self, request: ActionPlanRequest, context: RuntimeContext, db: Session) -> ActionPlan:
+        """The built-in Agent's Runtime action-plan proposal — routed
+        through `ReferenceAgentRuntime` onto the shared `RuntimeService`."""
+        return self._reference_agent.create_action_plan(request, context, db)
 
 
 def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
