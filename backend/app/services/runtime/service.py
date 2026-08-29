@@ -45,7 +45,13 @@ from app.schemas.runtime import (
 )
 from app.schemas.runtime_snapshot import SnapshotView
 from app.services.runtime.credentials import RuntimeAccessError, RuntimeContext
-from app.services.runtime.policy import evaluate_access
+from app.services.runtime.policy import (
+    DEFAULT_FRESHNESS_POLICY,
+    compute_snapshot_freshness,
+    cursor_to_dict,
+    evaluate_access,
+    evaluate_snapshot_freshness,
+)
 from app.services.runtime.snapshots import SnapshotValidationError, get_snapshot
 
 INVESTIGATE_CAPABILITY = "investigate"
@@ -244,6 +250,28 @@ class RuntimeService:
                 semantic_snapshot_id=snapshot.id, ontology_release_id=snapshot.ontology_release_id,
                 evidence_citations=[], rule_outcome=[], result=None,
                 correlation_id=context.correlation_id,
+                freshness_state=decision.freshness_state, freshness_lag_seconds=decision.freshness_lag_seconds,
+                source_cursor=decision.source_cursor,
+            )
+
+        # Task 20: a read never waits on human approval — any non-fresh
+        # state (soft-stale, hard-stale, or unknown) is denied outright with
+        # a structured reason code, never a partial/HITL read result.
+        freshness = compute_snapshot_freshness(
+            snapshot, now=datetime.now(timezone.utc), policy=DEFAULT_FRESHNESS_POLICY,
+        )
+        freshness_decision = evaluate_snapshot_freshness(freshness, DEFAULT_FRESHNESS_POLICY)
+        if freshness_decision.decision != "ALLOW":
+            reason_code = (
+                ReasonCode.SNAPSHOT_NOT_GOVERNED if freshness.state == "unknown" else ReasonCode.SNAPSHOT_STALE
+            )
+            return InvestigationResult(
+                decision="DENY", reason_code=reason_code,
+                semantic_snapshot_id=snapshot.id, ontology_release_id=snapshot.ontology_release_id,
+                evidence_citations=[], rule_outcome=[], result=None,
+                correlation_id=context.correlation_id,
+                freshness_state=freshness.state, freshness_lag_seconds=freshness.lag_seconds,
+                source_cursor=cursor_to_dict(freshness.cursor),
             )
 
         release = db.execute(
@@ -263,6 +291,8 @@ class RuntimeService:
             semantic_snapshot_id=snapshot.id, ontology_release_id=snapshot.ontology_release_id,
             evidence_citations=citations, rule_outcome=rule_outcome, result=result,
             correlation_id=context.correlation_id,
+            freshness_state=freshness.state, freshness_lag_seconds=freshness.lag_seconds,
+            source_cursor=cursor_to_dict(freshness.cursor),
         )
 
     def create_action_plan(self, request: ActionPlanRequest, context: RuntimeContext, db: Session) -> ActionPlan:
@@ -279,6 +309,17 @@ class RuntimeService:
         )
         if not decision.allowed:
             raise RuntimeAccessError(_reason_code_value(decision.reason_code))
+
+        # Task 20: a write may still be proposed against soft-stale data —
+        # it is persisted as a plan carrying an explicit HITL requirement
+        # (never auto-executed) — but hard-stale or unknown freshness denies
+        # plan creation outright, same as a policy denial.
+        freshness = compute_snapshot_freshness(
+            snapshot, now=datetime.now(timezone.utc), policy=DEFAULT_FRESHNESS_POLICY,
+        )
+        freshness_decision = evaluate_snapshot_freshness(freshness, DEFAULT_FRESHNESS_POLICY)
+        if freshness_decision.decision == "DENY":
+            raise RuntimeAccessError(freshness_decision.reason_code)
 
         action = db.execute(select(Action).where(Action.id == request.action_id)).scalar_one_or_none()
         if action is None or action.ontology_id != release.ontology_id or not action.enabled:
@@ -321,6 +362,10 @@ class RuntimeService:
             "reason_code": _reason_code_value(decision.reason_code),
             "agent_capability": decision.agent_capability,
             "user_entitlement": decision.user_entitlement,
+            "freshness_state": freshness.state,
+            "freshness_lag_seconds": freshness.lag_seconds,
+            "freshness_reason_code": freshness_decision.reason_code,
+            "requires_hitl": freshness_decision.decision == "HUMAN_APPROVED",
         }
         input_facts = {"quality_summary": dict(snapshot.quality_summary)}
 

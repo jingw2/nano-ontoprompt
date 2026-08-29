@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     JSON,
     String,
     UniqueConstraint,
@@ -42,6 +43,10 @@ class SemanticSnapshot(Base):
             "length(materialization_hash) = 64",
             name="ck_semantic_snapshots_materialization_hash",
         ),
+        CheckConstraint(
+            "freshness_state IN ('fresh', 'stale', 'unknown')",
+            name="ck_semantic_snapshots_freshness_state",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
@@ -51,6 +56,18 @@ class SemanticSnapshot(Base):
     quality_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     evidence_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     materialization_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Task 20: immutable source-freshness pins, frozen at materialization time.
+    # A snapshot created without governed refresh context (the pre-Task-20
+    # `materialize_snapshot` call shape) defaults to "unknown" — the policy
+    # layer must never treat an unknown-provenance snapshot as silently fresh.
+    freshness_state: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="unknown", server_default="unknown",
+    )
+    freshness_lag_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_cursor: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    lineage_summary: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'"),
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="materialized", server_default="materialized")
     created_by: Mapped[str] = mapped_column(
         String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False,

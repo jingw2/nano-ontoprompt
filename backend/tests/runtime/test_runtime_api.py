@@ -101,6 +101,16 @@ def _seed_governed_state(db):
             },
         ]},
         materialization_hash="a" * 64, status="materialized", created_by=user.id,
+        # Task 20: this transport test exercises the ALLOW path end to end,
+        # so the snapshot must carry real (fresh) freshness pins — a
+        # snapshot with no governed refresh context defaults to "unknown"
+        # and is denied outright by the Runtime freshness gate.
+        freshness_state="fresh", freshness_lag_seconds=60,
+        source_cursor={
+            "source_id": "source-supplier-api-001", "resource": "default",
+            "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        },
     ))
     db.add(Action(id=ACTION_ID, ontology_id=ONTOLOGY_ID, name_cn="确认供应商状态", enabled=True))
     db.commit()

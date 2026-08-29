@@ -386,6 +386,21 @@ def replay_refresh_run(
     return _clone_failed_run(db, original=original, operator_id=operator_id, now=now)
 
 
+def get_last_successful_refresh_run(
+    db: Session, *, source_id: str, resource: str | None = None,
+) -> RefreshRun | None:
+    """The durable pointer Task 20's snapshot freshness materialization
+    reads: the last `RefreshRun` `record_refresh_outcome` recorded as
+    successful for this (source_id, resource), via the authoritative
+    `RefreshSourceState.last_successful_run_id` — never inferred from
+    `created_at` ordering, which could return a later failed/dead-lettered
+    attempt instead."""
+    state = _source_state(db, source_id=source_id, resource=resource)
+    if state is None or state.last_successful_run_id is None:
+        return None
+    return db.get(RefreshRun, state.last_successful_run_id)
+
+
 def get_refresh_status(
     db: Session, *, source_id: str, resource: str | None = None,
 ) -> RefreshStatus:
@@ -529,6 +544,6 @@ def get_refresh_health(
 __all__ = [
     "RefreshRunView", "RefreshStatus", "RefreshScheduleView",
     "trigger_refresh", "cancel_refresh_run", "replay_refresh_run",
-    "get_refresh_status", "get_refresh_health", "schedule_view",
-    "update_refresh_schedule",
+    "get_last_successful_refresh_run", "get_refresh_status", "get_refresh_health",
+    "schedule_view", "update_refresh_schedule",
 ]

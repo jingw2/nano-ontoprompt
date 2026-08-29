@@ -102,6 +102,12 @@ class InvestigationResult(BaseModel):
     rule_outcome: list[RuleOutcome] = Field(default_factory=list)
     result: list[Any] | None = None
     correlation_id: str
+    # Task 20: freshness metadata (never protected row content) — safe to
+    # carry on both ALLOW and DENY, since it explains staleness rather than
+    # leaking query results.
+    freshness_state: str | None = None
+    freshness_lag_seconds: int | None = None
+    source_cursor: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _check_result_matches_decision(self) -> "InvestigationResult":

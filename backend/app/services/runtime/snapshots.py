@@ -152,8 +152,19 @@ def materialize_snapshot(
     ontology_release_id: str,
     dataset_version_ids: Sequence[str],
     created_by: str,
+    freshness_state: str = "unknown",
+    freshness_lag_seconds: int | None = None,
+    source_cursor: Mapping[str, Any] | None = None,
+    lineage_summary: Mapping[str, Any] | None = None,
 ) -> SemanticSnapshot:
-    """Validate and atomically persist one immutable governed snapshot."""
+    """Validate and atomically persist one immutable governed snapshot.
+
+    `freshness_state`/`freshness_lag_seconds`/`source_cursor`/`lineage_summary`
+    default to the safe "unknown" shape for callers with no governed refresh
+    context (Task 11/12's original call shape); `materialize_refresh_snapshot`
+    (Task 20) is the only caller that supplies real values, copied verbatim
+    from a successful `RefreshRun`.
+    """
     try:
         release, project, creator = _validate_release_and_creator(
             db,
@@ -183,6 +194,10 @@ def materialize_snapshot(
             status="materialized",
             created_by=creator.id,
             created_at=datetime.now(timezone.utc),
+            freshness_state=freshness_state,
+            freshness_lag_seconds=freshness_lag_seconds,
+            source_cursor=dict(source_cursor) if source_cursor is not None else None,
+            lineage_summary=dict(lineage_summary) if lineage_summary is not None else {},
         )
         db.add(snapshot)
         db.flush()
@@ -221,6 +236,62 @@ def materialize_snapshot(
     return snapshot
 
 
+def materialize_refresh_snapshot(
+    db: Session,
+    *,
+    refresh_run_id: str,
+    ontology_release_id: str,
+    dataset_version_ids: Sequence[str],
+    created_by: str,
+) -> SemanticSnapshot:
+    """Materialize a new snapshot, copying durable freshness pins from the
+    named `RefreshRun`.
+
+    Calls the same governed `materialize_snapshot` path Task 11/12 already
+    validate lineage through; this function's only added responsibility is
+    resolving `refresh_run_id` to a frozen cursor/lag/lineage shape. A run
+    that cannot be resolved to a successful, cursor-bearing outcome yields
+    the safe "unknown" freshness shape rather than guessing — an unknown or
+    ungoverned refresh must never be recorded as silently fresh. This always
+    inserts a new `SemanticSnapshot` row; it never updates or reuses one.
+    """
+    from app.models.v2.refresh import RefreshRun
+
+    run = db.execute(select(RefreshRun).where(RefreshRun.id == refresh_run_id)).scalar_one_or_none()
+    cursor_after = run.cursor_after_json if run is not None else None
+    if run is None or run.status != "succeeded" or not cursor_after or not cursor_after.get("observed_at"):
+        freshness_state, freshness_lag_seconds, source_cursor, lineage_summary = "unknown", None, None, {}
+    else:
+        freshness_state = "fresh"
+        freshness_lag_seconds = run.lag_seconds
+        source_cursor = {
+            "source_id": run.source_id,
+            "resource": run.resource,
+            "contract": run.cursor_contract,
+            "watermark": cursor_after.get("watermark"),
+            "primary_key": cursor_after.get("primary_key"),
+            "opaque_value": cursor_after.get("opaque_value"),
+            "observed_at": cursor_after.get("observed_at"),
+        }
+        lineage_summary = {
+            "refresh_run_id": run.id,
+            "source_id": run.source_id,
+            "resource": run.resource,
+            "pipeline_run_id": run.pipeline_run_id,
+            "last_successful_refresh_run_id": run.id,
+        }
+    return materialize_snapshot(
+        db,
+        ontology_release_id=ontology_release_id,
+        dataset_version_ids=dataset_version_ids,
+        created_by=created_by,
+        freshness_state=freshness_state,
+        freshness_lag_seconds=freshness_lag_seconds,
+        source_cursor=source_cursor,
+        lineage_summary=lineage_summary,
+    )
+
+
 def get_snapshot(db: Session, snapshot_id: str) -> SnapshotView:
     """Return a detached immutable projection of one snapshot and its pins."""
     snapshot = db.execute(
@@ -246,6 +317,10 @@ def get_snapshot(db: Session, snapshot_id: str) -> SnapshotView:
         status=snapshot.status,
         created_by=snapshot.created_by,
         created_at=snapshot.created_at,
+        freshness_state=snapshot.freshness_state,
+        freshness_lag_seconds=snapshot.freshness_lag_seconds,
+        source_cursor=dict(snapshot.source_cursor) if snapshot.source_cursor else None,
+        lineage_summary=dict(snapshot.lineage_summary or {}),
     )
 
 
@@ -258,5 +333,6 @@ __all__ = [
     "compute_materialization_hash",
     "get_snapshot",
     "materialization_hash",
+    "materialize_refresh_snapshot",
     "materialize_snapshot",
 ]

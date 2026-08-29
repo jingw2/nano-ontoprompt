@@ -119,6 +119,28 @@ def test_materialize_snapshot_rejects_cross_security_domain_provenance(
     assert db.query(SemanticSnapshotInput).count() == 0
 
 
+def test_materialize_snapshot_defaults_freshness_to_unknown_without_refresh_context(
+    db, valid_release, completed_runs,
+):
+    """Task 20: a snapshot materialized through the plain (pre-Task-20)
+    `materialize_snapshot` call shape — no refresh context — must default
+    to `freshness_state="unknown"`, never a silently "fresh" pin."""
+    snapshot = materialize_snapshot(
+        db,
+        ontology_release_id=valid_release.id,
+        dataset_version_ids=["dv-001"],
+        created_by="user-001",
+    )
+
+    assert snapshot.freshness_state == "unknown"
+    assert snapshot.freshness_lag_seconds is None
+    assert snapshot.source_cursor is None
+
+    view = get_snapshot(db, snapshot.id)
+    assert view.freshness_state == "unknown"
+    assert view.source_cursor is None
+
+
 def test_get_snapshot_returns_immutable_pins_and_provenance(db, valid_release, completed_runs):
     snapshot = materialize_snapshot(
         db,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import text
@@ -107,6 +108,15 @@ def _seed_governed_state(db):
              "locator": "fixture://source-mcp-001", "content_hash": "1" * 64},
         ]},
         materialization_hash="a" * 64, status="materialized", created_by=USER_ID,
+        # Task 20: this adapter-parity test exercises the ALLOW path, so the
+        # snapshot needs real (fresh) freshness pins — an "unknown"-default
+        # snapshot is denied outright by the Runtime freshness gate.
+        freshness_state="fresh", freshness_lag_seconds=60,
+        source_cursor={
+            "source_id": "source-mcp-001", "resource": "default",
+            "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     db.add(snapshot)
     db.add(Action(id=ACTION_ID, ontology_id=ONTOLOGY_ID, name_cn="确认状态", enabled=True))

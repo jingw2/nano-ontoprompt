@@ -60,6 +60,7 @@ _EVIDENCE_KEYS = {
     "security_domain_id",
     "tenant_id",
     "tenant",
+    "refresh_run_id",
 }
 _DOMAIN_KEYS = {"security_domain_id", "tenant_id", "tenant"}
 
@@ -223,7 +224,13 @@ def _evidence_summary(
     for version in versions.values():
         refresh = refresh_runs.get(version.refresh_run_id)
         if refresh is not None:
-            citations.extend(_citations_from_provenance(getattr(refresh, "source_provenance", None)))
+            # Task 20: tag each refresh-sourced citation with the governed
+            # RefreshRun it came from, so Runtime freshness/lineage evidence
+            # can point back to the exact refresh, not just the source.
+            for citation in _citations_from_provenance(getattr(refresh, "source_provenance", None)):
+                citation = dict(citation)
+                citation.setdefault("refresh_run_id", refresh.id)
+                citations.append(citation)
     unique: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
     for citation in citations:
         unique[tuple(sorted(citation.items()))] = citation

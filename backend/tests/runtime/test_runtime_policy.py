@@ -51,10 +51,11 @@ def _context(*, agent_id="agent-001", user_id="user-001", security_domain_id):
     return RuntimeContext(principal=principal, correlation_id="corr-001")
 
 
-def _snapshot(release_id="release-valid-001", snapshot_id="snap-valid-001"):
+def _snapshot(release_id="release-valid-001", snapshot_id="snap-valid-001", **freshness):
     return SnapshotView(
         id=snapshot_id, ontology_release_id=release_id,
         materialization_hash="a" * 64, status="materialized", created_by="user-001",
+        **freshness,
     )
 
 
@@ -115,6 +116,55 @@ def test_full_intersection_allows(db, snapshot_user, valid_release):
     assert decision.reason_code == "ALLOW"
     assert decision.agent_capability is True
     assert decision.user_entitlement is True
+
+
+def test_policy_decision_exposes_freshness_without_gating_allowed(db, snapshot_user, valid_release):
+    """Task 20: `evaluate_access` decorates its `PolicyDecision` with
+    freshness state/lag/source cursor on every path, but freshness never
+    flips `allowed` — that ALLOW/HITL/DENY routing belongs to
+    `RuntimeService` via `evaluate_snapshot_freshness`, since reads and
+    writes tolerate staleness differently."""
+    domain = snapshot_user.security_domain_id
+    ontology_id = valid_release.ontology_id
+    _client(db, security_domain_id=domain, capability_names=[REQUIRED_CAPABILITY])
+    _grant(db, ontology_id=ontology_id)
+    db.commit()
+
+    # `compute_snapshot_freshness` recomputes lag live from `observed_at`
+    # (never trusts a stored `freshness_lag_seconds` for the current
+    # decision), so the fixture's `observed_at` is what actually drives the
+    # ~60s lag this test expects — the stored `freshness_lag_seconds` below
+    # is only the frozen historical fact from materialization time.
+    observed_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+    fresh_snapshot = _snapshot(
+        release_id=valid_release.id, freshness_state="fresh", freshness_lag_seconds=60,
+        source_cursor={
+            "source_id": "source-001", "resource": "default", "contract": "watermark_primary_key",
+            "watermark": None, "primary_key": "1", "opaque_value": None,
+            "observed_at": observed_at.isoformat(),
+        },
+    )
+    decision = evaluate_access(
+        _context(security_domain_id=domain), required_capability=REQUIRED_CAPABILITY,
+        snapshot=fresh_snapshot, ontology_id=ontology_id, db=db,
+    )
+    assert decision.allowed
+    assert decision.freshness_state == "fresh"
+    assert decision.freshness_lag_seconds is not None and 55 <= decision.freshness_lag_seconds <= 120
+    assert decision.source_cursor["primary_key"] == "1"
+
+    # A plain snapshot with no governed refresh context (the default
+    # "unknown" shape) still ALLOWs on capability/entitlement — freshness
+    # is informational here, not a gate — but is honestly reported as
+    # unknown rather than silently "fresh".
+    unknown_decision = evaluate_access(
+        _context(security_domain_id=domain), required_capability=REQUIRED_CAPABILITY,
+        snapshot=_snapshot(release_id=valid_release.id), ontology_id=ontology_id, db=db,
+    )
+    assert unknown_decision.allowed
+    assert unknown_decision.freshness_state == "unknown"
+    assert unknown_decision.freshness_lag_seconds is None
+    assert unknown_decision.source_cursor is None
 
 
 def test_snapshot_not_governed_denies_before_any_capability_check(db, snapshot_user, valid_release):

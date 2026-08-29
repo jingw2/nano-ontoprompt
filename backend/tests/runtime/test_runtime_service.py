@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -126,6 +127,16 @@ def _seed_snapshot(db, release, user, *, snapshot_id=SNAPSHOT_ID):
             },
         ]},
         materialization_hash="a" * 64, status="materialized", created_by=user.id,
+        # Task 20: this suite exercises the ALLOW path throughout, so every
+        # hand-built snapshot needs real (fresh) freshness pins — a snapshot
+        # with no governed refresh context defaults to "unknown" and is
+        # denied outright by the Runtime freshness gate.
+        freshness_state="fresh", freshness_lag_seconds=60,
+        source_cursor={
+            "source_id": "source-supplier-001", "resource": "default",
+            "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     db.add(snapshot)
     db.commit()

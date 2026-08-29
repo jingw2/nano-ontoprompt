@@ -43,6 +43,13 @@ class SnapshotView(BaseModel):
     status: str
     created_by: str
     created_at: datetime | None = None
+    # Task 20: immutable source-freshness pins frozen at materialization time.
+    # "unknown" is the safe default for a snapshot with no governed refresh
+    # context — never silently treated as fresh by callers.
+    freshness_state: str = "unknown"
+    freshness_lag_seconds: int | None = None
+    source_cursor: dict[str, Any] | None = None
+    lineage_summary: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def snapshot_id(self) -> str:

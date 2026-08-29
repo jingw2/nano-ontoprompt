@@ -148,6 +148,16 @@ def _seed_parity_state(db) -> None:
             },
         ]},
         materialization_hash="a" * 64, status="materialized", created_by=user.id,
+        # Task 20: this parity test exercises the ALLOW path across every
+        # transport, so the snapshot needs real (fresh) freshness pins — an
+        # "unknown"-default snapshot is denied outright by the Runtime
+        # freshness gate.
+        freshness_state="fresh", freshness_lag_seconds=60,
+        source_cursor={
+            "source_id": "source-parity-001", "resource": "default",
+            "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        },
     ))
     db.add(Action(id=ACTION_ID, ontology_id=ONTOLOGY_ID, name_cn="确认供应商状态", enabled=True))
     db.commit()
