@@ -81,12 +81,15 @@ defaults, bounded UUID columns, and portable timestamp defaults.
 - `0029_runtime_identity.py` adds the OAuth columns nullable, backfills legacy
   rows, then makes them required with dialect-specific defaults. SQLite uses
   Alembic batch recreation for add/alter/drop operations; PostgreSQL and MySQL
-  use native operations. JSON backfills use SQLAlchemy JSON bind processing.
+  use native operations. JSON backfills use dialect-aware literal/function
+  expressions.
 - `0029` and `0030` use `String(36)` for UUID identifiers, `CURRENT_TIMESTAMP`
   for timestamp defaults, MySQL `JSON_ARRAY()`/`JSON_OBJECT()` defaults, and
   dialect-specific UUID checks (PostgreSQL regex, case-sensitive MySQL
   `BINARY ... REGEXP`, SQLite `GLOB`). Existing semantic check names and
-  constraints are retained.
+  constraints are retained. The 0029 legacy-row backfill uses those same
+  dialect-aware JSON literal/function expressions, so offline SQL is
+  executable rather than containing an unbound Python-list parameter.
 - `test_runtime_migration_dialects.py` provides the MySQL offline regression
   and an SQLite migration/backfill/constraint test.
 
@@ -141,3 +144,62 @@ No `uv.lock` change was made.
   the scratch-schema migration checks above were isolated and passed.
 - Existing deprecation/SQLAlchemy fixture warnings remain; they are unrelated
   to this remediation.
+
+## Fix round 1: reviewer coverage remediation
+
+The first implementation's MySQL test used a normal offline context, so the
+backfill statements were emitted with `%s` placeholders. Token checks alone
+did not prove that the UUID string or JSON values could be rendered. The
+reviewer's SQLite case also correctly called out that the fixture only had
+columns-only tables and did not exercise preservation of a real legacy OAuth
+schema.
+
+### RED
+
+After strengthening the MySQL renderer with `literal_binds=True` and asserting
+the rendered backfill statements, the pre-fix migration failed as expected:
+
+```text
+$ .venv/bin/python -m pytest tests/agent/test_runtime_migration_dialects.py -q
+FAILED ...[0029_runtime_identity]
+sqlalchemy.exc.CompileError: No literal value renderer is available for
+literal value "[]" with datatype JSON
+```
+
+This was the meaningful coverage failure: literal offline SQL could not be
+produced for the Python JSON-list bind. The earlier SQLite RED also remains
+recorded above: the original direct `ALTER TABLE` path failed with
+`NotImplementedError` for constraint alteration.
+
+### GREEN
+
+The 0029 backfill now reuses `_json_server_default("array")`: MySQL renders
+`JSON_ARRAY()` and PostgreSQL/SQLite render a quoted JSON literal. The test
+context has `literal_binds=True`, rejects `%s`/`?`, and asserts the exact UUID
+and JSON update statements. It also checks 0030's object/array JSON defaults.
+
+The SQLite regression now creates a representative pre-0029 schema with:
+
+- a real UUID-checked `oauth_clients` table;
+- `created_by -> users` and `users.security_domain_id -> security_domains`
+  foreign keys;
+- `is_active` and `created_at` server defaults; and
+- a valid, actual legacy OAuth row.
+
+It enables SQLite foreign keys, runs 0029 upgrade and downgrade, verifies
+legacy row values, UUID check SQL, defaults, and foreign-key signatures before
+and after, verifies the new columns/FK/runtime credential checks on upgrade,
+and verifies the new table/columns/FK are removed while the old schema is
+restored on downgrade. A separate SQLite test retains 0030 constraint
+coverage.
+
+```text
+$ .venv/bin/python -m pytest tests/agent/test_runtime_migration_dialects.py -q
+4 passed, 12 warnings
+```
+
+The changed literal backfill was also executed against a disposable real
+PostgreSQL schema containing a legacy OAuth row; 0029 completed and returned
+the default security-domain UUID plus JSON empty arrays. No live MySQL service
+or driver was available, so the MySQL path remains real dialect compilation
+with fully literal SQL rather than a live-driver test.

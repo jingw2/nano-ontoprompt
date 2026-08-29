@@ -98,7 +98,7 @@ def _backfill_oauth_client_columns() -> None:
         op.execute(
             oauth_clients.update()
             .where(column.is_(None))
-            .values({column.key: []})
+            .values({column.key: _json_server_default("array")})
         )
 
 
