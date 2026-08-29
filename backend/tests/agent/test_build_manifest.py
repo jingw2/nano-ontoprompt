@@ -5,7 +5,7 @@ bootstrap are copied into the backend image before any dependency install, the
 guard runs before pip, every Python service start command in the supported
 Compose files routes through the launcher AND verifies the signed build
 manifest, generation/sign/verify are deterministic, and the manifest pins the
-exact Alembic head (dynamically resolved; see OPS_ALEMBIC_HEAD below).
+exact Alembic head (dynamically resolved from the script directory).
 """
 import json
 import os
@@ -21,8 +21,14 @@ BACKEND_DIR = pathlib.Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 SCRIPTS = BACKEND_DIR / "scripts"
 COMPOSE_FILES = [REPO_ROOT / "docker-compose.v2.yml", REPO_ROOT / "docker-compose.agent.yml"]
-# the ops Alembic head the signed manifest must pin
-OPS_ALEMBIC_HEAD = "0029_runtime_identity"
+
+
+def _current_alembic_head() -> str:
+    """Resolve the one current head used by both the manifest and verifier."""
+    sys.path.insert(0, str(SCRIPTS))
+    from verify_build_manifest import resolve_alembic_head
+
+    return resolve_alembic_head(BACKEND_DIR / "alembic")
 
 
 def test_e0_images_red_contract():
@@ -93,8 +99,10 @@ def test_sign_verify_roundtrip_and_tamper_detection(tmp_path):
     assert r.returncode == 0, r.stderr
     data = json.loads(signed.read_text())
     assert data.get("signature") and len(data["signature"]) == 64
-    r = _run("verify_build_manifest.py", "--manifest", str(signed),
-             "--expect-head", OPS_ALEMBIC_HEAD)
+    r = _run(
+        "verify_build_manifest.py", "--manifest", str(signed),
+        "--alembic-dir", str(BACKEND_DIR / "alembic"),
+    )
     assert r.returncode == 0, r.stderr
     # tamper: flip an image digest -> signature mismatch
     tampered = tmp_path / "tampered.json"
@@ -104,8 +112,10 @@ def test_sign_verify_roundtrip_and_tamper_detection(tmp_path):
     entry["digest"] = "0" * 64
     mutated["images"]["api"] = entry
     tampered.write_text(json.dumps(mutated, sort_keys=True))
-    r = _run("verify_build_manifest.py", "--manifest", str(tampered),
-             "--expect-head", OPS_ALEMBIC_HEAD)
+    r = _run(
+        "verify_build_manifest.py", "--manifest", str(tampered),
+        "--alembic-dir", str(BACKEND_DIR / "alembic"),
+    )
     assert r.returncode != 0 and "SIGNATURE" in (r.stderr + r.stdout).upper()
     # tamper: wrong expected head
     r = _run("verify_build_manifest.py", "--manifest", str(signed),
@@ -118,7 +128,7 @@ def test_manifest_pins_exact_alembic_head(tmp_path):
     r = _run("generate_build_manifest.py", "--root", str(REPO_ROOT), "--output", str(manifest))
     assert r.returncode == 0, r.stderr
     data = json.loads(manifest.read_text())
-    assert data["alembic_head"] == OPS_ALEMBIC_HEAD
+    assert data["alembic_head"] == _current_alembic_head()
     for role in ("api", "dispatcher", "artifact_worker", "beat", "watchdog", "sweeper", "frontend"):
         assert role in data["images"], f"missing image role {role}"
 

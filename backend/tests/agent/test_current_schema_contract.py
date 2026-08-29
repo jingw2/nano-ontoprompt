@@ -7,6 +7,8 @@ import pathlib
 import sys
 import tomllib
 
+from alembic.script import ScriptDirectory
+
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(BACKEND_DIR / "scripts"))
 
@@ -31,7 +33,9 @@ def _pytest_ini_options() -> dict:
 
 
 def test_schema_contract_uses_resolved_head_and_memory_tables():
-    assert _resolve_current_head() == "0029_runtime_identity"
+    configured_heads = ScriptDirectory(str(BACKEND_DIR / "alembic")).get_heads()
+    assert len(configured_heads) == 1
+    assert _resolve_current_head() == configured_heads[0]
     assert {"agent_turn_checkpoints", "agent_turn_checkpoint_writes"} <= _registered_tables()
     # pytest-asyncio==0.24.0 (pinned) only recognizes
     # asyncio_default_fixture_loop_scope; the later asyncio_default_test_loop_scope

@@ -23,40 +23,143 @@ branch_labels = None
 depends_on = None
 
 DEFAULT_SECURITY_DOMAIN_ID = "00000000-0000-0000-0000-000000000001"
+UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+UUID_GLOB = (
+    "[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-"
+    "[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-"
+    "[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-"
+    "[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-"
+    "[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]"
+)
+
+
+def _dialect_name() -> str:
+    return op.get_bind().dialect.name
+
+
+def _uuid_check(column: str) -> str:
+    dialect = _dialect_name()
+    if dialect == "postgresql":
+        return f"{column} ~ '{UUID_PATTERN}'"
+    if dialect == "mysql":
+        return f"BINARY {column} REGEXP '{UUID_PATTERN}'"
+    if dialect == "sqlite":
+        return f"{column} GLOB '{UUID_GLOB}'"
+    return f"length({column}) = 36"
+
+
+def _json_server_default(kind: str) -> sa.TextClause:
+    """Return a JSON default accepted by each supported SQL dialect."""
+    if _dialect_name() == "mysql":
+        function = "JSON_ARRAY()" if kind == "array" else "JSON_OBJECT()"
+        return sa.text(f"({function})")
+    value = "[]" if kind == "array" else "{}"
+    return sa.text(f"'{value}'")
+
+
+def _oauth_client_columns() -> tuple[sa.Column, ...]:
+    return (
+        sa.Column(
+            "security_domain_id", sa.String(36),
+            sa.ForeignKey(
+                "security_domains.id", ondelete="RESTRICT",
+                name="fk_oauth_clients_security_domain",
+            ), nullable=True,
+        ),
+        sa.Column("allowed_audiences", sa.JSON(), nullable=True),
+        sa.Column("capability_names", sa.JSON(), nullable=True),
+    )
+
+
+def _add_oauth_client_columns() -> None:
+    columns = _oauth_client_columns()
+    if _dialect_name() == "sqlite":
+        with op.batch_alter_table("oauth_clients", recreate="always") as batch_op:
+            for column in columns:
+                batch_op.add_column(column)
+    else:
+        for column in columns:
+            op.add_column("oauth_clients", column)
+
+
+def _backfill_oauth_client_columns() -> None:
+    oauth_clients = sa.table(
+        "oauth_clients",
+        sa.column("security_domain_id", sa.String(36)),
+        sa.column("allowed_audiences", sa.JSON()),
+        sa.column("capability_names", sa.JSON()),
+    )
+    op.execute(
+        oauth_clients.update()
+        .where(oauth_clients.c.security_domain_id.is_(None))
+        .values(security_domain_id=DEFAULT_SECURITY_DOMAIN_ID)
+    )
+    for column in (oauth_clients.c.allowed_audiences, oauth_clients.c.capability_names):
+        op.execute(
+            oauth_clients.update()
+            .where(column.is_(None))
+            .values({column.key: []})
+        )
+
+
+def _make_oauth_client_columns_required() -> None:
+    defaults = {
+        "security_domain_id": sa.text(f"'{DEFAULT_SECURITY_DOMAIN_ID}'"),
+        "allowed_audiences": _json_server_default("array"),
+        "capability_names": _json_server_default("array"),
+    }
+    if _dialect_name() == "sqlite":
+        with op.batch_alter_table("oauth_clients", recreate="always") as batch_op:
+            batch_op.alter_column(
+                "security_domain_id", existing_type=sa.String(36),
+                nullable=False, server_default=defaults["security_domain_id"],
+            )
+            for name in ("allowed_audiences", "capability_names"):
+                batch_op.alter_column(
+                    name, existing_type=sa.JSON(), nullable=False,
+                    server_default=defaults[name],
+                )
+    else:
+        op.alter_column(
+            "oauth_clients", "security_domain_id", existing_type=sa.String(36),
+            nullable=False, server_default=defaults["security_domain_id"],
+        )
+        for name in ("allowed_audiences", "capability_names"):
+            op.alter_column(
+                "oauth_clients", name, existing_type=sa.JSON(),
+                nullable=False, server_default=defaults[name],
+            )
+
+
+def _drop_oauth_client_columns() -> None:
+    if _dialect_name() == "sqlite":
+        with op.batch_alter_table("oauth_clients", recreate="always") as batch_op:
+            for name in ("capability_names", "allowed_audiences", "security_domain_id"):
+                batch_op.drop_column(name)
+    else:
+        for name in ("capability_names", "allowed_audiences", "security_domain_id"):
+            op.drop_column("oauth_clients", name)
 
 
 def upgrade() -> None:
-    op.add_column(
-        "oauth_clients",
-        sa.Column(
-            "security_domain_id", sa.String(36),
-            sa.ForeignKey("security_domains.id", ondelete="RESTRICT"),
-            nullable=False, server_default=DEFAULT_SECURITY_DOMAIN_ID,
-        ),
-    )
-    op.add_column(
-        "oauth_clients",
-        sa.Column("allowed_audiences", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
-    )
-    op.add_column(
-        "oauth_clients",
-        sa.Column("capability_names", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
-    )
+    _add_oauth_client_columns()
+    _backfill_oauth_client_columns()
+    _make_oauth_client_columns_required()
 
     op.create_table(
         "runtime_delegated_credentials",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("token_hash", sa.String(128), nullable=False, unique=True, index=True),
         sa.Column("client_id", sa.String(36), sa.ForeignKey("oauth_clients.id", ondelete="RESTRICT"), nullable=False, index=True),
-        sa.Column("user_id", sa.String, sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("audience", sa.String(200), nullable=False),
         sa.Column("scope", sa.String(500), nullable=False, server_default=""),
         sa.Column("status", sa.String(20), nullable=False, server_default="active"),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.CheckConstraint(
-            "id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
+            _uuid_check("id"),
             name="ck_runtime_delegated_credentials_id_uuid",
         ),
         sa.CheckConstraint("status IN ('active', 'revoked')", name="ck_runtime_delegated_credentials_status"),
@@ -65,6 +168,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("runtime_delegated_credentials")
-    op.drop_column("oauth_clients", "capability_names")
-    op.drop_column("oauth_clients", "allowed_audiences")
-    op.drop_column("oauth_clients", "security_domain_id")
+    _drop_oauth_client_columns()

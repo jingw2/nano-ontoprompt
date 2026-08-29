@@ -45,7 +45,15 @@ from app.services.v2.incremental.event_ingest import EventIngestService
 NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
 BACKEND_DIR = Path(__file__).resolve().parents[4]
 MIGRATION_BASE = "0021_mapping_entity_class_cn"
-MIGRATION_HEAD = "0029_runtime_identity"
+
+
+def _migration_head() -> str:
+    scripts_dir = BACKEND_DIR / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from verify_build_manifest import resolve_alembic_head
+
+    return resolve_alembic_head(BACKEND_DIR / "alembic")
 
 
 def _pre_refresh_tables() -> MetaData:
@@ -228,7 +236,7 @@ def test_migrated_runtime_inbox_accept_process_and_replay(dialect: str, env_name
             )
         _migrate(app_url)
         with app_engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == MIGRATION_HEAD
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == _migration_head()
 
         Session = sessionmaker(bind=app_engine)
         db = Session()
