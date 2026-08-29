@@ -51,6 +51,13 @@ class RuntimePlan(Base):
         CheckConstraint("length(plan_hash) = 64", name="ck_runtime_plans_plan_hash"),
         CheckConstraint("length(before_image_hash) = 64", name="ck_runtime_plans_before_image_hash"),
         CheckConstraint("length(version_hash) = 64", name="ck_runtime_plans_version_hash"),
+        # Task 21: a plan either binds to a managed action (both set) or does
+        # not (both null) — never a binding id with no pinned version or vice
+        # versa.
+        CheckConstraint(
+            "(managed_action_binding_id IS NULL) = (binding_version IS NULL)",
+            name="ck_runtime_plans_binding_pair",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
@@ -72,7 +79,10 @@ class RuntimePlan(Base):
     input_facts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     evidence_citations: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     rule_outcomes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    managed_action_binding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    managed_action_binding_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("managed_action_bindings.managed_action_binding_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     binding_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     parameters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     target_key: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

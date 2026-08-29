@@ -44,6 +44,7 @@ from app.schemas.runtime import (
     RuleOutcome,
 )
 from app.schemas.runtime_snapshot import SnapshotView
+from app.services.runtime.action_bindings import BindingError, freeze_action_target, resolve_published_binding
 from app.services.runtime.credentials import RuntimeAccessError, RuntimeContext
 from app.services.runtime.policy import (
     DEFAULT_FRESHNESS_POLICY,
@@ -70,6 +71,11 @@ class ActionPlanRequest:
     parameters: Mapping[str, Any]
     target_selector: Mapping[str, Any] | None = None
     idempotency_key: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # Task 21: a writable proposal against a published `ManagedActionBinding`.
+    # Both fields are optional and default to the pre-Task-21 free-form
+    # proposal shape (no binding at all) when omitted.
+    managed_action_binding_id: str | None = None
+    binding_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +226,66 @@ def _query_snapshot_scoped_instances(
     return results
 
 
+def _resolve_writable_target(
+    db: Session, *, snapshot: SnapshotView, release: OntologyRelease, action: Action, request: "ActionPlanRequest",
+) -> dict[str, Any]:
+    """Resolve what a proposal's target/parameters/before-image/version hash
+    actually are.
+
+    Task 21: when `request` names a `managed_action_binding_id`, resolve it
+    (failing closed on anything but a live `published` binding for this
+    exact `action`) and freeze the target/parameters through it — the
+    server-owned binding's own primary-key column order and typed parameter
+    schema, never the caller's. Otherwise (the pre-Task-21 shape, still used
+    by every non-writable/free-form proposal) target resolution stays
+    exactly what it was: a manifest-scoped `EntityInstance` lookup.
+    """
+    if request.managed_action_binding_id is not None:
+        try:
+            binding = resolve_published_binding(db, request.managed_action_binding_id, request.binding_version)
+        except BindingError as exc:
+            raise RuntimeAccessError(exc.reason_code) from exc
+        if binding.action_id != action.id:
+            raise RuntimeAccessError(ReasonCode.BINDING_DRIFT.value)
+        try:
+            frozen = freeze_action_target(
+                db, snapshot=snapshot, binding=binding,
+                parameters=request.parameters, selector=request.target_selector or {},
+            )
+        except BindingError as exc:
+            raise RuntimeAccessError(exc.reason_code) from exc
+        return {
+            "target_key": frozen.primary_key_tuple,
+            "parameters": dict(frozen.parameters),
+            "before_image_hash": frozen.before_image_hash,
+            "version_hash": frozen.version_hash,
+            "managed_action_binding_id": binding.managed_action_binding_id,
+            "binding_version": str(binding.version),
+            "target_row": None,
+            "bound": True,
+        }
+
+    target_key = _normalize_target_key(request.target_selector)
+    target_row = _resolve_target_instance(db, release=release, target_selector=request.target_selector)
+    before_image_hash = _canonical_hash(target_row)
+    version_hash = _canonical_hash({
+        "semantic_snapshot_id": snapshot.id,
+        "ontology_release_id": release.id,
+        "action_id": action.id,
+        "before_image_hash": before_image_hash,
+    })
+    return {
+        "target_key": target_key,
+        "parameters": dict(request.parameters),
+        "before_image_hash": before_image_hash,
+        "version_hash": version_hash,
+        "managed_action_binding_id": None,
+        "binding_version": None,
+        "target_row": target_row,
+        "bound": False,
+    }
+
+
 def _resolve_snapshot(db: Session, semantic_snapshot_id: str) -> SnapshotView:
     """A materialized snapshot is the only thing either Runtime operation
     ever pins to. If it cannot be resolved, neither `InvestigationResult`
@@ -325,22 +391,18 @@ class RuntimeService:
         if action is None or action.ontology_id != release.ontology_id or not action.enabled:
             raise RuntimeAccessError(ReasonCode.ACTION_NOT_ELIGIBLE.value)
 
-        target_key = _normalize_target_key(request.target_selector)
-        target_row = _resolve_target_instance(
-            db, release=release, target_selector=request.target_selector,
-        )
-        before_image_hash = _canonical_hash(target_row)
-        parameters = dict(request.parameters)
+        target = _resolve_writable_target(db, snapshot=snapshot, release=release, action=action, request=request)
+        target_key = target["target_key"]
+        parameters = target["parameters"]
+        before_image_hash = target["before_image_hash"]
+        version_hash = target["version_hash"]
+        managed_action_binding_id = target["managed_action_binding_id"]
+        binding_version = target["binding_version"]
+        target_row = target["target_row"]
 
         citations = [EvidenceCitation(**citation) for citation in snapshot.evidence_summary.get("citations", [])]
         rule_outcomes = [RuleOutcome(rule_id="action_eligibility", result="pass", reason_code=ReasonCode.ALLOW)]
 
-        version_hash = _canonical_hash({
-            "semantic_snapshot_id": snapshot.id,
-            "ontology_release_id": release.id,
-            "action_id": action.id,
-            "before_image_hash": before_image_hash,
-        })
         precondition_hashes = (
             snapshot.materialization_hash,
             hashlib.sha256(release.schema_hash).hexdigest(),
@@ -354,9 +416,9 @@ class RuntimeService:
         impact_scope = {
             "ontology_id": release.ontology_id,
             "action_id": action.id,
-            "instance_count": 1 if target_row else 0,
+            "instance_count": 1 if (target_row or target["bound"]) else 0,
         }
-        risk_classification = "single_instance_write" if target_row else "unscoped_proposal"
+        risk_classification = "single_instance_write" if (target_row or target["bound"]) else "unscoped_proposal"
         policy_decision = {
             "allowed": decision.allowed,
             "reason_code": _reason_code_value(decision.reason_code),
@@ -377,6 +439,8 @@ class RuntimeService:
             "agent_id": context.principal.agent_id,
             "user_id": context.principal.user_id,
             "action_id": action.id,
+            "managed_action_binding_id": managed_action_binding_id,
+            "binding_version": binding_version,
             "parameters": parameters,
             "target_key": list(target_key),
             "before_image_hash": before_image_hash,
@@ -395,8 +459,8 @@ class RuntimeService:
             input_facts=input_facts,
             evidence_citations=[citation.model_dump(mode="json") for citation in citations],
             rule_outcomes=[outcome.model_dump(mode="json") for outcome in rule_outcomes],
-            managed_action_binding_id=None,
-            binding_version=None,
+            managed_action_binding_id=managed_action_binding_id,
+            binding_version=binding_version,
             parameters=parameters,
             target_key=list(target_key),
             before_image_hash=before_image_hash,
