@@ -25,6 +25,7 @@ from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshot
 from app.models.user import User
+from app.services.runtime.canonical import compute_plan_hash, normalize_investigation
 from app.services.runtime.credentials import issue_delegated_credential
 
 AUDIENCE = "ontexus-runtime"
@@ -280,6 +281,41 @@ def test_get_action_plan_api_returns_the_created_plan(client, runtime_headers):
     assert response.status_code == 200
     assert response.json()["id"] == plan_id
     assert response.json()["plan_hash"] == create_response.json()["plan_hash"]
+
+
+def test_get_action_plan_api_canonical_plan_hash_ignores_generated_storage_id(client, runtime_headers):
+    """Task 19: `compute_plan_hash` (`app.services.runtime.canonical`)
+    excludes the generated storage id (`id`) from the canonical plan
+    fields — fetching the same immutable plan back through REST twice must
+    still hash the same even though nothing about the *semantic* proposal
+    changed."""
+    create_response = client.post(
+        "/api/v2/runtime/action-plans", json=valid_action_plan_request(), headers=runtime_headers,
+    )
+    plan_id = create_response.json()["id"]
+
+    fetched = client.get(f"/api/v2/runtime/action-plans/{plan_id}", headers=runtime_headers).json()
+    created = create_response.json()
+    assert compute_plan_hash(created) == compute_plan_hash(fetched)
+
+    relabeled = dict(fetched)
+    relabeled["id"] = "some-other-generated-id"
+    assert compute_plan_hash(relabeled) == compute_plan_hash(fetched)
+
+
+def test_investigate_api_normalized_decision_excludes_correlation_id(client, runtime_headers):
+    """Task 19: `normalize_investigation` never carries `correlation_id` (a
+    tracing id) — two REST calls that only differ by their transport-issued
+    correlation id must normalize identically."""
+    response = client.post(
+        "/api/v2/runtime/investigate", json=valid_investigation(), headers=runtime_headers,
+    )
+    body = response.json()
+    assert "correlation_id" not in normalize_investigation(body)
+
+    relabeled = dict(body)
+    relabeled["correlation_id"] = "some-other-correlation-id"
+    assert normalize_investigation(relabeled) == normalize_investigation(body)
 
 
 def test_get_action_plan_api_denies_unknown_plan(client, runtime_headers):

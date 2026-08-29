@@ -30,6 +30,7 @@ from app.models.user import User
 from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
 from app.schemas.runtime import InvestigationRequest
 from app.services.mcp_tools import McpToolError, call_runtime_tool
+from app.services.runtime.canonical import normalize_investigation
 from app.services.runtime.credentials import RuntimeContext, RuntimePrincipal
 from app.services.runtime.reference_agent import ReferenceAgentRuntime
 from app.services.runtime.service import ActionPlanRequest, RuntimeService
@@ -319,6 +320,19 @@ def test_reference_agent_investigate_matches_runtime_service(db, governed_snapsh
     expected = RuntimeService().investigate(request, runtime_context, db)
     actual = ReferenceAgentRuntime().investigate(request, runtime_context, db)
     assert actual == expected
+
+
+def test_mcp_and_reference_agent_agree_on_normalized_decision(db, governed_snapshot, runtime_context):
+    """Task 19's tiered parity: MCP and the reference Agent are not held to
+    a byte-identical `plan_hash`/wire shape (MCP returns a plain dict,
+    `ReferenceAgentRuntime` returns the backend's own typed
+    `InvestigationResult`), but `normalize_investigation` must still reduce
+    both to the exact same normalized decision."""
+    mcp_result = call_runtime_tool(db, runtime_context, "runtime_investigate", valid_investigation_dict())
+    reference_result = ReferenceAgentRuntime().investigate(
+        InvestigationRequest(**valid_investigation_dict()), runtime_context, db,
+    )
+    assert normalize_investigation(mcp_result) == normalize_investigation(reference_result)
 
 
 def test_reference_agent_create_action_plan_matches_runtime_service(db, governed_snapshot, runtime_context):

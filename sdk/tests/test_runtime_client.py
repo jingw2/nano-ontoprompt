@@ -16,7 +16,7 @@ import pytest
 
 from ontexus_runtime.client import RuntimeClient
 from ontexus_runtime.errors import RuntimeDeniedError
-from ontexus_runtime.models import InvestigationRequest
+from ontexus_runtime.models import ActionPlanRequest, InvestigationRequest
 
 
 class StaticCredential:
@@ -84,3 +84,68 @@ def test_sdk_preserves_structured_denial():
     with pytest.raises(RuntimeDeniedError) as exc:
         client.investigate(valid_request())
     assert exc.value.reason_code == "SCOPE_DENIED"
+
+
+def action_plan_response(**overrides) -> dict:
+    body = {
+        "id": "plan-001",
+        "semantic_snapshot_id": "snap-valid-001",
+        "ontology_release_id": "release-valid-001",
+        "agent_id": "agent-001",
+        "user_id": "user-001",
+        "action_id": "action-001",
+        "input_facts": {},
+        "evidence_citations": [],
+        "rule_outcomes": [],
+        "managed_action_binding_id": None,
+        "binding_version": None,
+        "parameters": {"status": "confirmed"},
+        "target_key": ["unscoped"],
+        "before_image_hash": "b" * 64,
+        "version_hash": "c" * 64,
+        "predicted_diff": {},
+        "impact_scope": {},
+        "risk_classification": "unscoped_proposal",
+        "policy_decision": {"allowed": True, "reason_code": "ALLOW"},
+        "precondition_hashes": ["d" * 64, "e" * 64],
+        "expiry": "2026-01-01T00:15:00+00:00",
+        "idempotency_key": "idem-001",
+        "plan_hash": "f" * 64,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_sdk_decodes_action_plan_semantic_fields_verbatim():
+    """Task 19: `compute_plan_hash` (`app.services.runtime.canonical`) hashes
+    an `ActionPlan`'s semantic fields — parameters, the normalized target,
+    before-image/version hashes, preconditions, expiry, and the idempotency
+    key — straight off the decoded SDK model. If the SDK model silently
+    dropped, renamed, or reordered any of those, REST and the SDK could
+    never hash byte-identically no matter what the canonicalizer does. This
+    asserts the decoded model reproduces every one of those fields exactly
+    as the server sent them."""
+    response = action_plan_response()
+    transport = RecordingTransport(response)
+    client = RuntimeClient("https://runtime.test", StaticCredential("token-001"), transport)
+
+    plan = client.create_action_plan(ActionPlanRequest(
+        semantic_snapshot_id="snap-valid-001", action_id="action-001", parameters={"status": "confirmed"},
+    ))
+
+    assert plan.parameters == response["parameters"]
+    assert plan.target_key == response["target_key"]
+    assert plan.before_image_hash == response["before_image_hash"]
+    assert plan.version_hash == response["version_hash"]
+    assert plan.precondition_hashes == response["precondition_hashes"]
+    assert plan.expiry == response["expiry"]
+    assert plan.idempotency_key == response["idempotency_key"]
+    # The generated storage id is decoded too, but is not a semantic field —
+    # two plans that differ only in `id` still decode the same everywhere
+    # else, exactly what `canonical_plan_fields` relies on to exclude it.
+    transport._response = action_plan_response(id="plan-002")
+    other = client.create_action_plan(ActionPlanRequest(
+        semantic_snapshot_id="snap-valid-001", action_id="action-001", parameters={"status": "confirmed"},
+    ))
+    assert other.id != plan.id
+    assert other.model_dump(mode="json", exclude={"id"}) == plan.model_dump(mode="json", exclude={"id"})
