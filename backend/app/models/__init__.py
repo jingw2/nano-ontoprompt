@@ -85,6 +85,7 @@ from app.models.oauth import OAuthClient, OAuthAuthorizationCode, OAuthRefreshFa
 from app.models.runtime_identity import RuntimeDelegatedCredential
 from app.models.runtime_plan import RuntimePlan
 from app.models.managed_action import ManagedActionBinding
+from app.models.sandbox import SandboxSimulation
 
 
 def load_all_models():
@@ -174,6 +175,7 @@ def load_all_models():
     from app.models.runtime_identity import RuntimeDelegatedCredential  # noqa: F401
     from app.models.runtime_plan import RuntimePlan  # noqa: F401
     from app.models.managed_action import ManagedActionBinding  # noqa: F401
+    from app.models.sandbox import SandboxSimulation  # noqa: F401
 
     return Base.metadata
 
@@ -261,5 +263,6 @@ __all__ = [
     "RuntimeDelegatedCredential",
     "RuntimePlan",
     "ManagedActionBinding",
+    "SandboxSimulation",
     "load_all_models",
 ]
