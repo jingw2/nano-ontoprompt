@@ -64,6 +64,8 @@ from app.routers.v2 import incremental as incremental_v2
 from app.routers.v2 import refresh_events as refresh_events_v2
 from app.routers.v2 import refresh as refresh_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
+from app.routers.v2 import runtime as runtime_v2
+from app.services.runtime.credentials import RuntimeAccessError
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -215,6 +217,8 @@ app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["
 app.include_router(retention.router, prefix="/api/v2", tags=["v2-retention"])
 app.include_router(tool_connections.router, prefix="/api/v2", tags=["tool-connections"])
 app.include_router(skills.router, prefix="/api/v2", tags=["skills"])
+app.include_router(runtime_v2.router, prefix="/api/v2/runtime", tags=["v2-runtime"])
+app.add_exception_handler(RuntimeAccessError, runtime_v2.runtime_access_error_handler)
 
 def get_db():
     db = SessionLocal()
