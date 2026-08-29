@@ -10,6 +10,7 @@ belongs) is rejected as a credential-layer denial, never as a data result.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -68,27 +69,45 @@ def _seed_grant(db, *, ontology_id=ONTOLOGY_ID, user_id=USER_ID, capabilities=CA
     return grant
 
 
-def _seed_release(db, user, *, ontology_id=ONTOLOGY_ID, release_id=RELEASE_ID):
-    project = OntologyProject(
-        id=ontology_id, name="supply chain ontology", domain="supply-chain",
-        created_by=user.id, security_domain_id=user.security_domain_id,
-    )
-    db.add(project)
-    db.flush()
+DEFAULT_MANIFEST_PROJECTION = '{"entities":[{"id":"entity-supplier-001"}]}'
+
+
+def _seed_release(
+    db, user, *, ontology_id=ONTOLOGY_ID, release_id=RELEASE_ID, version_no=1,
+    manifest_projection=DEFAULT_MANIFEST_PROJECTION,
+):
+    """Seed one published `OntologyRelease`. Reuses an existing project row
+    for `ontology_id` (a second release under the same ontology, as the
+    divergent-manifest tests below need) rather than assuming this is the
+    project's first release."""
+    project = db.get(OntologyProject, ontology_id)
+    if project is None:
+        project = OntologyProject(
+            id=ontology_id, name="supply chain ontology", domain="supply-chain",
+            created_by=user.id, security_domain_id=user.security_domain_id,
+        )
+        db.add(project)
+        db.flush()
     # OntologyRelease.manifest_projection uses Task 11's PostgreSQL-only
     # CanonicalJSONB type; seed with a plain SQL insert like
-    # tests/runtime/conftest.py's `_release` helper does.
+    # tests/runtime/conftest.py's `_release` helper does. Unlike that
+    # fixture, `manifest_projection` here is real manifest JSON (not '{}')
+    # declaring the entity ids this suite seeds, so release-manifest
+    # membership scoping (Task 15 Finding 1) has something real to check.
     db.execute(
         text(
             "INSERT INTO ontology_releases "
             "(id, ontology_id, version_no, version, manifest_bytes, "
             "manifest_projection, schema_hash, status, created_by, created_at) "
-            "VALUES (:id, :ontology_id, 1, 'v1', :manifest, '{}', :schema_hash, "
-            "'published', :created_by, CURRENT_TIMESTAMP)"
+            "VALUES (:id, :ontology_id, :version_no, :version, :manifest, "
+            ":manifest_projection, :schema_hash, 'published', :created_by, CURRENT_TIMESTAMP)"
         ),
         {
-            "id": release_id, "ontology_id": ontology_id, "manifest": b"snapshot-manifest",
-            "schema_hash": b"snapshot-schema-hash-000000000000", "created_by": user.id,
+            "id": release_id, "ontology_id": ontology_id, "version_no": version_no,
+            "version": f"v{version_no}", "manifest": b"snapshot-manifest",
+            "manifest_projection": manifest_projection,
+            "schema_hash": hashlib.sha256(release_id.encode()).digest(),
+            "created_by": user.id,
         },
     )
     project.latest_published_release_id = release_id
@@ -159,18 +178,33 @@ def runtime_context():
 
 
 @pytest.fixture
-def production_spy():
-    """A canary, not a patched dependency: `create_action_plan` takes no
-    connector argument and this object is never wired into it anywhere.
-    `.calls` staying empty is therefore structural, not incidental — it
-    exists so a future change that *does* thread a connector through this
-    path has to touch (and therefore cannot silently bypass) this fixture."""
+def production_spy(db, monkeypatch):
+    """A load-bearing regression guard, not a passive canary.
+
+    `RuntimeService` takes no connector argument, so there is no existing
+    production-write function in this domain to patch and observe directly.
+    Instead this wraps `db.commit()` on THIS session and inspects
+    `db.new`/`db.dirty` right before every commit: any ORM object pending
+    insert or update that is not the one immutable `RuntimePlan` row
+    `create_action_plan` is allowed to write is recorded in `.calls`. This
+    catches a stray write regardless of whether it rides along in the same
+    commit as the plan insert (e.g. mutating an already-loaded `Action` or
+    `EntityInstance`) or opens its own separate commit."""
 
     class _Spy:
         def __init__(self):
             self.calls: list[Any] = []
 
-    return _Spy()
+    spy = _Spy()
+    original_commit = db.commit
+
+    def guarded_commit(*args, **kwargs):
+        pending = list(db.new) + list(db.dirty)
+        spy.calls.extend(obj for obj in pending if not isinstance(obj, RuntimePlan))
+        return original_commit(*args, **kwargs)
+
+    monkeypatch.setattr(db, "commit", guarded_commit)
+    return spy
 
 
 def valid_plan_request(**overrides):
@@ -228,6 +262,90 @@ def test_investigate_returns_matching_instance_from_snapshot_scoped_query(db, go
         "instance_id": "inst-sup001", "entity_id": "entity-supplier-001",
         "revision": 1, "row_data": {"supplier_id": "SUP001", "status": "pending"},
     }]
+
+
+@pytest.fixture
+def divergent_manifest_snapshot(db):
+    """Two published releases of the SAME ontology with DIVERGENT manifests:
+    release A declares both Supplier and Warehouse; release B (the
+    ontology's current `latest_published_release_id`, so it passes
+    `evaluate_access`'s freshness check) declares only Supplier. A live
+    Warehouse entity/instance exists under the shared `ontology_id` — e.g.
+    left over from when release A governed the ontology, or added to the
+    live schema after release B was cut. A snapshot pinned to release B must
+    not see it: query scoping is bound to the PINNED release's manifest, not
+    merely to `ontology_id`."""
+    user = _seed_user(db)
+    db.commit()
+    _seed_agent(db)
+    _seed_grant(db)
+    db.commit()
+    _seed_release(
+        db, user, release_id="release-a-with-warehouse", version_no=1,
+        manifest_projection='{"entities":[{"id":"entity-supplier-001"},{"id":"entity-warehouse-001"}]}',
+    )
+    release_b = _seed_release(
+        db, user, release_id="release-b-without-warehouse", version_no=2,
+        manifest_projection='{"entities":[{"id":"entity-supplier-001"}]}',
+    )
+    snapshot = _seed_snapshot(db, release_b, user, snapshot_id="snap-release-b")
+    _seed_action(db)
+
+    warehouse = Entity(id="entity-warehouse-001", ontology_id=ONTOLOGY_ID, name_cn="仓库", name_en="Warehouse")
+    db.add(warehouse)
+    db.flush()
+    db.add(EntityInstance(
+        id="inst-wh001", entity_id="entity-warehouse-001", ontology_id=ONTOLOGY_ID,
+        row_identity="WH001", row_data={"warehouse_id": "WH001"}, revision=1,
+    ))
+    db.commit()
+    return snapshot
+
+
+def test_investigate_excludes_instances_not_declared_in_pinned_release_manifest(
+    db, divergent_manifest_snapshot, runtime_context,
+):
+    result = RuntimeService().investigate(
+        InvestigationRequest(
+            semantic_snapshot_id="snap-release-b", query=None,
+            ontology_id=ONTOLOGY_ID, entity_type="Warehouse", filters={}, limit=20,
+        ),
+        runtime_context, db,
+    )
+    assert result.decision == "ALLOW"
+    assert result.result == []
+
+
+def test_investigate_unfiltered_query_still_excludes_manifest_undeclared_entities(
+    db, divergent_manifest_snapshot, runtime_context,
+):
+    # Even without an explicit entity_type filter, an unscoped query must not
+    # surface instances of an entity type the pinned release never declared.
+    _seed_entity_instance(db)
+    result = RuntimeService().investigate(
+        InvestigationRequest(
+            semantic_snapshot_id="snap-release-b", query=None,
+            ontology_id=ONTOLOGY_ID, entity_type=None, filters={}, limit=20,
+        ),
+        runtime_context, db,
+    )
+    assert result.decision == "ALLOW"
+    assert [row["entity_id"] for row in result.result] == ["entity-supplier-001"]
+
+
+def test_create_action_plan_target_resolution_excludes_instances_not_in_pinned_release_manifest(
+    db, divergent_manifest_snapshot, runtime_context,
+):
+    plan = RuntimeService().create_action_plan(
+        valid_plan_request(
+            semantic_snapshot_id="snap-release-b",
+            target_selector={"entity_type": "Warehouse", "instance_id": "inst-wh001"},
+        ),
+        runtime_context, db,
+    )
+    assert plan.predicted_diff["before"] is None
+    assert plan.impact_scope["instance_count"] == 0
+    assert plan.risk_classification == "unscoped_proposal"
 
 
 def test_investigate_denies_when_agent_lacks_capability(db, governed_snapshot):

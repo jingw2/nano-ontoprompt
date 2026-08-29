@@ -116,26 +116,59 @@ def _normalize_target_key(target_selector: Mapping[str, Any] | None) -> tuple[An
     return tuple(sorted((str(key), str(value)) for key, value in target_selector.items()))
 
 
+def _manifest_entity_ids(release: OntologyRelease) -> frozenset[str]:
+    """The entity ids the PINNED release's manifest actually declares.
+
+    `app.services.ontology_query.query_instances` establishes this same
+    release-manifest-membership guarantee via a PostgreSQL-only JSONB
+    containment operator (`manifest_projection @> jsonb_build_object(...)`)
+    that cannot run against the SQLite unit harness. `manifest_projection`
+    is read here in Python instead — a psycopg2 JSONB column already
+    deserializes to a `dict`, while the SQLite harness's columns-only
+    fallback table returns the raw inserted text — so the check is
+    identical on both dialects without any raw SQL of its own.
+    """
+    projection = release.manifest_projection
+    if isinstance(projection, (str, bytes, bytearray)):
+        try:
+            projection = json.loads(projection)
+        except (TypeError, ValueError):
+            return frozenset()
+    if not isinstance(projection, dict):
+        return frozenset()
+    entities = projection.get("entities") or []
+    return frozenset(
+        entity["id"] for entity in entities if isinstance(entity, dict) and "id" in entity
+    )
+
+
 def _resolve_target_instance(
-    db: Session, *, ontology_id: str, target_selector: Mapping[str, Any] | None,
+    db: Session, *, release: OntologyRelease, target_selector: Mapping[str, Any] | None,
 ) -> dict | None:
-    """Resolve `target_selector` to at most one live `EntityInstance`, using
-    only portable SQLAlchemy Core selects (no PostgreSQL-only JSON
-    operators) so the lookup behaves identically on SQLite and PostgreSQL."""
+    """Resolve `target_selector` to at most one live `EntityInstance` that
+    both belongs to `release.ontology_id` AND whose entity type is declared
+    in `release`'s own pinned manifest — a live row under the same
+    ontology_id that the pinned release's manifest never declared (e.g. a
+    schema change since this release was cut) must never resolve."""
     if not target_selector:
+        return None
+    manifest_entity_ids = _manifest_entity_ids(release)
+    if not manifest_entity_ids:
         return None
     instance_id = target_selector.get("instance_id")
     entity_type = target_selector.get("entity_type")
     stmt = select(EntityInstance).where(
-        EntityInstance.ontology_id == ontology_id,
+        EntityInstance.ontology_id == release.ontology_id,
         EntityInstance.deleted_at.is_(None),
+        EntityInstance.entity_id.in_(manifest_entity_ids),
     )
     if instance_id:
         stmt = stmt.where(EntityInstance.id == instance_id)
     if entity_type:
         entity_ids = db.execute(
-            select(Entity.id).where(Entity.ontology_id == ontology_id, Entity.name_en == entity_type)
+            select(Entity.id).where(Entity.ontology_id == release.ontology_id, Entity.name_en == entity_type)
         ).scalars().all()
+        entity_ids = [entity_id for entity_id in entity_ids if entity_id in manifest_entity_ids]
         if not entity_ids:
             return None
         stmt = stmt.where(EntityInstance.entity_id.in_(entity_ids))
@@ -146,24 +179,27 @@ def _resolve_target_instance(
 
 
 def _query_snapshot_scoped_instances(
-    db: Session, *, ontology_id: str, entity_type: str | None, query: str | None, limit: int,
+    db: Session, *, release: OntologyRelease, entity_type: str | None, query: str | None, limit: int,
 ) -> list[dict]:
-    """Bounded, portable read of current instances for `ontology_id`
+    """Bounded, portable read of current instances for `release.ontology_id`
     (optionally filtered by entity type and a case-insensitive substring
-    match against the row). Deliberately avoids the PostgreSQL-only JSONB
-    containment check in `app.services.ontology_query.query_instances` so
-    the same code path is exercised on both the SQLite unit harness and
-    production PostgreSQL."""
+    match against the row), scoped to entity types the PINNED release's
+    manifest actually declares — see `_manifest_entity_ids`."""
     if limit <= 0:
         return []
+    manifest_entity_ids = _manifest_entity_ids(release)
+    if not manifest_entity_ids:
+        return []
     stmt = select(EntityInstance).where(
-        EntityInstance.ontology_id == ontology_id,
+        EntityInstance.ontology_id == release.ontology_id,
         EntityInstance.deleted_at.is_(None),
+        EntityInstance.entity_id.in_(manifest_entity_ids),
     )
     if entity_type:
         entity_ids = db.execute(
-            select(Entity.id).where(Entity.ontology_id == ontology_id, Entity.name_en == entity_type)
+            select(Entity.id).where(Entity.ontology_id == release.ontology_id, Entity.name_en == entity_type)
         ).scalars().all()
+        entity_ids = [entity_id for entity_id in entity_ids if entity_id in manifest_entity_ids]
         if not entity_ids:
             return []
         stmt = stmt.where(EntityInstance.entity_id.in_(entity_ids))
@@ -210,10 +246,16 @@ class RuntimeService:
                 correlation_id=context.correlation_id,
             )
 
+        release = db.execute(
+            select(OntologyRelease).where(OntologyRelease.id == snapshot.ontology_release_id)
+        ).scalar_one_or_none()
+        if release is None:
+            raise RuntimeAccessError(ReasonCode.SNAPSHOT_NOT_GOVERNED.value)
+
         citations = [EvidenceCitation(**citation) for citation in snapshot.evidence_summary.get("citations", [])]
         rule_outcome = [RuleOutcome(rule_id="snapshot_governance", result="pass", reason_code=ReasonCode.ALLOW)]
         result = _query_snapshot_scoped_instances(
-            db, ontology_id=request.ontology_id, entity_type=request.entity_type,
+            db, release=release, entity_type=request.entity_type,
             query=request.query, limit=request.limit,
         )
         return InvestigationResult(
@@ -244,7 +286,7 @@ class RuntimeService:
 
         target_key = _normalize_target_key(request.target_selector)
         target_row = _resolve_target_instance(
-            db, ontology_id=release.ontology_id, target_selector=request.target_selector,
+            db, release=release, target_selector=request.target_selector,
         )
         before_image_hash = _canonical_hash(target_row)
         parameters = dict(request.parameters)
