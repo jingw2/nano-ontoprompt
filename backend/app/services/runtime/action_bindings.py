@@ -85,11 +85,17 @@ class FrozenTarget:
 
 
 def _connection_identity(connection: Connection) -> str:
-    """A non-secret, human-legible identity for `connection` — derived only
-    from its kind/name, never from `connection.config` (which may hold
-    encrypted credentials). This is what `connection_target_identity` pins
-    at publish time and what drift is detected against at resolve time."""
-    return f"{connection.kind}://{connection.name}"
+    """A non-secret identity for `connection`'s current target — `kind`,
+    `name`, and a fingerprint of `connection.config`'s stored value. The
+    fingerprint is a one-way hash of the raw stored config (which may
+    itself be an encrypted blob) — this never decrypts or exposes
+    `config`'s content, only detects that it changed. This is what
+    `connection_target_identity` pins at publish time and what drift is
+    detected against at resolve time: a rename OR a config repoint (e.g.
+    the same connection silently pointed at a different host/database)
+    both change this identity."""
+    config_fingerprint = _hash(connection.config or {})
+    return f"{connection.kind}://{connection.name}#{config_fingerprint}"
 
 
 def _validate_identifier(name: object, *, field: str) -> None:

@@ -37,6 +37,7 @@ from app.services.runtime.action_bindings import (
     BindingError,
     FrozenTarget,
     PlanValidationError,
+    _connection_identity,
     freeze_action_target,
     publish_binding,
     resolve_published_binding,
@@ -56,7 +57,13 @@ ACTION_ID = "action-binding-001"
 CONNECTION_ID = "connection-binding-001"
 CONNECTION_KIND = "postgres"
 CONNECTION_NAME = "prod-supplier-db"
-CONNECTION_TARGET_IDENTITY = f"{CONNECTION_KIND}://{CONNECTION_NAME}"
+# `_seed_connection` below never sets `config` explicitly, so the seeded
+# connection carries `Connection.config`'s model default (`{}`) — computed
+# via the real `_connection_identity` (not hardcoded) so this constant tracks
+# whatever `_connection_identity` actually derives its identity from.
+CONNECTION_TARGET_IDENTITY = _connection_identity(
+    Connection(id=CONNECTION_ID, name=CONNECTION_NAME, kind=CONNECTION_KIND, config={})
+)
 
 
 def _seed_action(db, *, action_id=ACTION_ID, ontology_id=ONTOLOGY_ID):
@@ -106,19 +113,40 @@ def publish_fixture_binding(db, *, dialect="postgresql", **overrides):
 def resolve_fixture_binding(db, state: str) -> ManagedActionBinding:
     """Seed a binding in `state` and return whatever
     `resolve_published_binding` does with it — raising `BindingError` for
-    every state this suite exercises (draft/revoked/connection-drift)."""
+    every state this suite exercises (draft/revoked/connection-drift/
+    connection-config-drift).
+
+    The two drift states each seed and publish against their own dedicated
+    connection row (rather than the shared `CONNECTION_ID` fixture) so that
+    mutating that row after publication can't bleed into other states run
+    later in the same test.
+    """
     _seed_action(db)
-    _seed_connection(db)
     if state == "connection-drift":
-        binding = publish_binding(db, **_binding_kwargs())
+        connection = _seed_connection(db, connection_id=f"{CONNECTION_ID}-rename-drift")
+        binding = publish_binding(
+            db, **_binding_kwargs(connection_id=connection.id, connection_target_identity=_connection_identity(connection)),
+        )
         # Simulate the underlying connection being repointed after
         # publication — the binding's pinned `connection_target_identity`
         # no longer matches the live connection it was published against.
-        connection = db.get(Connection, CONNECTION_ID)
         connection.name = "some-other-database"
         db.commit()
         return resolve_published_binding(db, binding.managed_action_binding_id, binding.version)
 
+    if state == "connection-config-drift":
+        connection = _seed_connection(db, connection_id=f"{CONNECTION_ID}-config-drift")
+        binding = publish_binding(
+            db, **_binding_kwargs(connection_id=connection.id, connection_target_identity=_connection_identity(connection)),
+        )
+        # Simulate the same connection row being silently repointed at a
+        # different physical database by editing `config` alone — `kind`
+        # and `name` stay the same, so only a config fingerprint catches it.
+        connection.config = {"host": "staging-db.internal"}
+        db.commit()
+        return resolve_published_binding(db, binding.managed_action_binding_id, binding.version)
+
+    _seed_connection(db)
     status = state
     binding = ManagedActionBinding(
         managed_action_binding_id=str(uuid.uuid4()),
@@ -261,7 +289,7 @@ def test_published_binding_freezes_server_owned_target_and_params(db):
 
 
 def test_binding_draft_revoked_or_connection_drift_is_not_resolvable(db):
-    for state in ("draft", "revoked", "connection-drift"):
+    for state in ("draft", "revoked", "connection-drift", "connection-config-drift"):
         with pytest.raises(BindingError) as exc:
             resolve_fixture_binding(db, state)
         assert exc.value.reason_code == "BINDING_DRIFT"
