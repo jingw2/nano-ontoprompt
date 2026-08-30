@@ -6,7 +6,7 @@ import { loginAsAdmin } from './helpers/ui'
 test.describe('runtime governance operator surfaces', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(!hasLocalRuntimeGovernanceSeed(),
-      'requires an explicitly local/test runtime seed created through authenticated APIs')
+      'runtime governance E2E never runs against a non-local API')
     test.skip(!(await hasApi('/api/v2/refresh', '/status')),
       'refresh operations API is unavailable')
     await loginAsAdmin(page)

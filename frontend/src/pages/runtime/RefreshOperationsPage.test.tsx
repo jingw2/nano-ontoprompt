@@ -108,4 +108,27 @@ describe('RefreshOperationsPage', () => {
     await waitFor(async () => expect(await screen.findByTestId('refresh-latest-status')).toHaveTextContent('CANCELLED'))
     expect(screen.getByTestId('refresh-cancel-reason')).toHaveTextContent('planned source maintenance')
   })
+
+  it('renders the timezone and business calendar returned after saving a schedule', async () => {
+    const user = userEvent.setup()
+    const run = baseRun({})
+    server.use(
+      http.get('*/api/v2/refresh/sources/source-001/status', () => HttpResponse.json(baseStatus(run))),
+      http.put('*/api/v2/refresh/sources/source-001/schedule', () => HttpResponse.json({
+        id: 'schedule-001', target_type: 'refresh_source', target_id: 'source-001',
+        cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', business_calendar: ['CN-HOLIDAYS'],
+        sla_seconds: 0, retry_policy: null, backfill_window_seconds: 0, max_pending_runs: 1,
+        enabled: true, next_due_at: '2026-08-31T02:00:00Z',
+      })),
+    )
+    renderPage()
+    await screen.findByTestId('refresh-policy')
+    await user.type(screen.getByTestId('refresh-schedule-cron'), '0 2 * * *')
+    await user.clear(screen.getByTestId('refresh-schedule-timezone'))
+    await user.type(screen.getByTestId('refresh-schedule-timezone'), 'Asia/Shanghai')
+    await user.click(screen.getByTestId('refresh-schedule-submit'))
+
+    expect(await screen.findByTestId('refresh-schedule-timezone-current')).toHaveTextContent('Asia/Shanghai')
+    expect(screen.getByTestId('refresh-schedule-business-calendar')).toHaveTextContent('CN-HOLIDAYS')
+  })
 })

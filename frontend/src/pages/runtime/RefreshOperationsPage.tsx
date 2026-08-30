@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { refreshApi } from '@/api/refresh'
-import type { RefreshRunView, RefreshStatus } from '@/types/refresh'
+import type { RefreshRunView, RefreshScheduleView, RefreshStatus } from '@/types/refresh'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'cancel_requested'])
 const REPLAYABLE_STATUSES = new Set(['failed', 'dead_lettered'])
@@ -40,6 +40,7 @@ export default function RefreshOperationsPage() {
   const [replayRun, setReplayRun] = useState<RefreshRunView | null>(null)
   const [cronExpr, setCronExpr] = useState('')
   const [timezoneName, setTimezoneName] = useState('UTC')
+  const [savedSchedule, setSavedSchedule] = useState<RefreshScheduleView | null>(null)
 
   const load = useCallback(() => {
     if (!sourceId) return
@@ -104,7 +105,8 @@ export default function RefreshOperationsPage() {
     setBusy(true)
     setError('')
     try {
-      await refreshApi.setSchedule(sourceId, { cron_expr: cronExpr, timezone: timezoneName, enabled: true })
+      const schedule = await refreshApi.setSchedule(sourceId, { cron_expr: cronExpr, timezone: timezoneName, enabled: true })
+      setSavedSchedule(schedule)
       load()
     } catch {
       setError(t('runtime.refresh.schedule_failed', 'Schedule update was denied'))
@@ -156,6 +158,17 @@ export default function RefreshOperationsPage() {
           </>
         )}
       </dl>
+
+      {savedSchedule && (
+        <dl className="grid grid-cols-2 gap-1 text-sm mb-4" data-testid="refresh-saved-schedule">
+          <dt className="text-gray-500">{t('runtime.refresh.schedule_timezone', 'Schedule timezone')}</dt>
+          <dd data-testid="refresh-schedule-timezone-current">{savedSchedule.timezone}</dd>
+          <dt className="text-gray-500">{t('runtime.refresh.business_calendar', 'Business calendar')}</dt>
+          <dd data-testid="refresh-schedule-business-calendar">
+            {savedSchedule.business_calendar.length ? savedSchedule.business_calendar.join(', ') : '—'}
+          </dd>
+        </dl>
+      )}
 
       {latest && (
         <div className="border rounded-lg p-3 text-sm mb-4">

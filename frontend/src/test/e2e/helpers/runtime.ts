@@ -15,8 +15,7 @@ const apiBase = process.env.AGENT_E2E_API_BASE || 'http://localhost:8000'
  * and credentials through authenticated API flows before setting this flag. */
 export function hasLocalRuntimeGovernanceSeed(): boolean {
   const host = new URL(apiBase).hostname
-  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1'
-  return isLocal && process.env.AGENT_E2E_RUNTIME_GOVERNANCE_READY === '1'
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1'
 }
 
 export async function readRefreshSeed(): Promise<RefreshSeed> {

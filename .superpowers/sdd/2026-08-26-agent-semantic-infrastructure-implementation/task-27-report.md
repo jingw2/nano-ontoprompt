@@ -58,3 +58,59 @@ inserting database rows, or contacting a production system.
 the backend raises it only inside worker paths and does not persist it on a
 queryable refresh-run response. No frontend mock or synthetic state was
 introduced for it.
+
+## Fix round 1 — usable browser Runtime credentials
+
+The initial operator UI used the ordinary browser session bearer for
+`/api/v2/runtime/*`, but those routes correctly require Task 13's persisted
+`runtime_delegated` credential. The previous E2E guard therefore masked a
+real usability bug.
+
+Added two authenticated Runtime endpoints:
+
+- `GET /api/v2/runtime/delegation-agents` lists only active agents configured
+  for the Runtime REST audience.
+- `POST /api/v2/runtime/delegations` lets the current signed-in user delegate
+  only their own identity to a selected registered agent for an allowlisted
+  scope. It calls the existing Task 13 issuer, persists only the token hash,
+  and returns the short-lived bearer once.
+
+The frontend now keeps this delegated token in a separate memory-only store.
+Runtime requests use that token, while a Runtime 401/403 does not refresh or
+log out the normal browser session. The route gate makes agent selection and
+delegation explicit before loading a Runtime operator page.
+
+The direct transport test is non-vacuous: it seeds the already-governed
+runtime fixture, authenticates a session user, exchanges through
+`POST /api/v2/runtime/delegations`, then calls the real
+`POST /api/v2/runtime/investigate` with the returned token and receives
+`ALLOW`.
+
+Refresh schedule saving now retains and renders the persisted
+`RefreshScheduleView.timezone` and `business_calendar`, rather than showing
+the form's default UTC after a successful save.
+
+Fresh fix-round verification:
+
+```text
+(cd backend && .venv/bin/python -m pytest tests/runtime/test_runtime_api.py -q)
+16 passed.
+
+(cd frontend && npm run test:unit -- src/api/runtime.test.ts src/api/refresh.test.ts src/pages/runtime/RuntimeInvestigationPage.test.tsx src/pages/runtime/ActionPlanPage.test.tsx src/pages/runtime/RefreshOperationsPage.test.tsx)
+5 test files passed; 17 tests passed.
+
+(cd frontend && npm run build)
+tsc -b && vite build exited 0.
+
+(cd frontend && npx playwright test src/test/e2e/runtime-governance.spec.ts)
+3 skipped; no local backend advertised the required APIs.
+```
+
+The browser suite is no longer gated by a blanket readiness environment flag:
+it runs only against a loopback API and self-skips when the local API is down
+or lacks the required endpoint. Full plan approval/execute and refresh
+mutation browser flows still require a local fixture provisioned through the
+new authenticated delegation flow; this repository has no public API that
+creates the governed snapshot/action/binding prerequisites from an empty
+database. The backend transport test above proves the credential exchange and
+authorized Runtime request without a database bypass.

@@ -27,6 +27,7 @@ from app.models.semantic_snapshot import SemanticSnapshot
 from app.models.user import User
 from app.services.runtime.canonical import compute_plan_hash, normalize_investigation
 from app.services.runtime.credentials import issue_delegated_credential
+from app.services.auth_service import create_access_token
 
 AUDIENCE = "ontexus-runtime"
 DOMAIN = "00000000-0000-0000-0000-0000000000cc"
@@ -193,6 +194,24 @@ def test_investigate_api_returns_normalized_result(client, runtime_headers):
     assert response.status_code == 200
     assert response.json()["decision"] == "ALLOW"
     assert response.json()["semantic_snapshot_id"] == "snap-valid-001"
+
+
+def test_authenticated_user_can_exchange_for_a_runtime_credential_and_investigate(client, governed_state):
+    session_token = create_access_token({"sub": USER_ID, "role": "editor"})
+    exchange = client.post(
+        "/api/v2/runtime/delegations",
+        json={"agent_id": AGENT_ID, "scopes": ["ontology:read"]},
+        headers={"Authorization": f"Bearer {session_token}"},
+    )
+    assert exchange.status_code == 200, exchange.text
+    runtime_token = exchange.json()["token"]
+
+    response = client.post(
+        "/api/v2/runtime/investigate", json=valid_investigation(),
+        headers={"Authorization": f"Bearer {runtime_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["decision"] == "ALLOW"
 
 
 def test_investigate_api_denial_does_not_return_protected_rows(client, missing_scope_headers):

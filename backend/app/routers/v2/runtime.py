@@ -19,14 +19,17 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.deps import get_db
+from app.deps import get_current_user, get_db
 from app.deps.runtime import _UNAUTHENTICATED_REASONS, runtime_bearer
+from app.models.oauth import OAuthClient
+from app.models.user import User
 from app.schemas.runtime import InvestigationRequest, InvestigationResult, ReasonCode
 from app.services.actions.approval import ApprovalReceipt
 from app.services.runtime.action_bindings import BindingError, PlanValidationError
 from app.services.runtime.credentials import (
     RuntimeAccessError,
     RuntimeContext,
+    issue_delegated_credential,
     verify_delegated_credential,
 )
 from app.services.runtime.execution import (
@@ -50,6 +53,7 @@ router = APIRouter()
 RUNTIME_REST_AUDIENCE = "ontexus-runtime"
 READ_SCOPE = "ontology:read"
 WRITE_SCOPE = "ontology:write"
+RUNTIME_DELEGATION_TTL_SECONDS = 900
 
 _service = RuntimeService()
 
@@ -152,6 +156,46 @@ class RollbackRequestBody(BaseModel):
     body."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class DelegationRequestBody(BaseModel):
+    """A signed-in user delegates only their own Runtime authority to one
+    pre-registered agent. Persisted agent audience/scope allowlists remain
+    authoritative at issuance and verification time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    scopes: set[str] = Field(min_length=1)
+
+
+@router.get("/delegation-agents")
+def list_delegation_agents(
+    db: Session = Depends(get_db), _: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """List only pre-registered Runtime-capable agent metadata. Existing
+    bearer credentials remain unobservable and cannot be selected or reused."""
+    return [
+        {"id": client.id, "client_name": client.client_name, "allowed_scopes": list(client.allowed_scopes or [])}
+        for client in db.query(OAuthClient).filter(OAuthClient.is_active.is_(True)).all()
+        if RUNTIME_REST_AUDIENCE in (client.allowed_audiences or [])
+    ]
+
+
+@router.post("/delegations")
+def issue_browser_delegation(
+    body: DelegationRequestBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Mint a short-lived, memory-only Runtime credential for the signed-in
+    user. The browser cannot assert or override either principal."""
+    token = issue_delegated_credential(
+        db, client_id=body.agent_id, user_id=current_user.id,
+        audience=RUNTIME_REST_AUDIENCE, scope=set(body.scopes),
+        ttl_seconds=RUNTIME_DELEGATION_TTL_SECONDS, now=datetime.now(timezone.utc),
+    )
+    return {"token": token, "expires_in": RUNTIME_DELEGATION_TTL_SECONDS}
 
 
 def _serialize_action_plan(plan: ActionPlan) -> dict[str, Any]:

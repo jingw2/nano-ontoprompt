@@ -37,6 +37,7 @@ import SandboxPage from '@/pages/runtime/SandboxPage'
 import ApprovalQueuePage from '@/pages/runtime/ApprovalQueuePage'
 import ReconciliationPage from '@/pages/runtime/ReconciliationPage'
 import RefreshOperationsPage from '@/pages/runtime/RefreshOperationsPage'
+import RuntimeDelegationGate from '@/pages/runtime/RuntimeDelegationGate'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -135,11 +136,11 @@ export default function App() {
 
           {/* ── Runtime governance + refresh operator surfaces (Task 27) ── */}
           <Route path="/runtime/refresh/:sourceId" element={<ProtectedRoute><RefreshOperationsPage /></ProtectedRoute>} />
-          <Route path="/runtime/investigate" element={<ProtectedRoute><RuntimeInvestigationPage /></ProtectedRoute>} />
-          <Route path="/runtime/action-plans/:planId" element={<ProtectedRoute><ActionPlanPage /></ProtectedRoute>} />
-          <Route path="/runtime/sandbox/:planId" element={<ProtectedRoute><SandboxPage /></ProtectedRoute>} />
-          <Route path="/runtime/approvals" element={<ProtectedRoute><ApprovalQueuePage /></ProtectedRoute>} />
-          <Route path="/runtime/reconciliation/:reconciliationId" element={<ProtectedRoute><AdminRoute><ReconciliationPage /></AdminRoute></ProtectedRoute>} />
+          <Route path="/runtime/investigate" element={<ProtectedRoute><RuntimeDelegationGate><RuntimeInvestigationPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/action-plans/:planId" element={<ProtectedRoute><RuntimeDelegationGate><ActionPlanPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/sandbox/:planId" element={<ProtectedRoute><RuntimeDelegationGate><SandboxPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/approvals" element={<ProtectedRoute><RuntimeDelegationGate><ApprovalQueuePage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/reconciliation/:reconciliationId" element={<ProtectedRoute><AdminRoute><RuntimeDelegationGate><ReconciliationPage /></RuntimeDelegationGate></AdminRoute></ProtectedRoute>} />
         </Routes>
         </SessionRestore>
       </BrowserRouter>
