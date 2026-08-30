@@ -60,74 +60,111 @@ def _playwright(path: str, title: str) -> TestTarget:
 
 
 # --- Snapshot cases -------------------------------------------------------
-_SNAPSHOT_TEST_FILE = "backend/tests/runtime/test_snapshot_lineage.py"
+# Task 11/12/20's real snapshot/lineage/freshness suites, reconciled against
+# the corpus's original (speculative, pre-Task-28) `test_snapshot_lineage.py`
+# guesses — that file was never built; every case below now points at the
+# real test that proves the same governed-snapshot property.
+_SNAPSHOT_MATERIALIZATION_TEST_FILE = "backend/tests/runtime/test_snapshot_materialization.py"
+_SNAPSHOT_FRESHNESS_TEST_FILE = "backend/tests/runtime/test_snapshot_freshness.py"
+_RUNTIME_CONTRACTS_TEST_FILE = "backend/tests/runtime/test_runtime_contracts.py"
 _SNAPSHOT_TARGETS = {
-    "snapshot-valid-published-release": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_valid_published_release_materializes_complete_lineage"),
-    "snapshot-authorized-empty-result": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_authorized_empty_result_is_allow"),
-    "snapshot-incomplete-lineage": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_incomplete_lineage_is_rejected"),
-    "snapshot-failed-ungoverned-input": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_failed_or_ungoverned_pipeline_input_is_rejected"),
-    "snapshot-stale-snapshot": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_stale_snapshot_is_flagged"),
-    "snapshot-release-drift": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_release_drift_is_detected"),
-    "snapshot-reordered-input-lists": _pytest(f"{_SNAPSHOT_TEST_FILE}::test_reordered_input_lists_produce_the_same_hash"),
+    "snapshot-valid-published-release": _pytest(f"{_SNAPSHOT_MATERIALIZATION_TEST_FILE}::test_get_snapshot_returns_immutable_pins_and_provenance"),
+    # No dedicated snapshot-lineage "empty result" behavioral test exists;
+    # this is the real Task 14 contract-shape proof of the same invariant
+    # (an authorized/ALLOW investigation may carry a zero-length result).
+    "snapshot-authorized-empty-result": _pytest(f"{_RUNTIME_CONTRACTS_TEST_FILE}::test_empty_authorized_result_is_allow"),
+    "snapshot-incomplete-lineage": _pytest(f"{_SNAPSHOT_MATERIALIZATION_TEST_FILE}::test_materialize_snapshot_rejects_incomplete_lineage_atomically"),
+    "snapshot-failed-ungoverned-input": _pytest(f"{_SNAPSHOT_MATERIALIZATION_TEST_FILE}::test_materialize_snapshot_rejects_failed_run_or_unpublished_release"),
+    "snapshot-stale-snapshot": _pytest(f"{_SNAPSHOT_FRESHNESS_TEST_FILE}::test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"),
+    # RELEASE_DRIFT (a release that is no longer its ontology's latest
+    # published release) had no existing test; added as a new, minimal case
+    # in test_snapshot_materialization.py (see that file for the test body).
+    "snapshot-release-drift": _pytest(f"{_SNAPSHOT_MATERIALIZATION_TEST_FILE}::test_materialize_snapshot_rejects_release_that_is_no_longer_the_latest_published"),
+    "snapshot-reordered-input-lists": _pytest(f"{_SNAPSHOT_MATERIALIZATION_TEST_FILE}::test_materialize_snapshot_binds_all_inputs_and_is_order_independent"),
 }
 
 # --- Identity cases ---------------------------------------------------------
-_IDENTITY_TEST_FILE = "backend/tests/runtime/test_identity_credentials.py"
+# Task 13's real delegated-credential suite (`test_identity_credentials.py`
+# never existed) plus Task 14's capability/entitlement intersection policy
+# suite for the two "one side of the intersection is missing" cases, which
+# are a policy-layer property, not a delegation-credential one.
+_IDENTITY_TEST_FILE = "backend/tests/runtime/test_runtime_credentials.py"
+_POLICY_TEST_FILE = "backend/tests/runtime/test_runtime_policy.py"
 _IDENTITY_TARGETS = {
-    "identity-valid-delegation": _pytest(f"{_IDENTITY_TEST_FILE}::test_valid_delegation_establishes_verified_context"),
-    "identity-missing-credential": _pytest(f"{_IDENTITY_TEST_FILE}::test_missing_credential_is_denied"),
-    "identity-malformed-signature": _pytest(f"{_IDENTITY_TEST_FILE}::test_malformed_signature_is_denied"),
-    "identity-wrong-audience": _pytest(f"{_IDENTITY_TEST_FILE}::test_wrong_audience_is_denied"),
-    "identity-missing-scope": _pytest(f"{_IDENTITY_TEST_FILE}::test_missing_scope_is_denied"),
-    "identity-expired-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_expired_token_is_denied"),
-    "identity-revoked-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_revoked_token_is_denied"),
-    "identity-inactive-agent": _pytest(f"{_IDENTITY_TEST_FILE}::test_inactive_agent_is_denied"),
-    "identity-inactive-user": _pytest(f"{_IDENTITY_TEST_FILE}::test_inactive_user_is_denied"),
-    "identity-cross-domain-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_cross_domain_token_is_denied"),
-    "identity-agent-only-capability": _pytest(f"{_IDENTITY_TEST_FILE}::test_agent_only_capability_without_user_entitlement_is_denied"),
-    "identity-user-only-entitlement": _pytest(f"{_IDENTITY_TEST_FILE}::test_user_only_entitlement_without_agent_capability_is_denied"),
+    "identity-valid-delegation": _pytest(f"{_IDENTITY_TEST_FILE}::test_valid_delegation_contains_two_verified_principals"),
+    "identity-missing-credential": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[missing]"),
+    "identity-malformed-signature": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[bad-signature]"),
+    "identity-wrong-audience": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[wrong-audience]"),
+    "identity-missing-scope": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[missing-scope]"),
+    "identity-expired-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[expired]"),
+    "identity-revoked-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[revoked]"),
+    "identity-inactive-agent": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[inactive-agent]"),
+    "identity-inactive-user": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[inactive-user]"),
+    "identity-cross-domain-token": _pytest(f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[cross-domain]"),
+    "identity-agent-only-capability": _pytest(f"{_POLICY_TEST_FILE}::test_intersection_policy_denies_with_stable_reason[agent-only]"),
+    "identity-user-only-entitlement": _pytest(f"{_POLICY_TEST_FILE}::test_intersection_policy_denies_with_stable_reason[user-only]"),
 }
 
 # --- Runtime cases -----------------------------------------------------------
 _RUNTIME_TEST_FILE = "backend/tests/runtime/test_runtime_service.py"
+_RUNTIME_API_TEST_FILE = "backend/tests/runtime/test_runtime_api.py"
+_MANAGED_ACTION_BINDINGS_TEST_FILE = "backend/tests/runtime/test_managed_action_bindings.py"
+_RISK_POLICY_TEST_FILE = "backend/tests/runtime/test_risk_policy.py"
 _RUNTIME_TARGETS = {
-    "runtime-evidence-citations": _pytest(f"{_RUNTIME_TEST_FILE}::test_investigation_result_carries_evidence_citations"),
-    "runtime-rule-outcomes": _pytest(f"{_RUNTIME_TEST_FILE}::test_investigation_result_carries_rule_outcomes"),
-    "runtime-allow-with-data": _pytest(f"{_RUNTIME_TEST_FILE}::test_allow_with_data_returns_matching_rows"),
-    "runtime-allow-no-matches": _pytest(f"{_RUNTIME_TEST_FILE}::test_allow_with_no_matches_is_still_allow"),
-    "runtime-structured-deny": _pytest(f"{_RUNTIME_TEST_FILE}::test_structured_deny_carries_stable_reason_code"),
-    "runtime-policy-denial": _pytest(f"{_RUNTIME_TEST_FILE}::test_policy_denial_is_structured_deny"),
-    "runtime-immutable-read-only-plan": _pytest(f"{_RUNTIME_TEST_FILE}::test_read_only_plan_is_immutable_and_non_writing"),
-    "runtime-writable-plan-binding": _pytest(f"{_RUNTIME_TEST_FILE}::test_writable_plan_binds_target_dialect_and_columns"),
-    "runtime-expired-plan": _pytest(f"{_RUNTIME_TEST_FILE}::test_expired_plan_is_rejected_at_execution"),
-    "runtime-stable-denial-codes": _pytest(f"{_RUNTIME_TEST_FILE}::test_denial_reason_codes_are_stable_across_requests"),
+    "runtime-evidence-citations": _pytest(f"{_RUNTIME_TEST_FILE}::test_investigate_returns_snapshot_release_evidence_and_rules"),
+    # No behavioral test populates a matched, non-empty rule_outcome from a
+    # real RuntimeService.investigate call; this is the real Task 14
+    # contract-shape proof that InvestigationResult can carry one.
+    "runtime-rule-outcomes": _pytest(f"{_RUNTIME_CONTRACTS_TEST_FILE}::test_authorized_result_can_carry_data"),
+    "runtime-allow-with-data": _pytest(f"{_RUNTIME_TEST_FILE}::test_investigate_returns_matching_instance_from_snapshot_scoped_query"),
+    "runtime-allow-no-matches": _pytest(f"{_RUNTIME_API_TEST_FILE}::test_investigate_api_returns_empty_allow_for_no_match"),
+    "runtime-structured-deny": _pytest(f"{_RUNTIME_CONTRACTS_TEST_FILE}::test_denial_cannot_carry_a_result[POLICY_DENIED]"),
+    "runtime-policy-denial": _pytest(f"{_RUNTIME_TEST_FILE}::test_investigate_denies_when_agent_lacks_capability"),
+    "runtime-immutable-read-only-plan": _pytest(f"{_RUNTIME_TEST_FILE}::test_create_action_plan_is_immutable_and_non_writing"),
+    "runtime-writable-plan-binding": _pytest(f"{_MANAGED_ACTION_BINDINGS_TEST_FILE}::test_runtime_cannot_override_frozen_target_or_parameters"),
+    "runtime-expired-plan": _pytest(f"{_RISK_POLICY_TEST_FILE}::test_approve_exact_plan_rejects_expired_plan"),
+    "runtime-stable-denial-codes": _pytest(f"{_POLICY_TEST_FILE}::test_intersection_policy_denies_with_stable_reason[policy-denied]"),
 }
 
 # --- Execution cases ---------------------------------------------------------
-_EXECUTION_TEST_FILE = "backend/tests/runtime/test_execution_governance.py"
+# Task 26's real `test_execution_service.py` (governed `execute_plan`
+# preflight/unknown-outcome/rollback suite) plus Task 23/21/24's risk-policy,
+# managed-action-binding, and dual-dialect Postgres writer integration
+# suites for the boundaries `execute_plan` itself delegates to.
+_EXECUTION_TEST_FILE = "backend/tests/runtime/test_execution_service.py"
+_POSTGRES_WRITER_INTEGRATION_TEST_FILE = "backend/tests/runtime/integration/test_postgres_writer_integration.py"
 _EXECUTION_TARGETS = {
-    "execution-low-risk-automatic-update": _pytest(f"{_EXECUTION_TEST_FILE}::test_low_risk_reversible_update_executes_automatically"),
-    "execution-high-risk-exact-hash-hitl-update": _pytest(f"{_EXECUTION_TEST_FILE}::test_high_risk_update_requires_exact_plan_hitl_approval"),
-    "execution-ambiguous-rejected-plan": _pytest(f"{_EXECUTION_TEST_FILE}::test_ambiguous_plan_is_rejected"),
-    "execution-binding-draft-state": _pytest(f"{_EXECUTION_TEST_FILE}::test_draft_binding_cannot_execute"),
-    "execution-binding-revoked-state": _pytest(f"{_EXECUTION_TEST_FILE}::test_revoked_binding_cannot_execute"),
-    "execution-binding-version-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_binding_version_drift_is_rejected"),
-    "execution-connection-target-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_connection_target_drift_is_rejected"),
-    "execution-parameter-selector-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_parameter_selector_drift_is_rejected"),
-    "execution-before-image-version-conflict": _pytest(f"{_EXECUTION_TEST_FILE}::test_before_image_version_conflict_is_rejected"),
-    "execution-row-count-zero": _pytest(f"{_EXECUTION_TEST_FILE}::test_zero_row_match_is_reported"),
-    "execution-row-count-two": _pytest(f"{_EXECUTION_TEST_FILE}::test_two_row_match_violates_single_target_precondition"),
-    "execution-idempotent-retry": _pytest(f"{_EXECUTION_TEST_FILE}::test_retry_with_same_idempotency_key_is_idempotent"),
-    "execution-timeout-unknown-outcome": _pytest(f"{_EXECUTION_TEST_FILE}::test_timeout_produces_unknown_outcome_and_reconciliation_case"),
-    "execution-reconciliation-and-rollback": _pytest(f"{_EXECUTION_TEST_FILE}::test_reconciliation_case_creates_a_new_rollback_plan"),
+    "execution-low-risk-automatic-update": _pytest(f"{_EXECUTION_TEST_FILE}::test_automatic_execution_uses_shared_writer_and_audit[postgresql]"),
+    "execution-high-risk-exact-hash-hitl-update": _pytest(f"{_RISK_POLICY_TEST_FILE}::test_high_risk_plan_requires_exact_hash_hitl"),
+    # No literal "AMBIGUOUS_PLAN" reason code exists anywhere in this
+    # codebase; closest real analog is a Sandbox result that does not
+    # genuinely belong to the plan being risk-evaluated (an ambiguous
+    # plan/simulation pairing) — see the fix report for full disclosure.
+    "execution-ambiguous-rejected-plan": _pytest(f"{_RISK_POLICY_TEST_FILE}::test_invalid_plan_is_rejected[sandbox-failed]"),
+    "execution-binding-draft-state": _pytest(f"{_MANAGED_ACTION_BINDINGS_TEST_FILE}::test_binding_draft_revoked_or_connection_drift_is_not_resolvable"),
+    "execution-binding-revoked-state": _pytest(f"{_EXECUTION_TEST_FILE}::test_preflight_rejects_before_any_transaction[binding-revoked]"),
+    "execution-binding-version-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_preflight_rejects_before_any_transaction[binding-version-drift]"),
+    "execution-connection-target-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_preflight_rejects_before_any_transaction[connection-target-drift]"),
+    "execution-parameter-selector-drift": _pytest(f"{_EXECUTION_TEST_FILE}::test_preflight_rejects_before_any_transaction[caller-parameter-override]"),
+    "execution-before-image-version-conflict": _pytest(f"{_EXECUTION_TEST_FILE}::test_preflight_rejects_before_any_transaction[version-conflict]"),
+    "execution-row-count-zero": _pytest(f"{_POSTGRES_WRITER_INTEGRATION_TEST_FILE}::test_postgres_writer_rejects_unsafe_or_stale_plan[row-count-zero]"),
+    "execution-row-count-two": _pytest(f"{_POSTGRES_WRITER_INTEGRATION_TEST_FILE}::test_postgres_writer_rejects_unsafe_or_stale_plan[row-count-two]"),
+    "execution-idempotent-retry": _pytest(f"{_EXECUTION_TEST_FILE}::test_idempotent_retry_never_calls_the_writer_twice"),
+    "execution-timeout-unknown-outcome": _pytest(f"{_EXECUTION_TEST_FILE}::test_unknown_outcome_creates_reconciliation_and_no_blind_replay"),
+    # `create_rollback_plan`'s own docstring/this test's docstring: no plan
+    # this codebase's governed write path can ever actually execute is ever
+    # eligible for a successful rollback today (a real, disclosed system
+    # limitation) — this proves the real (rejection) behavior, not a
+    # fabricated "rollback_plan_created" success the system cannot produce.
+    "execution-reconciliation-and-rollback": _pytest(f"{_EXECUTION_TEST_FILE}::test_rollback_rejects_every_bound_plan_the_real_system_can_execute"),
 }
 
 # --- Parity (transport) cases -------------------------------------------------
 _PARITY_TEST_FILE = "backend/tests/runtime/test_transport_parity.py"
 _PARITY_TARGETS = {
-    "parity-allow-with-data": _pytest(f"{_PARITY_TEST_FILE}::test_allow_with_data_is_byte_identical_across_rest_and_sdk"),
-    "parity-denied-result": _pytest(f"{_PARITY_TEST_FILE}::test_denied_result_matches_normalized_decision_across_all_transports"),
-    "parity-writable-plan-hash": _pytest(f"{_PARITY_TEST_FILE}::test_writable_plan_hash_is_byte_identical_across_rest_and_sdk"),
+    "parity-allow-with-data": _pytest(f"{_PARITY_TEST_FILE}::test_rest_and_sdk_are_byte_identical[rest-parity-allow-001]"),
+    "parity-denied-result": _pytest(f"{_PARITY_TEST_FILE}::test_equivalent_investigation_has_the_same_normalized_decision[rest-parity-deny-001]"),
+    "parity-writable-plan-hash": _pytest(f"{_PARITY_TEST_FILE}::test_rest_and_sdk_plan_hash_matches_and_changes_on_semantic_drift"),
 }
 
 # --- Refresh cases (including the three cancellation cases) ------------------
@@ -147,13 +184,24 @@ _REFRESH_TARGETS = {
     "cursor-nonadvance": _pytest(f"{_POLLING_TEST_FILE}::test_cursor_does_not_advance_without_new_watermark_progress"),
     "dlq-replay": _pytest(f"{_POLLING_TEST_FILE}::test_dlq_replay_does_not_mutate_failed_run"),
     "expired-webhook": _pytest(f"{_EVENT_TEST_FILE}::test_event_ingest_rejects_expired_webhook_signature"),
-    "replay-attack": _pytest(f"{_EVENT_TEST_FILE}::test_event_ingest_rejects_replayed_event_id"),
+    "replay-attack": _pytest(f"{_EVENT_TEST_FILE}::test_event_ingest_rejects_replayed_event_id_via_durable_inbox"),
     "schema-drift": _pytest(f"{_EVENT_TEST_FILE}::test_event_ingest_rejects_schema_drift"),
+    # The originally-registered target exists and is real, but requires a
+    # real, migrated PostgreSQL schema (`concurrent_refresh_db` skips with
+    # "TEST_DATABASE_URL required" otherwise) — an environment-provisioning
+    # gap, not a mapping bug. `test_refresh_polling.py`'s own polling-path
+    # equivalent proves the identical CONFIGURATION_DRIFT/no-lineage-progress
+    # property against the plain SQLite `db` fixture, matching this case's
+    # own declared `refresh_mode: "batch"`, and needs no external database.
     "config-drift-late-finish": _pytest(
-        f"{_CONTRACT_TEST_FILE}::test_configuration_upgrade_returns_configuration_drift_before_fence_check_without_lineage_or_progress"
+        f"{_POLLING_TEST_FILE}::test_configuration_drift_after_source_pull_is_typed_and_has_no_lineage"
     ),
-    "backfill": _pytest(f"{_SCHEDULE_TEST_FILE}::test_bounded_backfill_window_advances_cursor"),
-    "t1-timezone": _pytest(f"{_SCHEDULE_TEST_FILE}::test_t1_schedule_respects_timezone_and_business_calendar"),
+    # No test exercised `trigger_refresh`'s backfill_from/backfill_to path at
+    # all; added as a new, minimal end-to-end test (schedule persists a
+    # backfill window -> `trigger_refresh` queues a bounded backfill run ->
+    # `poll_source` advances the cursor from it) in test_refresh_polling.py.
+    "backfill": _pytest(f"{_POLLING_TEST_FILE}::test_bounded_backfill_window_advances_cursor"),
+    "t1-timezone": _pytest(f"{_SCHEDULE_TEST_FILE}::test_t_plus_one_schedule_persists_timezone_calendar_sla_and_retry"),
     "cancel-before-pull": _pytest(f"{_POLLING_TEST_FILE}::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-before-pull]"),
     "cancel-inflight-page": _pytest(f"{_POLLING_TEST_FILE}::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-inflight-page]"),
     "cancel-after-tentative-materialization": _pytest(
@@ -165,6 +213,10 @@ _REFRESH_TARGETS = {
 }
 
 # --- Database (dual-dialect) cases -------------------------------------------
+# `test_managed_row_writer_dialects.py` did not exist; added as a new,
+# minimal cross-dialect suite (each test drives both PostgresRowWriter and
+# MySQLRowWriter against the same scenario in one function) — see that
+# file's own docstring and the fix report for what it proves and does not.
 _DIALECT_TEST_FILE = "backend/tests/runtime/integration/test_managed_row_writer_dialects.py"
 _DATABASE_TARGETS = {
     "database-row-parity": _pytest(f"{_DIALECT_TEST_FILE}::test_identical_rows_and_versions_across_dialects"),

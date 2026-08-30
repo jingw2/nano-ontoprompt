@@ -15,10 +15,14 @@ from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
 from app.models.v2.refresh import RefreshDeadLetter, RefreshInboxEvent, RefreshRun, RefreshSourceState
-from app.schemas.refresh import ChangeEnvelope, ConfigurationDriftError, SourceCursor, cursor_order
+from app.schemas.refresh import (
+    ChangeEnvelope, ConfigurationDriftError, RefreshError, RefreshPolicy, SourceCursor, cursor_order,
+)
 from app.services.v2.incremental import polling
 from app.services.v2.incremental.contract import claim_refresh_run, request_refresh_cancellation, update_source_configuration
+from app.services.v2.incremental.operations import trigger_refresh
 from app.services.v2.incremental.polling import DeltaPage, poll_source, replay_refresh
+from app.services.v2.scheduler.schedule_service import ScheduleRequest, upsert_refresh_schedule
 
 
 NOW = datetime(2026, 8, 26, 0, 0, tzinfo=timezone.utc)
@@ -450,6 +454,48 @@ def test_cursor_does_not_advance_without_new_watermark_progress(db):
     assert result.cursor_before is not None
     assert result.cursor_after is not None
     assert cursor_order(result.cursor_before, result.cursor_after) == 0
+
+
+def test_bounded_backfill_window_advances_cursor(db):
+    """`trigger_refresh`'s manual backfill path (`operations.py`'s
+    `_validate_backfill`) only ever queues a run when the requested
+    `backfill_from`/`backfill_to` window fits inside the source's own
+    persisted `backfill_window_seconds` — proven here end to end: once
+    that queued run is dispatched, it advances the cursor through the exact
+    same `poll_source` path every other refresh run does."""
+    connector = _SourceConnector(page=DeltaPage(
+        envelopes=[_envelope("evt-backfill-1", "2026-08-25T12:00:00Z", "500", {"id": "500"})],
+        candidate_cursor=_cursor("2026-08-25T12:00:00Z", "500"),
+        source_observed_at=NOW, source_lag_seconds=1.0,
+    ))
+    source, _, _ = _polling_source(db, connector=connector)
+
+    upsert_refresh_schedule(
+        db,
+        ScheduleRequest(
+            target_type="connection", target_id=source.id, cron_expr="0 * * * *", timezone="UTC",
+            business_calendar=[], sla_seconds=0, retry_policy=None,
+            backfill_window_seconds=86400, max_pending_runs=5, enabled=True,
+        ),
+        now=NOW,
+    )
+
+    backfill_from = NOW - timedelta(hours=6)
+    run = trigger_refresh(
+        db, source_id=source.id, resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=backfill_from, backfill_to=NOW, operator_id="operator-001", now=NOW,
+    )
+    assert run.status == "queued"
+    assert run.source_provenance["backfill_from"] == backfill_from.isoformat()
+
+    result = poll_source(
+        db, source_id=source.id, resource="orders", lease_owner="worker-001", now=NOW, _run_id=run.id,
+    )
+
+    assert result.status == "succeeded"
+    assert result.cursor_before is None
+    assert result.cursor_after is not None
+    assert result.cursor_after.watermark == "2026-08-25T12:00:00Z"
 
 
 def test_dlq_replay_does_not_mutate_failed_run(db):

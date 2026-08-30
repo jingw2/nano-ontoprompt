@@ -21,7 +21,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_schedule.py::test_bounded_backfill_window_advances_cursor"
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_bounded_backfill_window_advances_cursor"
         }
       ],
       "user_id": "user-beta-operator-13"
@@ -166,7 +166,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_contract.py::test_configuration_upgrade_returns_configuration_drift_before_fence_check_without_lineage_or_progress"
+          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_configuration_drift_after_source_pull_is_typed_and_has_no_lineage"
         }
       ],
       "user_id": "user-acme-operator-12"
@@ -370,7 +370,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_ambiguous_plan_is_rejected"
+          "path": "backend/tests/runtime/test_risk_policy.py::test_invalid_plan_is_rejected[sandbox-failed]"
         }
       ],
       "user_id": "user-acme-operator-02"
@@ -392,7 +392,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_before_image_version_conflict_is_rejected"
+          "path": "backend/tests/runtime/test_execution_service.py::test_preflight_rejects_before_any_transaction[version-conflict]"
         }
       ],
       "user_id": "user-acme-operator-08"
@@ -414,7 +414,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_draft_binding_cannot_execute"
+          "path": "backend/tests/runtime/test_managed_action_bindings.py::test_binding_draft_revoked_or_connection_drift_is_not_resolvable"
         }
       ],
       "user_id": "user-beta-operator-03"
@@ -436,7 +436,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_revoked_binding_cannot_execute"
+          "path": "backend/tests/runtime/test_execution_service.py::test_preflight_rejects_before_any_transaction[binding-revoked]"
         }
       ],
       "user_id": "user-acme-operator-04"
@@ -458,7 +458,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_binding_version_drift_is_rejected"
+          "path": "backend/tests/runtime/test_execution_service.py::test_preflight_rejects_before_any_transaction[binding-version-drift]"
         }
       ],
       "user_id": "user-beta-operator-05"
@@ -480,7 +480,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_connection_target_drift_is_rejected"
+          "path": "backend/tests/runtime/test_execution_service.py::test_preflight_rejects_before_any_transaction[connection-target-drift]"
         }
       ],
       "user_id": "user-acme-operator-06"
@@ -502,7 +502,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_high_risk_update_requires_exact_plan_hitl_approval"
+          "path": "backend/tests/runtime/test_risk_policy.py::test_high_risk_plan_requires_exact_hash_hitl"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -524,7 +524,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_retry_with_same_idempotency_key_is_idempotent"
+          "path": "backend/tests/runtime/test_execution_service.py::test_idempotent_retry_never_calls_the_writer_twice"
         }
       ],
       "user_id": "user-beta-operator-11"
@@ -546,7 +546,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_low_risk_reversible_update_executes_automatically"
+          "path": "backend/tests/runtime/test_execution_service.py::test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
         }
       ],
       "user_id": "user-acme-operator-00"
@@ -568,7 +568,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_parameter_selector_drift_is_rejected"
+          "path": "backend/tests/runtime/test_execution_service.py::test_preflight_rejects_before_any_transaction[caller-parameter-override]"
         }
       ],
       "user_id": "user-beta-operator-07"
@@ -589,7 +589,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_reconciliation_case_creates_a_new_rollback_plan"
+          "path": "backend/tests/runtime/test_execution_service.py::test_rollback_rejects_every_bound_plan_the_real_system_can_execute"
         }
       ],
       "user_id": "user-beta-operator-13"
@@ -611,7 +611,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_two_row_match_violates_single_target_precondition"
+          "path": "backend/tests/runtime/integration/test_postgres_writer_integration.py::test_postgres_writer_rejects_unsafe_or_stale_plan[row-count-two]"
         }
       ],
       "user_id": "user-acme-operator-10"
@@ -633,7 +633,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_zero_row_match_is_reported"
+          "path": "backend/tests/runtime/integration/test_postgres_writer_integration.py::test_postgres_writer_rejects_unsafe_or_stale_plan[row-count-zero]"
         }
       ],
       "user_id": "user-beta-operator-09"
@@ -655,7 +655,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_governance.py::test_timeout_produces_unknown_outcome_and_reconciliation_case"
+          "path": "backend/tests/runtime/test_execution_service.py::test_unknown_outcome_creates_reconciliation_and_no_blind_replay"
         }
       ],
       "user_id": "user-acme-operator-12"
@@ -729,7 +729,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_agent_only_capability_without_user_entitlement_is_denied"
+          "path": "backend/tests/runtime/test_runtime_policy.py::test_intersection_policy_denies_with_stable_reason[agent-only]"
         }
       ],
       "user_id": "user-acme-operator-10"
@@ -751,7 +751,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_cross_domain_token_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[cross-domain]"
         }
       ],
       "user_id": "user-beta-operator-09"
@@ -773,7 +773,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_expired_token_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[expired]"
         }
       ],
       "user_id": "user-beta-operator-05"
@@ -795,7 +795,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_inactive_agent_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[inactive-agent]"
         }
       ],
       "user_id": "user-beta-operator-07"
@@ -817,7 +817,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_inactive_user_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[inactive-user]"
         }
       ],
       "user_id": "user-acme-operator-08"
@@ -839,7 +839,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_malformed_signature_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[bad-signature]"
         }
       ],
       "user_id": "user-acme-operator-02"
@@ -861,7 +861,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_missing_credential_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[missing]"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -883,7 +883,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_missing_scope_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[missing-scope]"
         }
       ],
       "user_id": "user-acme-operator-04"
@@ -905,7 +905,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_revoked_token_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[revoked]"
         }
       ],
       "user_id": "user-acme-operator-06"
@@ -927,7 +927,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_user_only_entitlement_without_agent_capability_is_denied"
+          "path": "backend/tests/runtime/test_runtime_policy.py::test_intersection_policy_denies_with_stable_reason[user-only]"
         }
       ],
       "user_id": "user-beta-operator-11"
@@ -948,7 +948,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_valid_delegation_establishes_verified_context"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_valid_delegation_contains_two_verified_principals"
         }
       ],
       "user_id": "user-acme-operator-00"
@@ -970,7 +970,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_identity_credentials.py::test_wrong_audience_is_denied"
+          "path": "backend/tests/runtime/test_runtime_credentials.py::test_invalid_delegation_is_structured_denial[wrong-audience]"
         }
       ],
       "user_id": "user-beta-operator-03"
@@ -1151,7 +1151,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_transport_parity.py::test_allow_with_data_is_byte_identical_across_rest_and_sdk"
+          "path": "backend/tests/runtime/test_transport_parity.py::test_rest_and_sdk_are_byte_identical[rest-parity-allow-001]"
         }
       ],
       "transports": [
@@ -1179,7 +1179,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_transport_parity.py::test_denied_result_matches_normalized_decision_across_all_transports"
+          "path": "backend/tests/runtime/test_transport_parity.py::test_equivalent_investigation_has_the_same_normalized_decision[rest-parity-deny-001]"
         }
       ],
       "transports": [
@@ -1207,7 +1207,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_transport_parity.py::test_writable_plan_hash_is_byte_identical_across_rest_and_sdk"
+          "path": "backend/tests/runtime/test_transport_parity.py::test_rest_and_sdk_plan_hash_matches_and_changes_on_semantic_drift"
         }
       ],
       "transports": [
@@ -1239,7 +1239,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_event_ingest.py::test_event_ingest_rejects_replayed_event_id"
+          "path": "backend/tests/v2/incremental/test_event_ingest.py::test_event_ingest_rejects_replayed_event_id_via_durable_inbox"
         }
       ],
       "user_id": "user-acme-operator-10"
@@ -1261,7 +1261,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_allow_with_no_matches_is_still_allow"
+          "path": "backend/tests/runtime/test_runtime_api.py::test_investigate_api_returns_empty_allow_for_no_match"
         }
       ],
       "user_id": "user-beta-operator-03"
@@ -1283,7 +1283,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_allow_with_data_returns_matching_rows"
+          "path": "backend/tests/runtime/test_runtime_service.py::test_investigate_returns_matching_instance_from_snapshot_scoped_query"
         }
       ],
       "user_id": "user-acme-operator-02"
@@ -1305,7 +1305,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_investigation_result_carries_evidence_citations"
+          "path": "backend/tests/runtime/test_runtime_service.py::test_investigate_returns_snapshot_release_evidence_and_rules"
         }
       ],
       "user_id": "user-acme-operator-00"
@@ -1327,7 +1327,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_expired_plan_is_rejected_at_execution"
+          "path": "backend/tests/runtime/test_risk_policy.py::test_approve_exact_plan_rejects_expired_plan"
         }
       ],
       "user_id": "user-acme-operator-08"
@@ -1349,7 +1349,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_read_only_plan_is_immutable_and_non_writing"
+          "path": "backend/tests/runtime/test_runtime_service.py::test_create_action_plan_is_immutable_and_non_writing"
         }
       ],
       "user_id": "user-acme-operator-06"
@@ -1371,7 +1371,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_policy_denial_is_structured_deny"
+          "path": "backend/tests/runtime/test_runtime_service.py::test_investigate_denies_when_agent_lacks_capability"
         }
       ],
       "user_id": "user-beta-operator-05"
@@ -1393,7 +1393,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_investigation_result_carries_rule_outcomes"
+          "path": "backend/tests/runtime/test_runtime_contracts.py::test_authorized_result_can_carry_data"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -1415,7 +1415,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_denial_reason_codes_are_stable_across_requests"
+          "path": "backend/tests/runtime/test_runtime_policy.py::test_intersection_policy_denies_with_stable_reason[policy-denied]"
         }
       ],
       "user_id": "user-beta-operator-09"
@@ -1437,7 +1437,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_structured_deny_carries_stable_reason_code"
+          "path": "backend/tests/runtime/test_runtime_contracts.py::test_denial_cannot_carry_a_result[POLICY_DENIED]"
         }
       ],
       "user_id": "user-acme-operator-04"
@@ -1459,7 +1459,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_runtime_service.py::test_writable_plan_binds_target_dialect_and_columns"
+          "path": "backend/tests/runtime/test_managed_action_bindings.py::test_runtime_cannot_override_frozen_target_or_parameters"
         }
       ],
       "user_id": "user-beta-operator-07"
@@ -1507,7 +1507,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_authorized_empty_result_is_allow"
+          "path": "backend/tests/runtime/test_runtime_contracts.py::test_empty_authorized_result_is_allow"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -1529,7 +1529,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_failed_or_ungoverned_pipeline_input_is_rejected"
+          "path": "backend/tests/runtime/test_snapshot_materialization.py::test_materialize_snapshot_rejects_failed_run_or_unpublished_release"
         }
       ],
       "user_id": "user-beta-operator-03"
@@ -1551,7 +1551,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_incomplete_lineage_is_rejected"
+          "path": "backend/tests/runtime/test_snapshot_materialization.py::test_materialize_snapshot_rejects_incomplete_lineage_atomically"
         }
       ],
       "user_id": "user-acme-operator-02"
@@ -1573,7 +1573,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_release_drift_is_detected"
+          "path": "backend/tests/runtime/test_snapshot_materialization.py::test_materialize_snapshot_rejects_release_that_is_no_longer_the_latest_published"
         }
       ],
       "user_id": "user-beta-operator-05"
@@ -1595,7 +1595,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_reordered_input_lists_produce_the_same_hash"
+          "path": "backend/tests/runtime/test_snapshot_materialization.py::test_materialize_snapshot_binds_all_inputs_and_is_order_independent"
         }
       ],
       "user_id": "user-acme-operator-06"
@@ -1617,7 +1617,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_stale_snapshot_is_flagged"
+          "path": "backend/tests/runtime/test_snapshot_freshness.py::test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"
         }
       ],
       "user_id": "user-acme-operator-04"
@@ -1639,7 +1639,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_snapshot_lineage.py::test_valid_published_release_materializes_complete_lineage"
+          "path": "backend/tests/runtime/test_snapshot_materialization.py::test_get_snapshot_returns_immutable_pins_and_provenance"
         }
       ],
       "user_id": "user-acme-operator-00"
@@ -1665,7 +1665,7 @@
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_schedule.py::test_t1_schedule_respects_timezone_and_business_calendar"
+          "path": "backend/tests/v2/incremental/test_refresh_schedule.py::test_t_plus_one_schedule_persists_timezone_calendar_sla_and_retry"
         }
       ],
       "user_id": "user-acme-operator-14"

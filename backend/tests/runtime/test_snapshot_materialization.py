@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from app.models.ontology import OntologyProject
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshotInput
 from app.models.v2.pipeline import PipelineRunInput
@@ -91,6 +92,27 @@ def test_materialize_snapshot_rejects_incomplete_lineage_atomically(
         )
 
     assert error.value.reason_code == "LINEAGE_INCOMPLETE"
+    assert db.query(SemanticSnapshotInput).count() == 0
+
+
+def test_materialize_snapshot_rejects_release_that_is_no_longer_the_latest_published(
+    db, valid_release, completed_runs,
+):
+    """A release that was once published but has since been superseded by a
+    newer published release for the same ontology must never be pinned by a
+    new snapshot — even though its own `status` is still `published`."""
+    project = db.get(OntologyProject, valid_release.ontology_id)
+    project.latest_published_release_id = "release-superseded-999"
+    db.commit()
+
+    with pytest.raises(SnapshotValidationError) as error:
+        materialize_snapshot(
+            db,
+            ontology_release_id=valid_release.id,
+            dataset_version_ids=["dv-001"],
+            created_by="user-001",
+        )
+    assert error.value.reason_code == "RELEASE_DRIFT"
     assert db.query(SemanticSnapshotInput).count() == 0
 
 
