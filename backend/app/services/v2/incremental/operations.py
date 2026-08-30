@@ -513,6 +513,15 @@ def schedule_view(schedule: RefreshSchedule) -> RefreshScheduleView:
     )
 
 
+def get_refresh_schedule(db: Session, *, source_id: str) -> RefreshSchedule:
+    schedule = db.execute(
+        select(RefreshSchedule).where(RefreshSchedule.target_id == source_id)
+    ).scalars().first()
+    if schedule is None:
+        raise RefreshError("SCHEDULE_NOT_FOUND", f"no schedule for source {source_id}")
+    return schedule
+
+
 def update_refresh_schedule(
     db: Session, *, source_id: str, cron_expr: str, timezone_name: str = "UTC",
     business_calendar: list[str] | None = None, sla_seconds: int = 0,
@@ -542,7 +551,7 @@ def get_refresh_health(
 
 
 __all__ = [
-    "RefreshRunView", "RefreshStatus", "RefreshScheduleView",
+    "RefreshRunView", "RefreshStatus", "RefreshScheduleView", "get_refresh_schedule",
     "trigger_refresh", "cancel_refresh_run", "replay_refresh_run",
     "get_last_successful_refresh_run", "get_refresh_status", "get_refresh_health",
     "schedule_view", "update_refresh_schedule",

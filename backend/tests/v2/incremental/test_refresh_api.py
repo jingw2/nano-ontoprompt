@@ -474,6 +474,20 @@ def test_refresh_schedule_api_persists_timezone_calendar_and_sla(
     assert response.json()["backfill_window_seconds"] == 172800
 
 
+def test_refresh_schedule_api_reads_persisted_timezone_and_calendar_after_reload(
+    client, db, refresh_source, operator_headers,
+):
+    client.put(
+        "/api/v2/refresh/sources/source-001/schedule",
+        json={"cron_expr": "0 2 * * *", "timezone": "Asia/Shanghai", "business_calendar": ["2026-10-01"]},
+        headers=operator_headers,
+    )
+    response = client.get("/api/v2/refresh/sources/source-001/schedule", headers=operator_headers)
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "Asia/Shanghai"
+    assert response.json()["business_calendar"] == ["2026-10-01"]
+
+
 def test_refresh_api_rejects_caller_cursor_url_and_broker(
     client, db, refresh_source, operator_headers,
 ):

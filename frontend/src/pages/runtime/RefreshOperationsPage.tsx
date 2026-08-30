@@ -50,6 +50,11 @@ export default function RefreshOperationsPage() {
 
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    if (!sourceId) return
+    refreshApi.getSchedule(sourceId).then(setSavedSchedule).catch(() => setSavedSchedule(null))
+  }, [sourceId])
+
   const triggerRun = async () => {
     if (!sourceId || !status) return
     setBusy(true)

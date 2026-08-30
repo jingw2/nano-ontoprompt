@@ -177,7 +177,9 @@ def list_delegation_agents(
     bearer credentials remain unobservable and cannot be selected or reused."""
     return [
         {"id": client.id, "client_name": client.client_name, "allowed_scopes": list(client.allowed_scopes or [])}
-        for client in db.query(OAuthClient).filter(OAuthClient.is_active.is_(True)).all()
+        for client in db.query(OAuthClient).filter(
+            OAuthClient.is_active.is_(True), OAuthClient.security_domain_id == _.security_domain_id,
+        ).all()
         if RUNTIME_REST_AUDIENCE in (client.allowed_audiences or [])
     ]
 
@@ -190,6 +192,15 @@ def issue_browser_delegation(
 ) -> dict[str, Any]:
     """Mint a short-lived, memory-only Runtime credential for the signed-in
     user. The browser cannot assert or override either principal."""
+    agent = db.query(OAuthClient).filter(
+        OAuthClient.id == body.agent_id,
+        OAuthClient.is_active.is_(True),
+        OAuthClient.security_domain_id == current_user.security_domain_id,
+    ).one_or_none()
+    if agent is None:
+        # Deliberately indistinguishable from a missing/inactive agent: a
+        # caller cannot use issuance as a cross-domain agent oracle.
+        raise RuntimeAccessError("AGENT_INACTIVE")
     token = issue_delegated_credential(
         db, client_id=body.agent_id, user_id=current_user.id,
         audience=RUNTIME_REST_AUDIENCE, scope=set(body.scopes),

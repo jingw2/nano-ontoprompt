@@ -23,6 +23,7 @@ from app.services.v2.incremental.operations import (
     RefreshScheduleView,
     RefreshStatus,
     cancel_refresh_run,
+    get_refresh_schedule,
     get_refresh_health,
     get_refresh_status,
     replay_refresh_run,
@@ -152,6 +153,16 @@ def run_refresh(
         _dispatch_run(db, run=run, task_name="refresh.poll")
         db.refresh(run)
         return _run_view(db, run)
+    except RefreshError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/sources/{source_id}/schedule", response_model=RefreshScheduleView)
+def get_schedule(
+    source_id: str, db: Session = Depends(get_db), _: User = Depends(require_editor),
+):
+    try:
+        return schedule_view(get_refresh_schedule(db, source_id=source_id))
     except RefreshError as exc:
         raise _http_error(exc) from exc
 

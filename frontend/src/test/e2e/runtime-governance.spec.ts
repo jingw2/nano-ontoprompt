@@ -26,6 +26,9 @@ test.describe('runtime governance operator surfaces', () => {
     test.skip(!(await hasApi('/api/v2/runtime', '/action-plans')),
       'runtime API is unavailable')
     await page.goto(`/runtime/action-plans/${planId}`)
+    await expect(page.getByTestId('runtime-delegation-gate')).toBeVisible()
+    await page.getByTestId('runtime-delegation-agent').selectOption({ index: 0 })
+    await page.getByTestId('runtime-delegation-start').click()
     await expect(page.getByTestId('plan-hash')).not.toBeEmpty()
   })
 

@@ -21,12 +21,14 @@ describe('refreshApi', () => {
     const post = vi.spyOn(apiClientV2, 'post').mockResolvedValue({})
 
     await refreshApi.getStatus('source-001')
+    await refreshApi.getSchedule('source-001')
     await refreshApi.setSchedule('source-001', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
     await refreshApi.trigger('source-001', { mode: 'micro_batch' })
     await refreshApi.cancel('run-running-001', 'planned source maintenance')
     await refreshApi.replay('run-dead-001', 'dlq-001')
 
     expect(get).toHaveBeenCalledWith('/refresh/sources/source-001/status')
+    expect(get).toHaveBeenCalledWith('/refresh/sources/source-001/schedule')
     expect(put).toHaveBeenCalledWith('/refresh/sources/source-001/schedule', { cron_expr: '0 2 * * *', timezone: 'Asia/Shanghai', enabled: true })
     expect(post).toHaveBeenCalledWith('/refresh/sources/source-001/run', { mode: 'micro_batch' })
     expect(post).toHaveBeenCalledWith('/refresh/runs/run-running-001/cancel', { reason: 'planned source maintenance' })

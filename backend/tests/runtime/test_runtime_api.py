@@ -214,6 +214,29 @@ def test_authenticated_user_can_exchange_for_a_runtime_credential_and_investigat
     assert response.json()["decision"] == "ALLOW"
 
 
+def test_delegation_agents_never_enumerate_or_issue_cross_domain_agents(client, governed_state):
+    governed_state.add(OAuthClient(
+        id="agent-other-domain-001", client_name="Other domain agent", redirect_uris=[],
+        allowed_scopes=["ontology:read"], is_active=True, created_by=USER_ID,
+        security_domain_id="00000000-0000-0000-0000-0000000000dd",
+        allowed_audiences=[AUDIENCE], capability_names=["investigate"],
+    ))
+    governed_state.commit()
+    session_token = create_access_token({"sub": USER_ID, "role": "editor"})
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    listed = client.get("/api/v2/runtime/delegation-agents", headers=headers)
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [AGENT_ID]
+
+    denied = client.post(
+        "/api/v2/runtime/delegations",
+        json={"agent_id": "agent-other-domain-001", "scopes": ["ontology:read"]}, headers=headers,
+    )
+    assert denied.status_code == 403
+    assert denied.json()["reason_code"] == "AGENT_INACTIVE"
+
+
 def test_investigate_api_denial_does_not_return_protected_rows(client, missing_scope_headers):
     response = client.post("/api/v2/runtime/investigate", json=valid_investigation(), headers=missing_scope_headers)
     assert response.status_code == 403

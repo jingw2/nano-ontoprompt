@@ -1,6 +1,6 @@
 import '@/i18n'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -13,6 +13,14 @@ const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
+
+beforeEach(() => server.use(
+  http.get('*/api/v2/refresh/sources/source-001/schedule', () => HttpResponse.json({
+    id: 'schedule-001', target_type: 'source', target_id: 'source-001', cron_expr: '0 2 * * *',
+    timezone: 'UTC', business_calendar: [], sla_seconds: 0, retry_policy: null,
+    backfill_window_seconds: 0, max_pending_runs: 1, enabled: true, next_due_at: null,
+  })),
+))
 
 function renderPage() {
   return render(
@@ -48,6 +56,20 @@ function baseStatus(run: RefreshRunView, overrides: Partial<RefreshStatus> = {})
 }
 
 describe('RefreshOperationsPage', () => {
+  it('loads the persisted schedule timezone and business calendar on mount', async () => {
+    server.use(
+      http.get('*/api/v2/refresh/sources/source-001/status', () => HttpResponse.json(baseStatus(baseRun({})))),
+      http.get('*/api/v2/refresh/sources/source-001/schedule', () => HttpResponse.json({
+        id: 'schedule-001', target_type: 'source', target_id: 'source-001', cron_expr: '0 2 * * *',
+        timezone: 'Asia/Shanghai', business_calendar: ['2026-10-01'], sla_seconds: 0,
+        retry_policy: null, backfill_window_seconds: 0, max_pending_runs: 1, enabled: true, next_due_at: null,
+      })),
+    )
+    renderPage()
+    expect(await screen.findByTestId('refresh-schedule-timezone-current')).toHaveTextContent('Asia/Shanghai')
+    expect(screen.getByTestId('refresh-schedule-business-calendar')).toHaveTextContent('2026-10-01')
+  })
+
   it('shows policy, cursor, lag, and a dead-lettered status, then replays', async () => {
     const run = baseRun({})
     server.use(

@@ -114,3 +114,27 @@ new authenticated delegation flow; this repository has no public API that
 creates the governed snapshot/action/binding prerequisites from an empty
 database. The backend transport test above proves the credential exchange and
 authorized Runtime request without a database bypass.
+
+## Fix round 2 — domain isolation and persisted schedules
+
+- Runtime delegation-agent discovery now filters on the authenticated user's
+  `security_domain_id`. Issuance repeats that filter before the Task 13
+  issuer; a cross-domain or unknown agent gets the same generic
+  `AGENT_INACTIVE` denial, preventing metadata enumeration. The transport
+  test verifies both omission and denial.
+- Added authenticated `GET /api/v2/refresh/sources/{source_id}/schedule`.
+  Refresh Operations reads its durable `RefreshScheduleView` on mount, so a
+  reload shows the persisted timezone and business calendar.
+- The local Playwright action-plan flow now selects an agent and starts the
+  Runtime delegation gate before expecting the authorized plan request.
+
+```text
+(cd backend && .venv/bin/python -m pytest tests/runtime/test_runtime_api.py tests/v2/incremental/test_refresh_api.py -q -k 'cross_domain or reads_persisted')
+2 passed.
+
+(cd frontend && npm run test:unit -- src/api/refresh.test.ts src/pages/runtime/RefreshOperationsPage.test.tsx src/api/runtime.test.ts)
+3 test files passed; 13 tests passed.
+
+(cd frontend && npm run build)
+tsc -b && vite build exited 0.
+```

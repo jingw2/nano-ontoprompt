@@ -19,6 +19,8 @@ import type {
 export const refreshApi = {
   getStatus: (sourceId: string) => apiClientV2.get<RefreshStatus>(`/refresh/sources/${sourceId}/status`),
 
+  getSchedule: (sourceId: string) => apiClientV2.get<RefreshScheduleView>(`/refresh/sources/${sourceId}/schedule`),
+
   setSchedule: (sourceId: string, request: RefreshScheduleRequest) =>
     apiClientV2.put<RefreshScheduleView>(`/refresh/sources/${sourceId}/schedule`, request),
 
