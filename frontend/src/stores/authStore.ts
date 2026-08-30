@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { User } from '@/types/auth'
+import { useRuntimeDelegationStore } from '@/stores/runtimeDelegationStore'
 
 interface AuthState {
   user: User | null
@@ -15,7 +16,10 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()((set) => ({
   user: null,
   token: null,
-  setAuth: (user, token) => set({ user, token }),
+  // A fresh login must never inherit a stale Runtime delegation minted by
+  // whichever session (possibly a different user) was previously active in
+  // this tab — see `runtimeDelegationStore`'s memory-only discipline.
+  setAuth: (user, token) => { useRuntimeDelegationStore.getState().clear(); set({ user, token }) },
   setToken: (token) => set({ token }),
   logout: () => set({ user: null, token: null }),
 }))

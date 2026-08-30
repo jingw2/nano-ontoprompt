@@ -16,15 +16,18 @@ from fastapi import APIRouter, Depends
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
 from app.deps.runtime import _UNAUTHENTICATED_REASONS, runtime_bearer
 from app.models.oauth import OAuthClient
+from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.user import User
 from app.schemas.runtime import InvestigationRequest, InvestigationResult, ReasonCode
 from app.services.actions.approval import ApprovalReceipt
+from app.services.authorization import role_allows
 from app.services.runtime.action_bindings import BindingError, PlanValidationError
 from app.services.runtime.credentials import (
     RuntimeAccessError,
@@ -40,6 +43,7 @@ from app.services.runtime.execution import (
     get_execution_status as _get_execution_status,
     record_plan_approval,
 )
+from app.services.runtime.policy import _as_aware_utc
 from app.services.runtime.reconciliation import ReconciliationCase, get_reconciliation_case
 from app.services.runtime.sandbox import SandboxError, SandboxResult, simulate_action
 from app.services.runtime.service import ActionPlan, ActionPlanRequest, RuntimeService
@@ -161,12 +165,25 @@ class RollbackRequestBody(BaseModel):
 class DelegationRequestBody(BaseModel):
     """A signed-in user delegates only their own Runtime authority to one
     pre-registered agent. Persisted agent audience/scope allowlists remain
-    authoritative at issuance and verification time."""
+    authoritative at issuance and verification time.
+
+    `scopes` is additionally restricted to `{READ_SCOPE, WRITE_SCOPE}` here,
+    independent of whatever an agent's own `allowed_scopes` happen to
+    permit — a caller can never request a scope this transport does not
+    itself recognize, regardless of how a given `OAuthClient` is configured."""
 
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
     scopes: set[str] = Field(min_length=1)
+
+    @field_validator("scopes")
+    @classmethod
+    def _scopes_within_allowlist(cls, value: set[str]) -> set[str]:
+        allowed = {READ_SCOPE, WRITE_SCOPE}
+        if not value <= allowed:
+            raise ValueError(f"scopes must be a subset of {sorted(allowed)}")
+        return value
 
 
 @router.get("/delegation-agents")
@@ -182,6 +199,32 @@ def list_delegation_agents(
         ).all()
         if RUNTIME_REST_AUDIENCE in (client.allowed_audiences or [])
     ]
+
+
+def _user_has_capability_intersection(db: Session, *, user_id: str, capability_names: list[str]) -> bool:
+    """Mirrors the same "Agent capability ∩ user entitlement" discipline
+    `evaluate_access` (`app.services.runtime.policy`) already applies to
+    every other Runtime request: a signed-in user may only delegate to an
+    agent whose own registered `capability_names` genuinely overlap with an
+    active `OntologyDataGrant` they hold. Delegation issuance happens
+    before any specific ontology/snapshot is chosen, so — unlike
+    `evaluate_access` — this checks across all of the caller's active
+    grants rather than one scoped to a single `ontology_id`."""
+    if not capability_names:
+        return False
+    now = datetime.now(timezone.utc)
+    grants = db.execute(
+        select(OntologyDataGrant).where(
+            OntologyDataGrant.user_id == user_id,
+            OntologyDataGrant.status == "active",
+        )
+    ).scalars().all()
+    return any(
+        set(grant.capabilities or []) & set(capability_names)
+        and (grant.valid_from is None or _as_aware_utc(grant.valid_from) <= now)
+        and (grant.valid_until is None or now < _as_aware_utc(grant.valid_until))
+        for grant in grants
+    )
 
 
 @router.post("/delegations")
@@ -200,6 +243,24 @@ def issue_browser_delegation(
     if agent is None:
         # Deliberately indistinguishable from a missing/inactive agent: a
         # caller cannot use issuance as a cross-domain agent oracle.
+        raise RuntimeAccessError("AGENT_INACTIVE")
+    if WRITE_SCOPE in body.scopes and not role_allows(current_user.role, "editor"):
+        # A viewer-role session must never mint a write-capable Runtime
+        # credential, mirroring the same editor ceiling
+        # `app.deps.require_editor` already enforces for every other
+        # mutating action in this codebase. Denied the same indistinguishable
+        # way as a missing/wrong-domain agent — this check must not become a
+        # second, distinguishable error code an unauthorized caller could
+        # use to learn anything about the agent itself.
+        raise RuntimeAccessError("AGENT_INACTIVE")
+    if not _user_has_capability_intersection(db, user_id=current_user.id, capability_names=agent.capability_names or []):
+        # The Critical-severity fix: without this, any authenticated user in
+        # the same security domain could mint a credential against the most
+        # capable registered agent regardless of whether they hold any
+        # entitlement connecting them to it. Denied the same indistinguishable
+        # way as a missing/wrong-domain agent (see above) — an unauthorized
+        # caller cannot tell "agent doesn't exist" apart from "you have no
+        # grant that intersects this agent's capabilities."
         raise RuntimeAccessError("AGENT_INACTIVE")
     token = issue_delegated_credential(
         db, client_id=body.agent_id, user_id=current_user.id,

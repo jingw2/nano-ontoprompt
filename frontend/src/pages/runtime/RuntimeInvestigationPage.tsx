@@ -47,8 +47,13 @@ export default function RuntimeInvestigationPage() {
     }
   }
 
+  // Auto-run only when the operator arrived with both required fields
+  // already supplied (e.g. a deep link carrying `snapshot_id`/`ontology_id`
+  // query params). Otherwise every page open would fire an investigation
+  // with empty required fields, which the server always DENYs — producing
+  // a real denial record before the operator has entered anything.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void runInvestigation() }, [])
+  useEffect(() => { if (snapshotId.trim() && ontologyId.trim()) void runInvestigation() }, [])
 
   return (
     <div data-testid="runtime-investigation-page">

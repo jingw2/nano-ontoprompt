@@ -67,6 +67,14 @@ function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolea
       if (!options?.runtimeDelegation && !options?.preserveSessionOnAuthorizationFailure && (status === 401 || status === 403)) {
         useAuthStore.getState().logout()
       }
+      if (options?.runtimeDelegation && status === 401) {
+        // The delegated credential itself has expired or been rejected —
+        // drop it so `RuntimeDelegationGate` re-prompts for a fresh
+        // delegation instead of the page failing repeatedly with a stale
+        // token. This is a Runtime-credential denial, not evidence the
+        // ordinary session is invalid, so the session bearer is untouched.
+        useRuntimeDelegationStore.getState().clear()
+      }
       return Promise.reject(err.response?.data ?? err)
     }
   )

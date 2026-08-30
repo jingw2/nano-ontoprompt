@@ -237,6 +237,56 @@ def test_delegation_agents_never_enumerate_or_issue_cross_domain_agents(client, 
     assert denied.json()["reason_code"] == "AGENT_INACTIVE"
 
 
+def test_delegation_denies_user_with_no_intersecting_grant(client, governed_state):
+    # Critical-severity regression test: a signed-in user with NO active
+    # `OntologyDataGrant` at all must not be able to mint a Runtime
+    # credential against a capable agent just because they share its
+    # security domain (the escalation an independent reviewer found).
+    other_user_id = "user-no-grant-001"
+    governed_state.add(User(
+        id=other_user_id, username=other_user_id, email=f"{other_user_id}@example.invalid",
+        password_hash="not-a-real-password-hash", role="editor", security_domain_id=DOMAIN,
+    ))
+    governed_state.commit()
+    session_token = create_access_token({"sub": other_user_id, "role": "editor"})
+
+    response = client.post(
+        "/api/v2/runtime/delegations",
+        json={"agent_id": AGENT_ID, "scopes": ["ontology:read"]},
+        headers={"Authorization": f"Bearer {session_token}"},
+    )
+    assert response.status_code == 403
+    # Denied the same indistinguishable way as a missing/wrong-domain agent —
+    # this must never become a second, distinguishable error code.
+    assert response.json()["reason_code"] == "AGENT_INACTIVE"
+
+
+def test_delegation_allows_user_with_genuinely_intersecting_grant(client, governed_state):
+    # Proves the fix above does not simply close the endpoint entirely:
+    # `USER_ID` (seeded by `governed_state`) holds an active grant whose
+    # capabilities intersect `AGENT_ID`'s `capability_names`.
+    session_token = create_access_token({"sub": USER_ID, "role": "editor"})
+
+    response = client.post(
+        "/api/v2/runtime/delegations",
+        json={"agent_id": AGENT_ID, "scopes": ["ontology:read"]},
+        headers={"Authorization": f"Bearer {session_token}"},
+    )
+    assert response.status_code == 200, response.text
+    assert "token" in response.json()
+
+
+def test_delegation_rejects_scope_outside_allowlist(client, governed_state):
+    session_token = create_access_token({"sub": USER_ID, "role": "editor"})
+
+    response = client.post(
+        "/api/v2/runtime/delegations",
+        json={"agent_id": AGENT_ID, "scopes": ["ontology:admin"]},
+        headers={"Authorization": f"Bearer {session_token}"},
+    )
+    assert response.status_code == 422
+
+
 def test_investigate_api_denial_does_not_return_protected_rows(client, missing_scope_headers):
     response = client.post("/api/v2/runtime/investigate", json=valid_investigation(), headers=missing_scope_headers)
     assert response.status_code == 403

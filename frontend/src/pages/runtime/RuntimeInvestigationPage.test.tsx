@@ -2,6 +2,7 @@ import '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import RuntimeInvestigationPage from './RuntimeInvestigationPage'
@@ -12,9 +13,13 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
 
+// These tests exercise the deep-link case: an operator arrives with both
+// required fields already supplied via query params, so the page's gated
+// auto-run (see the Minor auto-run fix in RuntimeInvestigationPage.tsx)
+// fires immediately, same as it always did before that fix.
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/?snapshot_id=snap-testing&ontology_id=ontology-testing']}>
       <RuntimeInvestigationPage />
     </MemoryRouter>,
   )
@@ -81,5 +86,41 @@ describe('RuntimeInvestigationPage', () => {
     expect(await screen.findByTestId('investigation-decision')).toHaveTextContent('DENY')
     expect(screen.getByTestId('investigation-denied')).toBeTruthy()
     expect(screen.queryByTestId('investigation-result-count')).toBeNull()
+  })
+
+  it('does not auto-run an investigation on mount when required fields are empty', async () => {
+    let requestCount = 0
+    server.use(
+      http.post('*/api/v2/runtime/investigate', () => {
+        requestCount += 1
+        return HttpResponse.json({
+          decision: 'DENY',
+          reason_code: 'POLICY_DENIED',
+          semantic_snapshot_id: '',
+          ontology_release_id: null,
+          evidence_citations: [],
+          rule_outcome: [],
+          result: null,
+          correlation_id: 'corr-4',
+        }, { status: 403 })
+      }),
+    )
+    render(
+      <MemoryRouter>
+        <RuntimeInvestigationPage />
+      </MemoryRouter>,
+    )
+    // Give any (incorrect) auto-run effect a chance to fire before asserting
+    // it did not.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(requestCount).toBe(0)
+    expect(screen.queryByTestId('investigation-result')).toBeNull()
+
+    // The operator can still explicitly submit once fields are filled.
+    await userEvent.type(screen.getByTestId('investigate-snapshot-id'), 'snap-manual-001')
+    await userEvent.type(screen.getByTestId('investigate-ontology-id'), 'ontology-manual-001')
+    await userEvent.click(screen.getByTestId('run-investigation'))
+    expect(await screen.findByTestId('investigation-decision')).toHaveTextContent('DENY')
+    expect(requestCount).toBe(1)
   })
 })

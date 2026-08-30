@@ -153,4 +153,46 @@ describe('RefreshOperationsPage', () => {
     expect(await screen.findByTestId('refresh-schedule-timezone-current')).toHaveTextContent('Asia/Shanghai')
     expect(screen.getByTestId('refresh-schedule-business-calendar')).toHaveTextContent('CN-HOLIDAYS')
   })
+
+  it('renders a CONFIGURATION_DRIFT failure with an unchanged cursor', async () => {
+    // Regression test for the Important finding: the implementer's report
+    // claimed CONFIGURATION_DRIFT is never persisted on a queryable
+    // refresh-run response, which is factually wrong — `refresh_tasks.py`
+    // persists `retry_reason` and this page already renders it via the
+    // `refresh-latest-reason` testid; this proves that path end to end.
+    const run = baseRun({
+      run_id: 'run-drift-001', status: 'failed', retry_reason: 'CONFIGURATION_DRIFT',
+      cursor_after: null,
+    })
+    server.use(
+      http.get('*/api/v2/refresh/sources/source-001/status', () =>
+        HttpResponse.json(baseStatus(run, { cursor: { primary_key: 'row-000100' } }))),
+    )
+    renderPage()
+    expect(await screen.findByTestId('refresh-latest-status')).toHaveTextContent('FAILED')
+    expect(screen.getByTestId('refresh-latest-reason')).toHaveTextContent('CONFIGURATION_DRIFT')
+    // The cursor must remain the last-known-good value — a configuration
+    // drift failure must never advance it.
+    expect(screen.getByTestId('refresh-cursor')).toHaveTextContent('row-000100')
+  })
+
+  it('renders the T+1 next scheduled run time', async () => {
+    const run = baseRun({})
+    server.use(
+      http.get('*/api/v2/refresh/sources/source-001/status', () =>
+        HttpResponse.json(baseStatus(run, { next_schedule_at: '2026-08-31T02:00:00Z' }))),
+    )
+    renderPage()
+    expect(await screen.findByTestId('refresh-next-schedule-at')).toHaveTextContent('2026-08-31T02:00:00Z')
+  })
+
+  it('shows an enabled cancel control for a queued (not-yet-started) run', async () => {
+    const run = baseRun({ run_id: 'run-queued-001', status: 'queued', retry_reason: null, dispatch_state: 'pending' })
+    server.use(
+      http.get('*/api/v2/refresh/sources/source-001/status', () => HttpResponse.json(baseStatus(run))),
+    )
+    renderPage()
+    expect(await screen.findByTestId('refresh-latest-status')).toHaveTextContent('QUEUED')
+    expect(screen.getByTestId('cancel-refresh-run')).toHaveProperty('disabled', false)
+  })
 })
