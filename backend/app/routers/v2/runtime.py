@@ -21,12 +21,24 @@ from sqlalchemy.orm import Session
 
 from app.deps import get_db
 from app.deps.runtime import _UNAUTHENTICATED_REASONS, runtime_bearer
-from app.schemas.runtime import InvestigationRequest, InvestigationResult
+from app.schemas.runtime import InvestigationRequest, InvestigationResult, ReasonCode
+from app.services.actions.approval import ApprovalReceipt
+from app.services.runtime.action_bindings import BindingError, PlanValidationError
 from app.services.runtime.credentials import (
     RuntimeAccessError,
     RuntimeContext,
     verify_delegated_credential,
 )
+from app.services.runtime.execution import (
+    ExecutionError,
+    ExecutionReceipt,
+    create_rollback_plan,
+    execute_plan,
+    get_execution_status as _get_execution_status,
+    record_plan_approval,
+)
+from app.services.runtime.reconciliation import ReconciliationCase, get_reconciliation_case
+from app.services.runtime.sandbox import SandboxError, SandboxResult, simulate_action
 from app.services.runtime.service import ActionPlan, ActionPlanRequest, RuntimeService
 
 router = APIRouter()
@@ -85,11 +97,16 @@ def _require_runtime_context(required_scope: str):
     return _dependency
 
 
-async def runtime_access_error_handler(request, exc: RuntimeAccessError) -> JSONResponse:
-    """The single place every `RuntimeAccessError` — credential-layer or
-    service-layer — becomes an HTTP response. `RuntimeAccessError` is only
-    ever raised by `app.services.runtime.*`, so registering this app-wide is
-    safe: no other route can trigger it."""
+async def runtime_access_error_handler(
+    request, exc: RuntimeAccessError | ExecutionError | BindingError | PlanValidationError | SandboxError,
+) -> JSONResponse:
+    """The single place every structured Runtime denial — credential-layer
+    (`RuntimeAccessError`) or service-layer (`ExecutionError`/`BindingError`/
+    `PlanValidationError`/`SandboxError`, Tasks 21/22/26) — becomes an HTTP
+    response. Every one of these exception classes carries only a stable
+    `reason_code`, so one handler (registered for each class in
+    `app.main`) maps all of them identically; no route ever needs its own
+    denial-mapping logic."""
     return JSONResponse(status_code=_status_for(exc.reason_code), content=_denial_body(exc.reason_code))
 
 
@@ -105,6 +122,36 @@ class ActionPlanRequestBody(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     target_selector: dict[str, Any] | None = None
     idempotency_key: str | None = None
+
+
+class ApproveRequestBody(BaseModel):
+    """POST /approve accepts only the plan's own exact hash — nothing else
+    is ever read from the body (mirrors `ActionPlanRequestBody`'s
+    `extra="forbid"` discipline)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_hash: str
+
+
+class ExecuteRequestBody(BaseModel):
+    """POST /execute accepts only `{"plan_hash": string}` — never a
+    caller-selected target, parameters, SQL, identifiers, connection
+    target, or transaction options. `execute_plan`'s own `selector`/
+    `parameters` arguments are left at their default `None`; nothing this
+    body carries is ever passed to them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_hash: str
+
+
+class RollbackRequestBody(BaseModel):
+    """POST /rollback-plans takes no caller-supplied fields — the execution
+    to roll back is identified entirely by the path parameter, never the
+    body."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 def _serialize_action_plan(plan: ActionPlan) -> dict[str, Any]:
@@ -132,6 +179,82 @@ def _serialize_action_plan(plan: ActionPlan) -> dict[str, Any]:
         "expiry": plan.expiry.isoformat(),
         "idempotency_key": plan.idempotency_key,
         "plan_hash": plan.plan_hash,
+    }
+
+
+def _serialize_sandbox_result(result: SandboxResult, *, semantic_snapshot_id: str) -> dict[str, Any]:
+    # `SandboxResult` (Task 22) carries no `semantic_snapshot_id` of its
+    # own — it is sourced here from the plan `simulate_action` already
+    # resolved, never hardcoded.
+    return {
+        "simulation_id": result.simulation_id,
+        "action_plan_id": result.action_plan_id,
+        "semantic_snapshot_id": semantic_snapshot_id,
+        "expected_rows": result.expected_rows,
+        "before_after_diff": dict(result.before_after_diff),
+        "impact_summary": dict(result.impact_summary),
+        "rule_outcome": [dict(outcome) for outcome in result.rule_outcome],
+        "policy_result": dict(result.policy_result),
+        "precondition_hashes": dict(result.precondition_hashes),
+        "expires_at": result.expires_at.isoformat(),
+    }
+
+
+def _serialize_approval_receipt(receipt: ApprovalReceipt) -> dict[str, Any]:
+    return {
+        "plan_id": receipt.plan_id,
+        "plan_hash": receipt.plan_hash,
+        "approver_agent_id": receipt.approver_agent_id,
+        "approver_user_id": receipt.approver_user_id,
+        "approved_at": receipt.approved_at.isoformat(),
+        "execution_class": receipt.execution_class,
+        "expiry": receipt.expiry.isoformat(),
+        "correlation_id": receipt.correlation_id,
+    }
+
+
+def _serialize_execution_receipt(receipt: ExecutionReceipt) -> dict[str, Any]:
+    return {
+        "execution_id": receipt.execution_id,
+        "plan_id": receipt.plan_id,
+        "plan_hash": receipt.plan_hash,
+        "status": receipt.status,
+        "execution_class": receipt.execution_class,
+        "dialect": receipt.dialect,
+        "writer_receipt": dict(receipt.writer_receipt) if receipt.writer_receipt is not None else None,
+        "audit_id": receipt.audit_id,
+        "idempotency_key": receipt.idempotency_key,
+        "reconciliation_case_id": receipt.reconciliation_case_id,
+    }
+
+
+# A `RuntimeReconciliationCase.status` ("open" / "resolved_succeeded" /
+# "resolved_failed", `app.services.runtime.reconciliation`) is a workflow
+# state, not the underlying execution outcome it exists to describe. Every
+# case is opened only for an `UNKNOWN` execution outcome (`execute_plan`
+# never opens one for a definite SUCCEEDED/FAILED result), so an "open" case
+# always means the outcome is still `UNKNOWN`; a human's resolution
+# (`resolve_reconciliation_case`) is what ultimately determines whether the
+# write actually `SUCCEEDED` or `FAILED`. The wire shape surfaces that
+# outcome vocabulary directly, rather than the internal workflow-state
+# vocabulary, so a caller never has to know the case/execution status split.
+_RECONCILIATION_STATUS = {
+    "open": "UNKNOWN",
+    "resolved_succeeded": "SUCCEEDED",
+    "resolved_failed": "FAILED",
+}
+
+
+def _serialize_reconciliation_case(case: ReconciliationCase) -> dict[str, Any]:
+    return {
+        "id": case.id,
+        "execution_id": case.execution_id,
+        "plan_id": case.plan_id,
+        "status": _RECONCILIATION_STATUS.get(case.status, case.status),
+        "unknown_reason": case.unknown_reason,
+        "observed_effect": dict(case.observed_effect),
+        "next_action": case.next_action,
+        "created_at": case.created_at.isoformat(),
     }
 
 
@@ -180,13 +303,98 @@ def get_execution_status(
     context: RuntimeContext = Depends(_require_runtime_context(READ_SCOPE)),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    # Phase 3 execution does not exist yet — a resolvable, principal-owned
-    # plan always reports the same stable "not started" status. Ownership is
-    # verified through the same `get_action_plan` visibility check used by
-    # GET /action-plans/{plan_id}, so this never becomes a second, divergent
-    # authorization path.
+    # Task 26 built real governed execution (`app.services.runtime.execution
+    # .get_execution_status`) after this endpoint's original "Phase 3
+    # execution does not exist yet" placeholder was written — wired to the
+    # real status here. Ownership is verified through the same
+    # `get_action_plan` visibility check used by GET /action-plans/{plan_id}
+    # (and internally by `get_execution_status` itself), so this stays one
+    # authorization path, never a second, divergent one. `None` means no
+    # execution has ever been attempted for this plan — the same stable
+    # "not started" shape this endpoint always returned.
     plan = _service.get_action_plan(plan_id, context, db)
-    return {"plan_id": plan.id, "status": "not_started", "correlation_id": context.correlation_id}
+    receipt = _get_execution_status(db, plan_id=plan.id, context=context)
+    if receipt is None:
+        return {"plan_id": plan.id, "status": "not_started", "correlation_id": context.correlation_id}
+    return {**_serialize_execution_receipt(receipt), "correlation_id": context.correlation_id}
+
+
+@router.get("/action-plans/{plan_id}/sandbox")
+def get_sandbox(
+    plan_id: str,
+    context: RuntimeContext = Depends(_require_runtime_context(READ_SCOPE)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    # `simulate_action` itself re-resolves the plan (and its own ownership
+    # check) internally; resolving it here first is what lets this route add
+    # `semantic_snapshot_id` to the wire response — `SandboxResult` (Task 22)
+    # carries no such field of its own.
+    plan = _service.get_action_plan(plan_id, context, db)
+    result = simulate_action(db, plan_id=plan_id, context=context)
+    return _serialize_sandbox_result(result, semantic_snapshot_id=plan.semantic_snapshot_id)
+
+
+@router.post("/action-plans/{plan_id}/approve")
+def approve_plan(
+    plan_id: str,
+    body: ApproveRequestBody,
+    context: RuntimeContext = Depends(_require_runtime_context(WRITE_SCOPE)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    # `record_plan_approval` (Task 26) — never the bare, stateless
+    # `approve_exact_plan` (Task 23) — is the only function that durably
+    # persists a `RuntimeExecutionApproval` row; `execute_plan` requires that
+    # durable row to exist before it will ever execute a `HUMAN_APPROVED`
+    # plan. Calling `approve_exact_plan` directly here would leave nothing
+    # for a later `execute_plan` call to find.
+    receipt = record_plan_approval(db, plan_id=plan_id, presented_plan_hash=body.plan_hash, approver_context=context)
+    return _serialize_approval_receipt(receipt)
+
+
+@router.post("/action-plans/{plan_id}/execute")
+def execute_plan_route(
+    plan_id: str,
+    body: ExecuteRequestBody,
+    context: RuntimeContext = Depends(_require_runtime_context(WRITE_SCOPE)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    # `selector`/`parameters` are deliberately never passed — the body
+    # carries only `plan_hash`, so there is nothing to forward even if a
+    # caller could smuggle an override field past `extra="forbid"`.
+    receipt = execute_plan(db, plan_id=plan_id, presented_plan_hash=body.plan_hash, context=context)
+    return _serialize_execution_receipt(receipt)
+
+
+@router.get("/reconciliations/{reconciliation_id}")
+def get_reconciliation(
+    reconciliation_id: str,
+    context: RuntimeContext = Depends(_require_runtime_context(READ_SCOPE)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    case = get_reconciliation_case(db, case_id=reconciliation_id)
+    if case is None:
+        # Existence-hiding, mirroring `RuntimeService.get_action_plan`: a
+        # nonexistent case and one this caller does not own (checked next)
+        # are indistinguishable.
+        raise RuntimeAccessError(ReasonCode.POLICY_DENIED.value)
+    # `ReconciliationCase` carries no `agent_id`/`user_id` of its own — only
+    # `plan_id`. Cross-check ownership through the same existence-hiding
+    # `get_action_plan` check every other Runtime endpoint relies on, so a
+    # caller holding a valid credential for a DIFFERENT plan can never read
+    # this case by guessing/enumerating reconciliation ids.
+    _service.get_action_plan(case.plan_id, context, db)
+    return _serialize_reconciliation_case(case)
+
+
+@router.post("/executions/{execution_id}/rollback-plans", status_code=201)
+def create_rollback_plan_route(
+    execution_id: str,
+    body: RollbackRequestBody,
+    context: RuntimeContext = Depends(_require_runtime_context(WRITE_SCOPE)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    plan = create_rollback_plan(db, execution_id=execution_id, context=context)
+    return _serialize_action_plan(plan)
 
 
 __all__ = ["router", "runtime_access_error_handler", "RuntimeAccessError"]

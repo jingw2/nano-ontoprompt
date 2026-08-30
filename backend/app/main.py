@@ -66,6 +66,9 @@ from app.routers.v2 import refresh as refresh_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
 from app.routers.v2 import runtime as runtime_v2
 from app.services.runtime.credentials import RuntimeAccessError
+from app.services.runtime.execution import ExecutionError
+from app.services.runtime.action_bindings import BindingError, PlanValidationError
+from app.services.runtime.sandbox import SandboxError
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -219,6 +222,14 @@ app.include_router(tool_connections.router, prefix="/api/v2", tags=["tool-connec
 app.include_router(skills.router, prefix="/api/v2", tags=["skills"])
 app.include_router(runtime_v2.router, prefix="/api/v2/runtime", tags=["v2-runtime"])
 app.add_exception_handler(RuntimeAccessError, runtime_v2.runtime_access_error_handler)
+# Task 26A: every one of these (Tasks 21/22/26) carries the same stable
+# `.reason_code` convention as `RuntimeAccessError` but is not a subclass of
+# it — `add_exception_handler` can register the SAME handler function for
+# each, so every structured Runtime denial maps to the wire exactly once.
+app.add_exception_handler(ExecutionError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(BindingError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(PlanValidationError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(SandboxError, runtime_v2.runtime_access_error_handler)
 
 def get_db():
     db = SessionLocal()
