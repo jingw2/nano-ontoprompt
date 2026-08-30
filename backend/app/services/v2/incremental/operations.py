@@ -515,7 +515,10 @@ def schedule_view(schedule: RefreshSchedule) -> RefreshScheduleView:
 
 def get_refresh_schedule(db: Session, *, source_id: str) -> RefreshSchedule:
     schedule = db.execute(
-        select(RefreshSchedule).where(RefreshSchedule.target_id == source_id)
+        select(RefreshSchedule).where(
+            RefreshSchedule.target_type == "source",
+            RefreshSchedule.target_id == source_id,
+        )
     ).scalars().first()
     if schedule is None:
         raise RefreshError("SCHEDULE_NOT_FOUND", f"no schedule for source {source_id}")

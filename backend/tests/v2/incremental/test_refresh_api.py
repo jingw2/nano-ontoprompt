@@ -488,6 +488,29 @@ def test_refresh_schedule_api_reads_persisted_timezone_and_calendar_after_reload
     assert response.json()["business_calendar"] == ["2026-10-01"]
 
 
+def test_refresh_schedule_read_uses_source_schedule_when_pipeline_has_same_id(
+    client, db, refresh_source, operator_headers,
+):
+    from app.models.v2.refresh import RefreshSchedule
+
+    db.add(RefreshSchedule(
+        id="pipeline-schedule-same-id", target_type="pipeline", target_id="source-001",
+        cron_expression="0 3 * * *", timezone="UTC", excluded_dates=["PIPELINE"],
+        enabled=True, max_pending_runs=1,
+    ))
+    db.commit()
+    client.put(
+        "/api/v2/refresh/sources/source-001/schedule",
+        json={"cron_expr": "0 2 * * *", "timezone": "Asia/Shanghai", "business_calendar": ["SOURCE"]},
+        headers=operator_headers,
+    )
+
+    response = client.get("/api/v2/refresh/sources/source-001/schedule", headers=operator_headers)
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "Asia/Shanghai"
+    assert response.json()["business_calendar"] == ["SOURCE"]
+
+
 def test_refresh_api_rejects_caller_cursor_url_and_broker(
     client, db, refresh_source, operator_headers,
 ):

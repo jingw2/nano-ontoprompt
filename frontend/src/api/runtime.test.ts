@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { afterAll, beforeAll } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { apiClientV2, runtimeApiClient } from './client'
+import { runtimeApiClient, runtimeDelegationClient } from './client'
 import { runtimeApi, runtimeDelegationApi } from './runtime'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -62,8 +62,8 @@ describe('runtimeApi', () => {
   })
 
   it('uses the ordinary session client only to obtain a short-lived runtime delegation', async () => {
-    const get = vi.spyOn(apiClientV2, 'get').mockResolvedValue([])
-    const post = vi.spyOn(apiClientV2, 'post').mockResolvedValue({ token: 'delegated', expires_in: 900 })
+    const get = vi.spyOn(runtimeDelegationClient, 'get').mockResolvedValue([])
+    const post = vi.spyOn(runtimeDelegationClient, 'post').mockResolvedValue({ token: 'delegated', expires_in: 900 })
     await runtimeDelegationApi.listAgents()
     await runtimeDelegationApi.issue('agent-001', ['ontology:read'])
     expect(get).toHaveBeenCalledWith('/runtime/delegation-agents')
@@ -79,6 +79,18 @@ describe('runtimeApi', () => {
       HttpResponse.json({ decision: 'DENY', reason_code: 'EXPIRED_DELEGATION', result: null }, { status: 401 })))
 
     await expect(runtimeApi.investigate({ semantic_snapshot_id: 'snap-1', ontology_id: 'onto-1' })).rejects.toMatchObject({ decision: 'DENY' })
+    expect(useAuthStore.getState().token).toBe('session-token')
+  })
+
+  it('keeps the ordinary browser session when delegation issuance is denied', async () => {
+    useAuthStore.setState({ user: {
+      id: 'user-1', username: 'operator', email: 'operator@example.test', role: 'editor',
+      is_active: true, created_at: '2026-08-30T00:00:00Z',
+    }, token: 'session-token' })
+    server.use(http.post('*/api/v2/runtime/delegations', () =>
+      HttpResponse.json({ decision: 'DENY', reason_code: 'SCOPE_DENIED', result: null }, { status: 403 })))
+
+    await expect(runtimeDelegationApi.issue('agent-001', ['ontology:write'])).rejects.toMatchObject({ decision: 'DENY' })
     expect(useAuthStore.getState().token).toBe('session-token')
   })
 })

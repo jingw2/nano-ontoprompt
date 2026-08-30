@@ -42,7 +42,7 @@ export function refreshAccessToken(): Promise<string | null> {
   return refreshing
 }
 
-function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolean }): ApiClient {
+function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolean, preserveSessionOnAuthorizationFailure?: boolean }): ApiClient {
   const client = axios.create({ baseURL })
   client.interceptors.request.use(config => {
     const token = options?.runtimeDelegation
@@ -56,7 +56,7 @@ function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolea
     async err => {
       const config = err.config as RetriableConfig | undefined
       const status = err.response?.status
-      if (!options?.runtimeDelegation && status === 401 && config && !config._retried) {
+      if (!options?.runtimeDelegation && !options?.preserveSessionOnAuthorizationFailure && status === 401 && config && !config._retried) {
         config._retried = true
         const token = await refreshAccessToken()
         if (token) {
@@ -64,7 +64,7 @@ function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolea
           return client(config)
         }
       }
-      if (!options?.runtimeDelegation && (status === 401 || status === 403)) {
+      if (!options?.runtimeDelegation && !options?.preserveSessionOnAuthorizationFailure && (status === 401 || status === 403)) {
         useAuthStore.getState().logout()
       }
       return Promise.reject(err.response?.data ?? err)
@@ -86,3 +86,6 @@ export const apiClientV2 = createApiClient('/api/v2')
 // Runtime credential denials are authorization results for a separate,
 // short-lived delegated bearer. They must never clear the ordinary session.
 export const runtimeApiClient = createApiClient('/api/v2', { runtimeDelegation: true })
+// Delegation issuance authenticates with the ordinary session but a policy
+// denial is not evidence that that session is invalid.
+export const runtimeDelegationClient = createApiClient('/api/v2', { preserveSessionOnAuthorizationFailure: true })

@@ -138,3 +138,25 @@ authorized Runtime request without a database bypass.
 (cd frontend && npm run build)
 tsc -b && vite build exited 0.
 ```
+
+## Fix round 3 — exchange error isolation and exact schedule ownership
+
+- Delegation discovery/issuance now use a dedicated session-bearer transport
+  that preserves the ordinary session on Runtime policy denials. A real MSW
+  403 exchange response is covered by a frontend regression test which proves
+  the normal auth-store token stays present.
+- The persisted schedule reader now requires both `target_type == "source"`
+  and the requested source ID. The backend regression inserts a pipeline
+  schedule first with the same target ID, then proves the source schedule's
+  timezone/calendar are returned.
+
+```text
+(cd frontend && npm run test:unit -- src/api/runtime.test.ts)
+6 passed.
+
+(cd backend && .venv/bin/python -m pytest tests/v2/incremental/test_refresh_api.py -q -k 'same_id or reads_persisted')
+2 passed.
+
+(cd frontend && npm run build)
+tsc -b && vite build exited 0.
+```

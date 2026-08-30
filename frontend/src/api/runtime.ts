@@ -1,4 +1,4 @@
-import { apiClientV2, runtimeApiClient } from './client'
+import { runtimeApiClient, runtimeDelegationClient } from './client'
 import type {
   ActionPlan,
   ApprovalReceipt,
@@ -22,9 +22,9 @@ export interface RuntimeDelegation {
 }
 
 export const runtimeDelegationApi = {
-  listAgents: () => apiClientV2.get<RuntimeDelegationAgent[]>('/runtime/delegation-agents'),
+  listAgents: () => runtimeDelegationClient.get<RuntimeDelegationAgent[]>('/runtime/delegation-agents'),
   issue: (agentId: string, scopes: string[]) =>
-    apiClientV2.post<RuntimeDelegation>('/runtime/delegations', { agent_id: agentId, scopes }),
+    runtimeDelegationClient.post<RuntimeDelegation>('/runtime/delegations', { agent_id: agentId, scopes }),
 }
 
 /**
