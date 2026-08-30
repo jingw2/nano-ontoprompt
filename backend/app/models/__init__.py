@@ -86,6 +86,11 @@ from app.models.runtime_identity import RuntimeDelegatedCredential
 from app.models.runtime_plan import RuntimePlan
 from app.models.managed_action import ManagedActionBinding
 from app.models.sandbox import SandboxSimulation
+from app.models.runtime_execution import (
+    RuntimeExecution,
+    RuntimeReconciliationCase,
+    RuntimeExecutionApproval,
+)
 
 
 def load_all_models():
@@ -176,6 +181,11 @@ def load_all_models():
     from app.models.runtime_plan import RuntimePlan  # noqa: F401
     from app.models.managed_action import ManagedActionBinding  # noqa: F401
     from app.models.sandbox import SandboxSimulation  # noqa: F401
+    from app.models.runtime_execution import (  # noqa: F401
+        RuntimeExecution,
+        RuntimeReconciliationCase,
+        RuntimeExecutionApproval,
+    )
 
     return Base.metadata
 
@@ -264,5 +274,8 @@ __all__ = [
     "RuntimePlan",
     "ManagedActionBinding",
     "SandboxSimulation",
+    "RuntimeExecution",
+    "RuntimeReconciliationCase",
+    "RuntimeExecutionApproval",
     "load_all_models",
 ]
