@@ -314,8 +314,13 @@ def execute_fixture(db, dialect: str, case_id: str, *, transaction_spy=None, sel
         }
     elif case_id == "row-count-mismatch":
         sandbox_overrides["expected_rows"] = 0
-    elif case_id in ("auto-approved", "unknown-outcome"):
-        before_image = {"status": "pending"}
+    # NOTE: "auto-approved"/"unknown-outcome" deliberately leave
+    # `before_image` at its default `None` — every plan `_seed_baseline`
+    # produces here is BOUND, and `service.py`'s `_resolve_writable_target`
+    # hard-codes `target_row: None` on the bound branch, so a real bound
+    # plan's `predicted_diff["before"]` is always `None`. A non-`None` value
+    # here would be a combination the real system can never produce (see
+    # `test_rollback_rejects_every_bound_plan_the_real_system_can_execute`).
 
     plan = _seed_plan_and_sandbox(
         db, binding, before_image=before_image, plan_overrides=plan_overrides, sandbox_overrides=sandbox_overrides,
@@ -564,6 +569,107 @@ def test_unknown_outcome_creates_reconciliation_and_no_blind_replay(runtime_db):
     assert case.execution_id == receipt.execution_id
 
 
+def test_write_succeeds_but_audit_fails_becomes_unknown_with_reconciliation(runtime_db, runtime_context):
+    """Fix-round Finding 1: a successful `writer.execute()` followed by an
+    `append_audit` failure (e.g. a chain-head lock timeout, a deadlock, a
+    dropped connection — `append_audit` does a `SELECT ... FOR UPDATE`
+    internally) must never leave the execution stuck `PENDING` with zero
+    record. Pre-fix, this exception escaped `execute_plan` completely
+    uncaught. Post-fix, it must become `UNKNOWN` with a real reconciliation
+    case whose `observed_effect` proves the write itself is known to have
+    succeeded (distinct from a genuinely ambiguous writer failure)."""
+    binding = _seed_baseline(runtime_db, dialect="postgresql")
+    plan = _seed_plan_and_sandbox(runtime_db, binding, before_image=None)
+    context = runtime_context
+    fake_writer = _FakeWriter("success")
+
+    def _raising_append_audit(connection, **kwargs):
+        raise RuntimeError("simulated chain-head lock timeout during append_audit")
+
+    with mock.patch.object(execution_module, "_resolve_connection_url", return_value="stub://unused"), \
+            mock.patch.object(execution_module, "_fetch_expected_version", return_value=1), \
+            mock.patch.object(execution_module, "_writer_for_dialect", return_value=fake_writer), \
+            mock.patch.object(execution_module, "append_audit", side_effect=_raising_append_audit), \
+            mock.patch.object(execution_module, "persist_idempotency", side_effect=_fake_persist_idempotency):
+        receipt = execute_plan(runtime_db, plan_id=plan.id, presented_plan_hash=plan.plan_hash, context=context)
+
+    assert receipt.status == "UNKNOWN"
+    assert receipt.reconciliation_case_id
+    assert fake_writer.calls == 1
+
+    stored = runtime_db.get(RuntimeExecution, receipt.execution_id)
+    assert stored is not None
+    assert stored.status == "UNKNOWN"  # never stuck PENDING
+
+    case = get_reconciliation_case(runtime_db, case_id=receipt.reconciliation_case_id)
+    assert case is not None
+    assert case.status == "open"
+    # The recorded facts must reflect that the write DID succeed.
+    assert "write_receipt" in case.observed_effect
+    assert case.observed_effect["write_receipt"]["affected_rows"] == 1
+    assert case.observed_effect["write_receipt"]["status"] == "committed"
+    assert case.next_action == "human_review_confirm_write_already_succeeded"
+
+
+def test_pre_write_version_read_failure_becomes_unknown_with_reconciliation(runtime_db, runtime_context):
+    """Fix-round Finding 1: a connection failure inside
+    `_fetch_expected_version` (e.g. `RUNTIME_POSTGRES_URL` pointing at an
+    unreachable port — a raw driver exception, never an `ExecutionError`)
+    must not escape `execute_plan` uncaught and must not leave the execution
+    stuck `PENDING` forever, even though no write was ever attempted here."""
+    binding = _seed_baseline(runtime_db, dialect="postgresql")
+    plan = _seed_plan_and_sandbox(runtime_db, binding, before_image=None)
+    context = runtime_context
+
+    def _raising_fetch_expected_version(*args, **kwargs):
+        raise ConnectionError("simulated connection refused")
+
+    with mock.patch.object(execution_module, "_resolve_connection_url", return_value="stub://unused"), \
+            mock.patch.object(execution_module, "_fetch_expected_version", side_effect=_raising_fetch_expected_version), \
+            mock.patch.object(execution_module, "persist_idempotency", side_effect=_fake_persist_idempotency):
+        receipt = execute_plan(runtime_db, plan_id=plan.id, presented_plan_hash=plan.plan_hash, context=context)
+
+    assert receipt.status == "UNKNOWN"
+    assert receipt.reconciliation_case_id
+
+    stored = runtime_db.get(RuntimeExecution, receipt.execution_id)
+    assert stored is not None
+    assert stored.status == "UNKNOWN"  # never stuck PENDING
+
+    case = get_reconciliation_case(runtime_db, case_id=receipt.reconciliation_case_id)
+    assert case is not None
+    assert case.status == "open"
+    # No write was ever attempted here — distinct from the write-succeeded
+    # case above, no `write_receipt` should be present.
+    assert "write_receipt" not in case.observed_effect
+    assert case.next_action == "human_review"
+
+
+def test_unknown_reason_is_truncated_to_the_column_width(runtime_db, runtime_context):
+    """`RuntimeReconciliationCase.unknown_reason` is a `String(500)` column
+    (`app.models.runtime_execution`). A raw driver exception's message can
+    exceed that width on PostgreSQL — if `unknown_reason=str(exc)` were
+    passed unbounded, `StringDataRightTruncation` would itself escape from
+    inside the broad exception handler this fix relies on, defeating it."""
+    binding = _seed_baseline(runtime_db, dialect="postgresql")
+    plan = _seed_plan_and_sandbox(runtime_db, binding, before_image=None)
+    context = runtime_context
+    long_message = "x" * 2000
+
+    def _raising_fetch_expected_version(*args, **kwargs):
+        raise ConnectionError(long_message)
+
+    with mock.patch.object(execution_module, "_resolve_connection_url", return_value="stub://unused"), \
+            mock.patch.object(execution_module, "_fetch_expected_version", side_effect=_raising_fetch_expected_version), \
+            mock.patch.object(execution_module, "persist_idempotency", side_effect=_fake_persist_idempotency):
+        receipt = execute_plan(runtime_db, plan_id=plan.id, presented_plan_hash=plan.plan_hash, context=context)
+
+    assert receipt.status == "UNKNOWN"
+    case = get_reconciliation_case(runtime_db, case_id=receipt.reconciliation_case_id)
+    assert case is not None
+    assert len(case.unknown_reason) <= 500
+
+
 # --- HUMAN_APPROVED path ------------------------------------------------
 
 
@@ -624,13 +730,24 @@ def test_get_execution_status_matches_the_execution_receipt(runtime_db):
 # --- Rollback -------------------------------------------------------------
 
 
-def test_rollback_is_a_new_governed_plan(runtime_db, runtime_context):
+def test_rollback_rejects_every_bound_plan_the_real_system_can_execute(runtime_db, runtime_context):
+    """`create_rollback_plan`'s success path requires `predicted_diff
+    ["before"]` to be non-`None`, but `execute_plan` refuses to execute any
+    plan whose `managed_action_binding_id` is `None` — and `service.py`'s
+    `_resolve_writable_target` hard-codes `target_row: None` on every BOUND
+    plan, so `predicted_diff["before"]` is `None` for every bound plan by
+    construction. These two conditions are mutually exclusive: no plan this
+    codebase's own governed write path can ever actually execute can ever be
+    rolled back today (see `create_rollback_plan`'s own docstring). Proven
+    here against a plan that really did execute successfully through the
+    shared writer/audit path (`execute_fixture`'s "auto-approved" case) —
+    not a hand-fabricated failure fixture."""
     receipt = execute_fixture(runtime_db, "postgresql", "auto-approved")
-    rollback = create_rollback_plan(runtime_db, execution_id=receipt.execution_id, context=runtime_context)
-    assert rollback.id != receipt.plan_id
-    assert rollback.semantic_snapshot_id == "snap-valid-001"
-    assert rollback.plan_hash
-    assert rollback.parameters["status"] == "pending"
+    assert receipt.status == "SUCCEEDED"
+
+    with pytest.raises(ExecutionError) as exc:
+        create_rollback_plan(runtime_db, execution_id=receipt.execution_id, context=runtime_context)
+    assert exc.value.reason_code == "PRECONDITION_CONFLICT"
 
 
 def test_rollback_fails_without_a_retained_before_image(runtime_db, runtime_context):

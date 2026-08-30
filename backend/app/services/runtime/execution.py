@@ -483,80 +483,109 @@ def execute_plan(
         raise ExecutionError(ReasonCode.PRECONDITION_CONFLICT.value, "plan execution is already in progress")
     db.refresh(execution)
 
-    # 9. Build the FrozenActionPlan — the first and only place in this
-    #    codebase that composes one from a real ActionPlan + ManagedActionBinding.
+    # 9-11. Build the FrozenActionPlan, call the shared writer, and record the
+    # terminal outcome — all under ONE try. The execution fence row already
+    # exists (PENDING) at this point, so an uncaught exception anywhere in
+    # this block — the version-read (a real network call), the writer call,
+    # or the post-success append_audit/_mark_execution_terminal calls — must
+    # never be allowed to strand that row forever with no reconciliation
+    # case to alert a human.
+    write_receipt = None
     try:
+        # 9. Build the FrozenActionPlan — the first and only place in this
+        #    codebase that composes one from a real ActionPlan + ManagedActionBinding.
         connection_url = _resolve_connection_url(binding.dialect)
         expected_version = _fetch_expected_version(
             binding.dialect, connection_url, schema_name=binding.schema_name, table_name=binding.table_name,
             version_column=binding.version_column, primary_key_tuple=tuple(plan.target_key),
         )
+
+        frozen = FrozenActionPlan(
+            managed_action_binding_id=binding.managed_action_binding_id, binding_version=binding.version,
+            connection_target_identity=binding.connection_target_identity, dialect=binding.dialect,
+            schema_name=binding.schema_name, table_name=binding.table_name,
+            primary_key_columns=tuple(binding.primary_key_columns), writable_columns=tuple(binding.writable_columns),
+            version_column=binding.version_column, primary_key_tuple=tuple(plan.target_key),
+            parameters=dict(plan.parameters), expected_version=expected_version,
+            before_image_hash=plan.before_image_hash, version_hash=plan.version_hash,
+            idempotency_key=plan.idempotency_key,
+        )
+
+        # 10. Call the shared writer — the one and only place this whole module
+        #     family ever opens a real database connection to write.
+        writer = _writer_for_dialect(binding.dialect, connection_url)
+        write_receipt = writer.execute(frozen, credential_ref=binding.secret_ref)
+
+        # 11. Success — record the receipt and append the audit event.
+        audit_result = append_audit(
+            db.connection(),
+            security_domain_id=context.principal.security_domain_id,
+            operation="runtime.execute_plan",
+            decision=execution_class,
+            outcome="SUCCEEDED",
+            correlation_id=context.correlation_id,
+            actor_user_id=context.principal.user_id,
+            lineage={
+                "plan_id": plan.id,
+                "execution_id": execution.id,
+                "managed_action_binding_id": binding.managed_action_binding_id,
+                "dialect": binding.dialect,
+                "affected_rows": write_receipt.affected_rows,
+                "primary_key_tuple": [list(pair) for pair in write_receipt.primary_key_tuple],
+            },
+        )
+        _mark_execution_terminal(
+            db, execution, status="SUCCEEDED", writer_receipt=dataclasses.asdict(write_receipt), audit_id=audit_result["id"],
+        )
+        return _execution_to_receipt(execution)
     except ExecutionError as exc:
         # A definite, certain outcome discovered post-fence but pre-write
         # (missing configuration, or the live row is not uniquely
         # resolvable) — never ambiguous, never routed to reconciliation.
         _mark_execution_terminal(db, execution, status="FAILED", writer_receipt={"reason_code": exc.reason_code})
         return _execution_to_receipt(execution)
-
-    frozen = FrozenActionPlan(
-        managed_action_binding_id=binding.managed_action_binding_id, binding_version=binding.version,
-        connection_target_identity=binding.connection_target_identity, dialect=binding.dialect,
-        schema_name=binding.schema_name, table_name=binding.table_name,
-        primary_key_columns=tuple(binding.primary_key_columns), writable_columns=tuple(binding.writable_columns),
-        version_column=binding.version_column, primary_key_tuple=tuple(plan.target_key),
-        parameters=dict(plan.parameters), expected_version=expected_version,
-        before_image_hash=plan.before_image_hash, version_hash=plan.version_hash,
-        idempotency_key=plan.idempotency_key,
-    )
-
-    # 10. Call the shared writer — the one and only place this whole module
-    #     family ever opens a real database connection to write.
-    writer = _writer_for_dialect(binding.dialect, connection_url)
-    try:
-        write_receipt = writer.execute(frozen, credential_ref=binding.secret_ref)
     except WriterError as exc:
-        # 13. Definite failure: the writer itself positively determined the
-        #     write did not (and will not) apply — certain, never ambiguous,
-        #     never routed to reconciliation.
+        # Definite failure: the writer itself positively determined the
+        # write did not (and will not) apply — certain, never ambiguous,
+        # never routed to reconciliation.
         _mark_execution_terminal(db, execution, status="FAILED", writer_receipt={"reason_code": exc.reason_code})
         return _execution_to_receipt(execution)
     except Exception as exc:
-        # 12. Anything escaping the writer's own documented WriterError/
-        #     WriteReceipt contract (a timeout, a dropped connection, ...) is,
-        #     by definition, an outcome the writer's own safety net could not
-        #     classify — genuinely ambiguous. Never retried automatically.
-        case = create_reconciliation_case(
-            db, execution_id=execution.id, plan_id=plan.id, unknown_reason=str(exc),
-            observed_effect={
+        # Anything else escaping steps 9-11 is, by definition, an outcome
+        # neither the writer's own WriterError/WriteReceipt contract nor this
+        # function's own preflight checks could classify. Two genuinely
+        # different situations share this branch:
+        #   - `write_receipt` is still `None`: the writer call itself raised
+        #     (a timeout, a dropped connection, ...), or the pre-write
+        #     version-read did (e.g. the DB was unreachable) — whether a
+        #     write happened at all is genuinely unknown.
+        #   - `write_receipt` is already set: the write itself definitely
+        #     succeeded, but the post-write bookkeeping (`append_audit` or
+        #     `_mark_execution_terminal`'s own commit) then failed — not
+        #     ambiguous about whether the write happened, only about whether
+        #     it was durably recorded. The case records this distinction
+        #     explicitly (including the real `WriteReceipt` fields) so a
+        #     human resolving the queue is never misled into thinking a
+        #     definitely-successful write might not have happened.
+        if write_receipt is not None:
+            unknown_reason = f"write succeeded but post-write bookkeeping failed: {exc}"[:500]
+            observed_effect = {
                 "dialect": binding.dialect, "managed_action_binding_id": binding.managed_action_binding_id,
-            },
-            next_action="human_review",
+                "write_receipt": dataclasses.asdict(write_receipt),
+            }
+            next_action = "human_review_confirm_write_already_succeeded"
+        else:
+            unknown_reason = str(exc)[:500]
+            observed_effect = {
+                "dialect": binding.dialect, "managed_action_binding_id": binding.managed_action_binding_id,
+            }
+            next_action = "human_review"
+        case = create_reconciliation_case(
+            db, execution_id=execution.id, plan_id=plan.id, unknown_reason=unknown_reason,
+            observed_effect=observed_effect, next_action=next_action,
         )
         _mark_execution_terminal(db, execution, status="UNKNOWN", reconciliation_case_id=case.id)
         return _execution_to_receipt(execution)
-
-    # 11. Success — record the receipt and append the audit event.
-    audit_result = append_audit(
-        db.connection(),
-        security_domain_id=context.principal.security_domain_id,
-        operation="runtime.execute_plan",
-        decision=execution_class,
-        outcome="SUCCEEDED",
-        correlation_id=context.correlation_id,
-        actor_user_id=context.principal.user_id,
-        lineage={
-            "plan_id": plan.id,
-            "execution_id": execution.id,
-            "managed_action_binding_id": binding.managed_action_binding_id,
-            "dialect": binding.dialect,
-            "affected_rows": write_receipt.affected_rows,
-            "primary_key_tuple": [list(pair) for pair in write_receipt.primary_key_tuple],
-        },
-    )
-    _mark_execution_terminal(
-        db, execution, status="SUCCEEDED", writer_receipt=dataclasses.asdict(write_receipt), audit_id=audit_result["id"],
-    )
-    return _execution_to_receipt(execution)
 
 
 def get_execution_status(db: Session, *, plan_id: str, context: RuntimeContext) -> ExecutionReceipt | None:
@@ -578,6 +607,18 @@ def create_rollback_plan(db: Session, *, execution_id: str, context: RuntimeCont
     .create_action_plan` path any other plan goes through; simulating,
     approving, and executing that new plan are separate, later calls, exactly
     as they are for any freshly created plan.
+
+    IMPORTANT: today, this function's success path has no functional
+    application to any plan that was actually executed through this
+    codebase's own governed write path. `execute_plan` refuses to execute
+    any plan whose `managed_action_binding_id` is `None`; but every BOUND
+    plan (the only kind `execute_plan` will ever execute) has
+    `predicted_diff["before"] is None` by construction, since `service.py`'s
+    `_resolve_writable_target` hard-codes `target_row: None` on the bound
+    branch. The success path below only ever fires for an UNBOUND plan's
+    retained before-image — a plan `execute_plan` structurally cannot
+    execute in the first place. Making a real before-image available for
+    bound plans is a larger, separate fix, deliberately out of scope here.
     """
     execution = db.get(RuntimeExecution, execution_id)
     if execution is None:
