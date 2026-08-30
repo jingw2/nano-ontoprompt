@@ -8,11 +8,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -34,12 +36,14 @@
       "execution_mode": "deterministic",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh",
         "cancellation"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -52,6 +56,36 @@
       "user_id": "user-beta-operator-17"
     },
     {
+      "already_terminal": true,
+      "cancel_outcome": "already_terminal",
+      "case_id": "cancel-already-terminal",
+      "coverage": [
+        "refresh.cursor_contract"
+      ],
+      "cursor_outcome": "unchanged",
+      "execution_mode": "deterministic",
+      "expected": {
+        "cancel_outcome": "already_terminal",
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
+      },
+      "layers": [
+        "refresh",
+        "cancellation"
+      ],
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/v2/incremental/test_refresh_cancellation.py::test_cancellation_after_success_is_plain_already_terminal"
+        }
+      ],
+      "user_id": "user-acme-operator-18"
+    },
+    {
       "cancel_outcome": "cancelled",
       "case_id": "cancel-before-pull",
       "coverage": [
@@ -61,12 +95,14 @@
       "execution_mode": "deterministic",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh",
         "cancellation"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -88,12 +124,14 @@
       "execution_mode": "deterministic",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh",
         "cancellation"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -115,11 +153,13 @@
       "execution_mode": "deterministic",
       "expected": {
         "cursor_outcome": "unchanged",
-        "error_code": "CONFIGURATION_DRIFT"
+        "error_code": "CONFIGURATION_DRIFT",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -139,11 +179,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "micro_batch",
       "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
@@ -215,11 +257,13 @@
       "cursor_outcome": "dead_lettered",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "dead_lettered"
+        "cursor_outcome": "dead_lettered",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -239,11 +283,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -263,11 +309,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -287,11 +335,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -618,11 +668,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "event_driven",
       "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
@@ -642,11 +694,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -1010,11 +1064,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -1034,11 +1090,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -1058,11 +1116,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "micro_batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
@@ -1166,11 +1226,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "event_driven",
       "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-acme",
@@ -1410,11 +1472,13 @@
       "cursor_outcome": "unchanged",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "unchanged",
       "refresh_mode": "event_driven",
       "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
@@ -1588,11 +1652,13 @@
       "cursor_outcome": "advanced",
       "execution_mode": "deterministic",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
       "layers": [
         "refresh"
       ],
+      "lineage_outcome": "advanced",
       "refresh_mode": "batch",
       "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
@@ -1605,8 +1671,12 @@
       "user_id": "user-acme-operator-14"
     }
   ],
+  "dialects": [
+    "mysql",
+    "postgresql"
+  ],
   "files": {
-    "README.md": "30bd91f6ca6eb9b1a6733236f5275ba6953f20202d84d5523c0325c0ac450e64",
+    "README.md": "2b6ab10f6fb93bb395f215d0983f30bd6f39ed47421ce0e8149610774b3b0b6b",
     "db/docker-compose.yml": "757920b296a36b49f350eb53cc14493ddb3de3f1f7a8c408d2b88847d04d4563",
     "db/mysql/schema.sql": "c5243e85cfb01929995ac3e6eeee678c11e1f92cd3edb5c3bec9b43f5359e0ba",
     "db/mysql/seed.sql": "b4d63bf3e6c25d17bb59dc3e0c68e924d79753906c227fa6e81693065d499787",
@@ -1614,7 +1684,7 @@
     "db/postgres/seed.sql": "22bcd3d4f06710f22d8b92591e798c9d568b342f6abba6fdfae874c197ad615f",
     "fixtures/execution_cases.json": "a6f5b7543406acdb2a389f7f4dd554c6c8f86ab81a45764d661ff28641bc3a75",
     "fixtures/identities.json": "9b3f48886b181675b82fc32514cdb777392c684b5f651f582a4165b9056a3fa9",
-    "fixtures/refresh_cases.json": "cfd56f6d93ca9b5a64a2aa8a32c9c861197cfee3c0e68113ed62458d24066698",
+    "fixtures/refresh_cases.json": "56e9a9206a266bfcbd45d24f0086a13497f193f5379d95f8084d3097aabba139",
     "fixtures/runtime_cases.json": "c0ffff3c701952d856ddc318ecf4e24bf09f2862736bb7f973e5e02c004cece7",
     "fixtures/snapshots.json": "64c578ac6d7ef4bed46e4e5e3ff73768abcb106a562d9d7cbadf1c37cf52c5ab",
     "fixtures/transport_cases.json": "b4fd6cd931f57259f32a9d7e1d5244157248cbb3fcfa416b2390b95c1823f5e9",

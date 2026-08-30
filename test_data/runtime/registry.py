@@ -159,6 +159,9 @@ _REFRESH_TARGETS = {
     "cancel-after-tentative-materialization": _pytest(
         f"{_POLLING_TEST_FILE}::test_poll_cancellation_stops_at_safe_point_without_durable_progress[cancel-after-tentative-materialization]"
     ),
+    "cancel-already-terminal": _pytest(
+        f"backend/tests/v2/incremental/test_refresh_cancellation.py::test_cancellation_after_success_is_plain_already_terminal"
+    ),
 }
 
 # --- Database (dual-dialect) cases -------------------------------------------
@@ -268,8 +271,13 @@ def assert_case_registry(case: Mapping[str, object]) -> None:
         assert case["refresh_mode"] in REFRESH_MODES
         assert case["source_contract"] in SOURCE_CONTRACTS
         assert case["cursor_outcome"] in CURSOR_OUTCOMES
+        assert case["lineage_outcome"] in CURSOR_OUTCOMES
         if str(case_id).startswith("cancel-"):
             assert case["cancel_outcome"] in CANCEL_OUTCOMES
+            assert case["cursor_outcome"] == "unchanged" or case["cancel_outcome"] == "already_terminal"
+            assert case["lineage_outcome"] == "unchanged" or case["cancel_outcome"] == "already_terminal"
+            if case["cancel_outcome"] == "already_terminal":
+                assert case["already_terminal"] is True
         if case_id == "config-drift-late-finish":
             assert case["error_code"] == "CONFIGURATION_DRIFT"
             assert case["cursor_outcome"] == "unchanged"

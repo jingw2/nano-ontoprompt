@@ -2,149 +2,259 @@
   "cases": {
     "backfill": {
       "case_id": "backfill",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-13"
     },
     "cancel-after-tentative-materialization": {
+      "cancel_outcome": "cancelled",
       "case_id": "cancel-after-tentative-materialization",
+      "cursor_outcome": "unchanged",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-17"
     },
+    "cancel-already-terminal": {
+      "already_terminal": true,
+      "cancel_outcome": "already_terminal",
+      "case_id": "cancel-already-terminal",
+      "cursor_outcome": "unchanged",
+      "expected": {
+        "cancel_outcome": "already_terminal",
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
+      },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-18"
+    },
     "cancel-before-pull": {
+      "cancel_outcome": "cancelled",
       "case_id": "cancel-before-pull",
+      "cursor_outcome": "unchanged",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-15"
     },
     "cancel-inflight-page": {
+      "cancel_outcome": "cancelled",
       "case_id": "cancel-inflight-page",
+      "cursor_outcome": "unchanged",
       "expected": {
         "cancel_outcome": "cancelled",
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-16"
     },
     "config-drift-late-finish": {
       "case_id": "config-drift-late-finish",
+      "cursor_outcome": "unchanged",
+      "error_code": "CONFIGURATION_DRIFT",
       "expected": {
         "cursor_outcome": "unchanged",
-        "error_code": "CONFIGURATION_DRIFT"
+        "error_code": "CONFIGURATION_DRIFT",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-12"
     },
     "cursor-nonadvance": {
       "case_id": "cursor-nonadvance",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "micro_batch",
+      "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-07"
     },
     "dlq-replay": {
       "case_id": "dlq-replay",
+      "cursor_outcome": "dead_lettered",
       "expected": {
-        "cursor_outcome": "dead_lettered"
+        "cursor_outcome": "dead_lettered",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-08"
     },
     "duplicate": {
       "case_id": "duplicate",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-04"
     },
     "empty": {
       "case_id": "empty",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-01"
     },
     "equal-watermark": {
       "case_id": "equal-watermark",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-03"
     },
     "expired-webhook": {
       "case_id": "expired-webhook",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-09"
     },
     "failed-retry": {
       "case_id": "failed-retry",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-06"
     },
     "late": {
       "case_id": "late",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-02"
     },
     "normal": {
       "case_id": "normal",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-00"
     },
     "out-of-order": {
       "case_id": "out-of-order",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "micro_batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-05"
     },
     "replay-attack": {
       "case_id": "replay-attack",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-10"
     },
     "schema-drift": {
       "case_id": "schema-drift",
+      "cursor_outcome": "unchanged",
       "expected": {
-        "cursor_outcome": "unchanged"
+        "cursor_outcome": "unchanged",
+        "lineage_outcome": "unchanged"
       },
+      "lineage_outcome": "unchanged",
+      "refresh_mode": "event_driven",
+      "source_contract": "opaque_source_cursor",
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-11"
     },
     "t1-timezone": {
       "case_id": "t1-timezone",
+      "cursor_outcome": "advanced",
       "expected": {
-        "cursor_outcome": "advanced"
+        "cursor_outcome": "advanced",
+        "lineage_outcome": "advanced"
       },
+      "lineage_outcome": "advanced",
+      "refresh_mode": "batch",
+      "source_contract": "watermark_primary_key",
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-14"
     }

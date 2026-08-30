@@ -155,45 +155,45 @@ def _parity_cases() -> list[dict]:
 
 
 def _refresh_cases() -> list[dict]:
-    # (case_id, refresh_mode, source_contract, cursor_outcome, extra)
+    # (case_id, refresh_mode, source_contract, cursor_outcome, lineage_outcome, extra)
     defs = [
-        ("normal", "batch", "watermark_primary_key", "advanced", {}),
-        ("empty", "batch", "watermark_primary_key", "unchanged", {}),
-        ("late", "micro_batch", "watermark_primary_key", "advanced", {}),
-        ("equal-watermark", "micro_batch", "watermark_primary_key", "advanced", {}),
-        ("duplicate", "batch", "watermark_primary_key", "advanced", {}),
-        ("out-of-order", "micro_batch", "watermark_primary_key", "advanced", {}),
-        ("failed-retry", "batch", "watermark_primary_key", "unchanged", {}),
-        ("cursor-nonadvance", "micro_batch", "opaque_source_cursor", "unchanged", {}),
-        ("dlq-replay", "batch", "watermark_primary_key", "dead_lettered", {}),
-        ("expired-webhook", "event_driven", "opaque_source_cursor", "unchanged", {}),
-        ("replay-attack", "event_driven", "opaque_source_cursor", "unchanged", {}),
-        ("schema-drift", "event_driven", "opaque_source_cursor", "unchanged", {}),
+        ("normal", "batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("empty", "batch", "watermark_primary_key", "unchanged", "unchanged", {}),
+        ("late", "micro_batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("equal-watermark", "micro_batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("duplicate", "batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("out-of-order", "micro_batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("failed-retry", "batch", "watermark_primary_key", "unchanged", "unchanged", {}),
+        ("cursor-nonadvance", "micro_batch", "opaque_source_cursor", "unchanged", "unchanged", {}),
+        ("dlq-replay", "batch", "watermark_primary_key", "dead_lettered", "unchanged", {}),
+        ("expired-webhook", "event_driven", "opaque_source_cursor", "unchanged", "unchanged", {}),
+        ("replay-attack", "event_driven", "opaque_source_cursor", "unchanged", "unchanged", {}),
+        ("schema-drift", "event_driven", "opaque_source_cursor", "unchanged", "unchanged", {}),
         (
             "config-drift-late-finish",
             "batch",
             "watermark_primary_key",
-            "unchanged",
+            "unchanged", "unchanged",
             {"error_code": "CONFIGURATION_DRIFT"},
         ),
-        ("backfill", "batch", "watermark_primary_key", "advanced", {}),
-        ("t1-timezone", "batch", "watermark_primary_key", "advanced", {}),
-        ("cancel-before-pull", "micro_batch", "watermark_primary_key", "unchanged", {"cancel_outcome": "cancelled"}),
-        ("cancel-inflight-page", "micro_batch", "watermark_primary_key", "unchanged", {"cancel_outcome": "cancelled"}),
+        ("backfill", "batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("t1-timezone", "batch", "watermark_primary_key", "advanced", "advanced", {}),
+        ("cancel-before-pull", "micro_batch", "watermark_primary_key", "unchanged", "unchanged", {"cancel_outcome": "cancelled"}),
+        ("cancel-inflight-page", "micro_batch", "watermark_primary_key", "unchanged", "unchanged", {"cancel_outcome": "cancelled"}),
         (
             "cancel-after-tentative-materialization",
-            "micro_batch",
-            "watermark_primary_key",
-            "unchanged",
+            "micro_batch", "watermark_primary_key", "unchanged", "unchanged",
             {"cancel_outcome": "cancelled"},
         ),
+        ("cancel-already-terminal", "batch", "watermark_primary_key", "unchanged", "unchanged", {"cancel_outcome": "already_terminal", "already_terminal": True}),
     ]
     cases = []
-    for i, (case_id, refresh_mode, source_contract, cursor_outcome, extra) in enumerate(defs):
+    for i, (case_id, refresh_mode, source_contract, cursor_outcome, lineage_outcome, extra) in enumerate(defs):
         layers = ["refresh"]
         if case_id.startswith("cancel-"):
             layers.append("cancellation")
         expected = {"cursor_outcome": cursor_outcome}
+        expected["lineage_outcome"] = lineage_outcome
         if "error_code" in extra:
             expected["error_code"] = extra["error_code"]
         if "cancel_outcome" in extra:
@@ -208,6 +208,7 @@ def _refresh_cases() -> list[dict]:
                 refresh_mode=refresh_mode,
                 source_contract=source_contract,
                 cursor_outcome=cursor_outcome,
+                lineage_outcome=lineage_outcome,
                 **extra,
             )
         )
@@ -305,12 +306,17 @@ def _fixture_records(cases: list[dict], layer: str) -> dict:
     for case in cases:
         if layer not in case["layers"]:
             continue
-        records[case["case_id"]] = {
+        record = {
             "case_id": case["case_id"],
             "tenant_id": case["tenant_id"],
             "user_id": case["user_id"],
             "expected": case["expected"],
         }
+        if layer == "refresh":
+            for field in ("refresh_mode", "source_contract", "cursor_outcome", "lineage_outcome", "cancel_outcome", "already_terminal", "error_code"):
+                if field in case:
+                    record[field] = case[field]
+        records[case["case_id"]] = record
     return records
 
 
@@ -541,7 +547,10 @@ fails loudly instead of silently drifting from the generator.
   outcome, `coverage` tags, `layers`, `execution_mode`, and exactly one
   `test_targets` descriptor (see `registry.py`).
 - `fixtures/{{snapshots,identities,runtime_cases,execution_cases,transport_cases,refresh_cases}}.json`
-  -- the synthetic records each case's layer is built from.
+  -- the synthetic records each case's layer is built from. Refresh records
+  repeat their `refresh_mode`, source/cursor contract, cursor and lineage
+  outcomes, and cancellation/already-terminal metadata so fixture consumers
+  cannot silently drop the no-progress contract.
 - `playwright_seed.json` -- static state (schedule/cursor/config-version/lag,
   cancellation-requested/cancelled/already-terminal, dead-letter/replay/
   configuration-drift) that a later task's Playwright governance specs seed
@@ -676,6 +685,7 @@ def generate(seed: int, output_dir: Path) -> dict:
         "manifest_version": MANIFEST_VERSION,
         "seed": seed,
         "generated_at": FIXED_NOW,
+        "dialects": sorted(registry.REQUIRED_DIALECTS),
         "cases": cases,
         "files": files,
     }

@@ -120,6 +120,24 @@ npm run dev
 
 Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 SQLite 图谱回退、本地文件存储与同步管道执行。
 
+### 本地发布门禁
+
+受控 Runtime 门禁完全确定性执行，不会调用模型。在仓库根目录、启动一次性
+PostgreSQL/Redis 环境后运行：
+
+```bash
+python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+cd backend && python -m tests.runtime.run_registered_cases --manifest ../test_data/runtime/manifest.json --report ../artifacts/runtime/deterministic-cases.json
+cd .. && python -m pip install -e sdk && cd sdk && python -m pytest tests -q
+```
+
+真实刷新检查点只运行 `bash scripts/verify_refresh_checkpoint.sh`。该脚本独占
+Compose refresh profile、合成数据初始化、签名 webhook 和轮询流程；不要在其他
+脚本中重复这些流程。CI 还验证两个应用 Compose 文件以及绑定队列的 Celery
+worker 拓扑。浏览器治理覆盖使用 `cd frontend && npx playwright test
+src/test/e2e/runtime-governance.spec.ts`；它依赖该套件配置的服务，不能宣称为模型测试。
+
 ---
 
 ## 使用流程(Pipeline Mapping 路径)

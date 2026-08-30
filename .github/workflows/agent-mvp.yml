@@ -49,6 +49,9 @@ jobs:
       - name: Frontend test:ci
         working-directory: frontend
         run: npm ci && npm run test:ci
+      - name: Runtime governance browser contract
+        working-directory: frontend
+        run: npx playwright test src/test/e2e/runtime-governance.spec.ts
 
   m1-stabilization-gate:
     runs-on: ubuntu-latest
@@ -150,6 +153,37 @@ jobs:
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
             python -m pytest -q
+      - name: Runtime release registry and acceptance gate
+        if: matrix.python-version == '3.12'
+        run: |
+          python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
+            python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+          python -m tests.runtime.run_registered_cases \
+            --manifest ../test_data/runtime/manifest.json \
+            --report ../artifacts/runtime/deterministic-cases.json
+      - name: Refresh, queue, and Runtime integration gate
+        if: matrix.python-version == '3.12'
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
+            python -m pytest tests/v2/incremental tests/agent/test_celery_topology.py \
+              tests/v2/incremental/test_refresh_task_dispatch.py \
+              tests/v2/incremental/test_refresh_operability.py tests/runtime -q
+      - name: SDK runtime contract
+        if: matrix.python-version == '3.12'
+        run: |
+          REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
+          (cd "$REPO_ROOT" && python -m pip install -e sdk)
+          (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
+      - name: Validate application Compose definitions
+        if: matrix.python-version == '3.12'
+        run: |
+          docker compose -f docker-compose.v2.yml config --quiet
+          docker compose -f docker-compose.agent.yml config --quiet
       - name: Agent evaluation corpus
         run: cd backend && python -m evals.agent_ontology.run --manifest core-v1 --adapter fake --seed 141 --output artifacts/evals/result.json
       - name: Document extraction eval (non-blocking)

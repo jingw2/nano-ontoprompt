@@ -125,6 +125,26 @@ npm run dev
 
 Neo4j / MinIO / ChromaDB / Redis are optional — without them the app uses SQLite graph fallback, local file storage and synchronous pipeline runs.
 
+### Release gate (local)
+
+The governed Runtime gate is deterministic and makes no model calls. Run it
+from the repository root after starting the disposable PostgreSQL/Redis stack:
+
+```bash
+python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+cd backend && python -m tests.runtime.run_registered_cases --manifest ../test_data/runtime/manifest.json --report ../artifacts/runtime/deterministic-cases.json
+cd .. && python -m pip install -e sdk && cd sdk && python -m pytest tests -q
+```
+
+For the live refresh checkpoint, run `bash scripts/verify_refresh_checkpoint.sh`.
+It alone owns the Compose refresh profile, synthetic seeding, signed webhook,
+and polling flow; do not duplicate those steps in another local script. The
+main CI gate also validates both application Compose files and the queue-bound
+Celery worker topology. Browser governance coverage is `cd frontend && npx
+playwright test src/test/e2e/runtime-governance.spec.ts`; it requires the
+services configured by that suite and must not be represented as a model test.
+
 ---
 
 ## Usage (Pipeline Mapping path)
