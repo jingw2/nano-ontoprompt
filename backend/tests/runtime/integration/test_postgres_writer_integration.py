@@ -233,6 +233,43 @@ def test_postgres_writer_rolls_back_on_statement_timeout(postgres_url):
         assert read_target_status(postgres_url, "target-timeout-001") == "active"
 
 
+def test_postgres_writer_stores_sql_injection_payload_as_inert_value(postgres_url):
+    """The 8 cases in `test_postgres_writer_rejects_unsafe_or_stale_plan`
+    above all attack structure (bad identifiers, wrong column counts,
+    disallowed parameter keys) — none attempt a legitimate-shaped write
+    whose VALUE contains SQL metacharacters. This proves the positive case:
+    a plan that is otherwise entirely valid, but whose parameter value is a
+    SQL injection payload, must be stored as an inert literal string — never
+    executed as SQL — because every value is bound as a query parameter,
+    never string-interpolated."""
+    # 31 chars: fits the schema's `status VARCHAR(32)` column while still
+    # being a genuine stacked-query DROP-TABLE injection attempt.
+    payload = "x'; DROP TABLE managed_targets;"
+
+    def _row_count() -> int:
+        connection = psycopg2.connect(postgres_url)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM managed_targets")
+                return cursor.fetchone()[0]
+        finally:
+            connection.close()
+
+    baseline_count = _row_count()
+    with _seeded_row(postgres_url, target_id="target-injection-001", tenant_id="tenant-writer-injection"):
+        plan = _plan(
+            primary_key_tuple=(("target_id", "target-injection-001"),),
+            parameters={"status": payload},
+        )
+        receipt = PostgresRowWriter(postgres_url).execute(plan, credential_ref="vault:runtime-db")
+        assert receipt.affected_rows == 1
+        assert read_target_status(postgres_url, "target-injection-001") == payload
+        # The payload was stored as inert data, not executed as SQL: the
+        # table still exists and its row count only grew by our one insert.
+        assert _row_count() == baseline_count + 1
+    assert _row_count() == baseline_count
+
+
 def test_write_receipt_never_discloses_credential_ref_or_secret(postgres_url, auto_frozen_plan):
     receipt = PostgresRowWriter(postgres_url).execute(auto_frozen_plan, credential_ref="vault:super-secret-ref")
     field_names = {f.name for f in dataclasses.fields(WriteReceipt)}

@@ -139,8 +139,8 @@ class PostgresRowWriter:
 
         try:
             self._credential_resolver(credential_ref)
-        except Exception as exc:  # never let a resolver failure surface credential_ref
-            raise WriterError(ReasonCode.PRECONDITION_CONFLICT.value, "credential resolution failed") from exc
+        except Exception:  # never let a resolver failure surface credential_ref, even via __cause__
+            raise WriterError(ReasonCode.PRECONDITION_CONFLICT.value, "credential resolution failed") from None
 
         set_clause = ", ".join(f'"{column}" = %({column})s' for column in plan.parameters.keys())
         where_clause = " AND ".join(f'"{column}" = %(pk__{column})s' for column, _ in plan.primary_key_tuple)

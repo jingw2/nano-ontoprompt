@@ -16,6 +16,7 @@ a version-column precondition conflict) require a real database and live in
 from __future__ import annotations
 
 import dataclasses
+import traceback
 
 import psycopg2
 import pytest
@@ -104,3 +105,32 @@ def test_write_receipt_never_carries_credential_ref_or_a_secret_field():
 
 def test_postgres_row_writer_satisfies_managed_row_writer_protocol():
     assert isinstance(PostgresRowWriter(UNREACHABLE_URL), ManagedRowWriter)
+
+
+def test_credential_resolution_failure_never_leaks_via_exception_chain(monkeypatch):
+    """A resolver's own exception may embed `credential_ref` in its message
+    (an ordinary thing for a real vault resolver to do, e.g. `ValueError(f"no
+    such secret: {credential_ref}")`). `WriterError` must sever that chain
+    (`from None`) so the resolver's original exception — and whatever it
+    embedded — can never surface via `__cause__`, `traceback.format_exception`,
+    or `logger.exception` of the resulting `WriterError`."""
+    marker = "vault:super-secret-ref-marker"
+
+    def _leaky_resolver(credential_ref: str) -> None:
+        raise ValueError(f"no such secret: {credential_ref}")
+
+    def _fail_if_connected(*args, **kwargs):
+        raise AssertionError("PostgresRowWriter must reject this before opening a connection")
+
+    monkeypatch.setattr(psycopg2, "connect", _fail_if_connected)
+
+    writer = PostgresRowWriter(UNREACHABLE_URL, credential_resolver=_leaky_resolver)
+    with pytest.raises(WriterError) as exc_info:
+        writer.execute(_plan(), credential_ref=marker)
+
+    exc = exc_info.value
+    assert exc.__cause__ is None
+    tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    assert marker not in str(exc)
+    assert marker not in repr(exc)
+    assert marker not in tb_text
