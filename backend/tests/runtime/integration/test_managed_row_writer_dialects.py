@@ -122,17 +122,17 @@ def test_identical_rows_and_versions_across_dialects():
     """`database-row-parity`: a genuine single-row governed write must
     produce the identical optimistic-lock outcome — exactly one affected
     row, gated on the real live `row_version` it was frozen against, the new
-    column value actually persisted — whichever real dialect backs
-    `managed_targets`.
+    column value actually persisted, AND `row_version` itself genuinely
+    advanced by the write — whichever real dialect backs `managed_targets`.
 
-    Note: `PostgresRowWriter`/`MySQLRowWriter` gate the write on
-    `row_version` (via the WHERE clause) but do not themselves bump it —
-    there is no `SET row_version = row_version + 1` in either writer's SQL,
-    and no DB trigger does it either (see `test_data/runtime/db/*/schema.sql`).
-    So "row_version incremented" is not literally true of the write itself
-    today; this test proves the real, current optimistic-lock contract
-    (gate-then-write, row_version otherwise unchanged) rather than asserting
-    a behavior the writers don't implement.
+    `PostgresRowWriter`/`MySQLRowWriter` both gate the write on `row_version`
+    (via the WHERE clause) AND bump it (via `SET ... row_version =
+    row_version + 1` in the same statement) — this closes a lost-update race
+    where two different writers could otherwise both observe the same live
+    `row_version`, both pass the precondition, and the second write would
+    silently clobber the first with no detected conflict. See
+    `test_second_write_against_stale_original_version_is_rejected` below for
+    a test that proves that race is actually closed.
     """
     for dialect in ("postgresql", "mysql"):
         url = _require_dialect_url(dialect)
@@ -146,7 +146,54 @@ def test_identical_rows_and_versions_across_dialects():
             row = _read_row(dialect, url, target_id)
             assert row is not None
             assert row[0] == "approved"
-            assert row[1] == 1, f"{dialect}: row_version is gated on, not bumped, by the writer"
+            assert row[1] == 2, f"{dialect}: row_version must be incremented by a successful write"
+
+
+def test_second_write_against_stale_original_version_is_rejected():
+    """`database-row-version-race-closed`: two different governed writes
+    (e.g. from two different `RuntimePlan`s/agents) that both read the same
+    live `row_version` before either commits must never both succeed — the
+    second one must be rejected as a real optimistic-lock conflict, and the
+    row must reflect only the first write's value.
+
+    This reproduces the exact lost-update race the version-increment fix
+    closes: seed `row_version=1`, execute one write successfully (which must
+    bump the live version to `2`), then attempt a second write against the
+    SAME row using the ORIGINAL `expected_version=1` — simulating a second
+    writer that read the version before the first one committed. Before the
+    fix (writer gates on but never bumps `version_column`), this second
+    write would incorrectly succeed, silently overwriting the first write's
+    result with zero detected conflict.
+    """
+    for dialect in ("postgresql", "mysql"):
+        url = _require_dialect_url(dialect)
+        target_id = f"target-race-{uuid.uuid4().hex[:8]}"
+        with _seeded_row(dialect, url, target_id=target_id, tenant_id="tenant-race", row_version=1):
+            first_plan = _plan(
+                dialect, primary_key_tuple=(("target_id", target_id),),
+                expected_version=1, parameters={"status": "approved"},
+            )
+            first_receipt = _WRITER_CLS[dialect](url).execute(first_plan, credential_ref="vault:runtime-db")
+            assert first_receipt.affected_rows == 1
+
+            row_after_first = _read_row(dialect, url, target_id)
+            assert row_after_first == ("approved", 2), f"{dialect}: first write must succeed and bump the version"
+
+            # Second writer read `row_version=1` before the first writer's
+            # commit landed, so it still presents the now-stale
+            # `expected_version=1`.
+            second_plan = _plan(
+                dialect, primary_key_tuple=(("target_id", target_id),),
+                expected_version=1, parameters={"status": "rejected"},
+            )
+            with pytest.raises(WriterError) as exc:
+                _WRITER_CLS[dialect](url).execute(second_plan, credential_ref="vault:runtime-db")
+            assert exc.value.reason_code == "ROW_COUNT_MISMATCH"
+
+            row_after_second = _read_row(dialect, url, target_id)
+            assert row_after_second == ("approved", 2), (
+                f"{dialect}: row must still reflect only the first write after the second is rejected"
+            )
 
 
 def test_target_row_changes_between_plan_and_execution():

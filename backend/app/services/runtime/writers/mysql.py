@@ -105,6 +105,16 @@ class MySQLRowWriter:
             raise WriterError(ReasonCode.PRECONDITION_CONFLICT.value, "credential resolution failed") from None
 
         set_clause = ", ".join(f"`{column}` = %({column})s" for column in plan.parameters.keys())
+        # Every governed write must actually advance the optimistic-lock
+        # version, not merely gate on it — otherwise two different plans
+        # that both observe the same live `expected_version` can both pass
+        # the WHERE-clause precondition and the second write silently
+        # clobbers the first with no detected conflict. `plan.version_column`
+        # is already validated by `validate_plan_shape` above and is
+        # structurally guaranteed disjoint from `plan.parameters`
+        # (`writable_columns`), so appending it here can never double-set or
+        # collide with a caller-supplied column.
+        set_clause += f", `{plan.version_column}` = `{plan.version_column}` + 1"
         where_clause = " AND ".join(f"`{column}` = %(pk__{column})s" for column, _ in plan.primary_key_tuple)
         sql = (
             f"UPDATE `{plan.schema_name}`.`{plan.table_name}` "

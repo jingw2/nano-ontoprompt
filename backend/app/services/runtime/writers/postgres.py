@@ -55,7 +55,16 @@ def _after_image_hash(plan: FrozenActionPlan) -> str:
     """Identity hash of the post-write state this writer intends to produce:
     the same target identity `before_image_hash`/`version_hash` (Task 21)
     already pin, plus the exact values this write applies. Mirrors
-    `action_bindings._hash`'s canonical-JSON convention."""
+    `action_bindings._hash`'s canonical-JSON convention.
+
+    Deliberately unchanged by the version-column-increment fix: this hash
+    was never a live post-write re-read (it is computed purely from `plan`'s
+    own already-known, plan-time-frozen fields), and it never encoded the
+    live `version_column`/`expected_version` value in the first place — only
+    `version_hash`, the plan-time identity hash of the target row. The SET
+    clause now genuinely advancing `version_column` in the database does not
+    change what this hash is meant to attest to, so no field needs to be
+    added here."""
     return _hash({
         "managed_action_binding_id": plan.managed_action_binding_id,
         "binding_version": plan.binding_version,
@@ -90,6 +99,16 @@ class PostgresRowWriter:
             raise WriterError(ReasonCode.PRECONDITION_CONFLICT.value, "credential resolution failed") from None
 
         set_clause = ", ".join(f'"{column}" = %({column})s' for column in plan.parameters.keys())
+        # Every governed write must actually advance the optimistic-lock
+        # version, not merely gate on it — otherwise two different plans
+        # that both observe the same live `expected_version` can both pass
+        # the WHERE-clause precondition and the second write silently
+        # clobbers the first with no detected conflict. `plan.version_column`
+        # is already validated by `validate_plan_shape` above and is
+        # structurally guaranteed disjoint from `plan.parameters`
+        # (`writable_columns`), so appending it here can never double-set or
+        # collide with a caller-supplied column.
+        set_clause += f', "{plan.version_column}" = "{plan.version_column}" + 1'
         where_clause = " AND ".join(f'"{column}" = %(pk__{column})s' for column, _ in plan.primary_key_tuple)
         sql = (
             f'UPDATE "{plan.schema_name}"."{plan.table_name}" '
