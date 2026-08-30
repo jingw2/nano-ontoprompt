@@ -36,7 +36,7 @@ from typing import Any, Callable
 import psycopg2
 
 from app.schemas.runtime import ReasonCode
-from .base import FrozenActionPlan, WriteReceipt, WriterError, _hash, _validate_identifier
+from .base import FrozenActionPlan, WriteReceipt, WriterError, _hash, validate_plan_shape
 
 _DEFAULT_STATEMENT_TIMEOUT_MS = 5_000
 
@@ -49,59 +49,6 @@ def _default_credential_resolver(credential_ref: str) -> None:
     vault resolution without changing `PostgresRowWriter`'s constructor
     signature or its `execute` contract."""
     return None
-
-
-def _validate_plan_shape(plan: FrozenActionPlan) -> None:
-    """Reject SQL, identifier, connection, target-selector, delete, DDL, and
-    multi-target inputs before ever opening a transaction. Everything here
-    is decidable purely from `plan`'s own shape — no database round trip is
-    ever needed (or performed) to reach one of these verdicts."""
-    if plan.dialect != "postgresql":
-        raise WriterError(
-            ReasonCode.UNSUPPORTED_ACTION.value,
-            f"PostgresRowWriter cannot execute a {plan.dialect!r} plan",
-        )
-    for field, name in (
-        ("schema_name", plan.schema_name),
-        ("table_name", plan.table_name),
-        ("version_column", plan.version_column),
-    ):
-        _validate_identifier(name, field=field)
-    if not plan.primary_key_columns:
-        raise WriterError(ReasonCode.UNSUPPORTED_ACTION.value, "primary_key_columns must not be empty")
-    for column in plan.primary_key_columns:
-        _validate_identifier(column, field="primary_key_columns")
-    for column in plan.writable_columns:
-        _validate_identifier(column, field="writable_columns")
-    if set(plan.primary_key_columns) & set(plan.writable_columns):
-        raise WriterError(ReasonCode.UNSUPPORTED_ACTION.value, "primary_key_columns and writable_columns must be disjoint")
-    if plan.version_column in plan.writable_columns:
-        raise WriterError(ReasonCode.UNSUPPORTED_ACTION.value, "version_column must not be a writable column")
-
-    # Target-selector: exactly one value per primary-key column, matching
-    # the binding's own primary_key_columns exactly — never a partial, an
-    # extra, or a duplicated column, any of which would make the WHERE
-    # clause an ambiguous, potentially multi-row selector.
-    selector_columns = [column for column, _ in plan.primary_key_tuple]
-    if (
-        len(selector_columns) != len(plan.primary_key_columns)
-        or set(selector_columns) != set(plan.primary_key_columns)
-        or len(set(selector_columns)) != len(selector_columns)
-    ):
-        raise WriterError(
-            ReasonCode.UNSUPPORTED_ACTION.value,
-            "primary_key_tuple must supply exactly one value per primary_key_columns entry",
-        )
-
-    # This writer only ever builds an UPDATE — never a DELETE — so it must
-    # always have at least one column to SET, and every one of those columns
-    # must be a column the binding actually allowlisted as writable.
-    if not plan.parameters:
-        raise WriterError(ReasonCode.UNSUPPORTED_ACTION.value, "parameters must name at least one writable column")
-    for column in plan.parameters.keys():
-        _validate_identifier(column, field="parameters")
-    if not set(plan.parameters.keys()) <= set(plan.writable_columns):
-        raise WriterError(ReasonCode.UNSUPPORTED_ACTION.value, "parameters may only name the binding's writable_columns")
 
 
 def _after_image_hash(plan: FrozenActionPlan) -> str:
@@ -135,7 +82,7 @@ class PostgresRowWriter:
         self._statement_timeout_ms = int(statement_timeout_ms)
 
     def execute(self, plan: FrozenActionPlan, *, credential_ref: str) -> WriteReceipt:
-        _validate_plan_shape(plan)
+        validate_plan_shape(plan, expected_dialect="postgresql")
 
         try:
             self._credential_resolver(credential_ref)

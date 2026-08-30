@@ -64,6 +64,63 @@ def _hash(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def validate_plan_shape(plan: "FrozenActionPlan", *, expected_dialect: str) -> None:
+    """Reject SQL, identifier, connection, target-selector, delete, DDL, and
+    multi-target inputs before ever opening a transaction. Everything here is
+    decidable purely from `plan`'s own shape — no database round trip is ever
+    needed (or performed) to reach one of these verdicts. Dialect-independent:
+    every `ManagedRowWriter` implementation (Task 24's `PostgresRowWriter`,
+    Task 25's `MySQLRowWriter`) calls this same function with its own
+    `expected_dialect`, so this structural validation logic lives in exactly
+    one place rather than as separate copies that could silently drift apart."""
+    if plan.dialect != expected_dialect:
+        raise WriterError(
+            "UNSUPPORTED_ACTION",
+            f"a {expected_dialect!r} writer cannot execute a {plan.dialect!r} plan",
+        )
+    for field, name in (
+        ("schema_name", plan.schema_name),
+        ("table_name", plan.table_name),
+        ("version_column", plan.version_column),
+    ):
+        _validate_identifier(name, field=field)
+    if not plan.primary_key_columns:
+        raise WriterError("UNSUPPORTED_ACTION", "primary_key_columns must not be empty")
+    for column in plan.primary_key_columns:
+        _validate_identifier(column, field="primary_key_columns")
+    for column in plan.writable_columns:
+        _validate_identifier(column, field="writable_columns")
+    if set(plan.primary_key_columns) & set(plan.writable_columns):
+        raise WriterError("UNSUPPORTED_ACTION", "primary_key_columns and writable_columns must be disjoint")
+    if plan.version_column in plan.writable_columns:
+        raise WriterError("UNSUPPORTED_ACTION", "version_column must not be a writable column")
+
+    # Target-selector: exactly one value per primary-key column, matching
+    # the binding's own primary_key_columns exactly — never a partial, an
+    # extra, or a duplicated column, any of which would make the WHERE
+    # clause an ambiguous, potentially multi-row selector.
+    selector_columns = [column for column, _ in plan.primary_key_tuple]
+    if (
+        len(selector_columns) != len(plan.primary_key_columns)
+        or set(selector_columns) != set(plan.primary_key_columns)
+        or len(set(selector_columns)) != len(selector_columns)
+    ):
+        raise WriterError(
+            "UNSUPPORTED_ACTION",
+            "primary_key_tuple must supply exactly one value per primary_key_columns entry",
+        )
+
+    # This writer only ever builds an UPDATE — never a DELETE — so it must
+    # always have at least one column to SET, and every one of those columns
+    # must be a column the binding actually allowlisted as writable.
+    if not plan.parameters:
+        raise WriterError("UNSUPPORTED_ACTION", "parameters must name at least one writable column")
+    for column in plan.parameters.keys():
+        _validate_identifier(column, field="parameters")
+    if not set(plan.parameters.keys()) <= set(plan.writable_columns):
+        raise WriterError("UNSUPPORTED_ACTION", "parameters may only name the binding's writable_columns")
+
+
 @dataclass(frozen=True)
 class FrozenActionPlan:
     """Everything a `ManagedRowWriter` needs to build one safe, parameterized
@@ -132,4 +189,5 @@ __all__ = [
     "FrozenActionPlan",
     "WriteReceipt",
     "ManagedRowWriter",
+    "validate_plan_shape",
 ]
