@@ -94,6 +94,8 @@ def validate_plan_shape(plan: "FrozenActionPlan", *, expected_dialect: str) -> N
         raise WriterError("UNSUPPORTED_ACTION", "primary_key_columns and writable_columns must be disjoint")
     if plan.version_column in plan.writable_columns:
         raise WriterError("UNSUPPORTED_ACTION", "version_column must not be a writable column")
+    if plan.version_column in plan.primary_key_columns:
+        raise WriterError("UNSUPPORTED_ACTION", "version_column must not be a primary key column")
 
     # Target-selector: exactly one value per primary-key column, matching
     # the binding's own primary_key_columns exactly — never a partial, an

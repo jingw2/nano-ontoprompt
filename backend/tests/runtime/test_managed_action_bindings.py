@@ -288,6 +288,12 @@ def test_published_binding_freezes_server_owned_target_and_params(db):
     assert frozen.version_hash
 
 
+def test_publish_binding_rejects_version_column_reused_as_primary_key(db):
+    with pytest.raises(BindingError) as exc:
+        publish_fixture_binding(db, version_column="target_id")
+    assert exc.value.reason_code == "BINDING_NOT_ALLOWLISTED"
+
+
 def test_binding_draft_revoked_or_connection_drift_is_not_resolvable(db):
     for state in ("draft", "revoked", "connection-drift", "connection-config-drift"):
         with pytest.raises(BindingError) as exc:

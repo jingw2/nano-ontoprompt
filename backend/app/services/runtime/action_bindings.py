@@ -136,6 +136,8 @@ def _validate_allowlist(
         raise BindingError(_BINDING_NOT_ALLOWLISTED, "primary_key_columns and writable_columns must be disjoint")
     if version_column in writable_columns:
         raise BindingError(_BINDING_NOT_ALLOWLISTED, "version_column must not be a writable column")
+    if version_column in primary_key_columns:
+        raise BindingError(_BINDING_NOT_ALLOWLISTED, "version_column must not be a primary key column")
     if not set(parameter_schema.keys()) <= set(writable_columns):
         raise BindingError(_BINDING_NOT_ALLOWLISTED, "parameter_schema must only name writable_columns")
 

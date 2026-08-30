@@ -71,6 +71,7 @@ _UNSAFE_CASES = {
     ),
     "delete": dict(parameters={}),
     "wrong-parameter": dict(parameters={"tenant_id": "hacked-tenant"}),
+    "version-column-is-primary-key": dict(version_column="target_id"),
 }
 
 
@@ -85,7 +86,8 @@ def postgres_url() -> str:
 
 
 @pytest.mark.parametrize(
-    "case_id", ["arbitrary-sql", "ddl", "multi-target", "delete", "wrong-parameter"],
+    "case_id",
+    ["arbitrary-sql", "ddl", "multi-target", "delete", "wrong-parameter", "version-column-is-primary-key"],
 )
 def test_postgres_writer_rejects_unsafe_or_stale_plan(postgres_url, case_id, monkeypatch):
     def _fail_if_connected(*args, **kwargs):
