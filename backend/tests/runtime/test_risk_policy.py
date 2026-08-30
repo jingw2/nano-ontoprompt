@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
+from app.schemas.runtime import ReasonCode
 from app.services.runtime.credentials import RuntimeContext, RuntimePrincipal
 from app.services.runtime.risk import evaluate_execution_policy
 from app.services.runtime.sandbox import SandboxResult
@@ -172,6 +173,13 @@ def test_high_risk_plan_requires_exact_hash_hitl():
     )
     assert decision.execution_class == "HUMAN_APPROVED"
     assert decision.required_plan_hash == high_risk_plan().plan_hash
+    # This case's risk factors (unbound_action, unscoped_target,
+    # multi_row_impact) never include freshness_soft_stale — the plan's own
+    # captured freshness_state is "fresh" with requires_hitl False — so this
+    # must never be labeled ALLOW (that value means "nothing more to check,
+    # safe to proceed as-is" per InvestigationResult's own invariant); it
+    # gets its own dedicated reason code instead.
+    assert decision.reason_code == ReasonCode.RISK_REQUIRES_APPROVAL.value
 
 
 @pytest.mark.parametrize("case_id", ["expired", "stale-snapshot", "policy-drift", "sandbox-failed", "hash-mismatch"])

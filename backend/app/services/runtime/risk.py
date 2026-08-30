@@ -151,7 +151,8 @@ def evaluate_execution_policy(
         )
 
     reason_code = (
-        ReasonCode.SNAPSHOT_FRESHNESS_HITL if "freshness_soft_stale" in risk_factors else ReasonCode.ALLOW
+        ReasonCode.SNAPSHOT_FRESHNESS_HITL if "freshness_soft_stale" in risk_factors
+        else ReasonCode.RISK_REQUIRES_APPROVAL
     )
     return RiskDecision(
         execution_class=ExecutionClass.HUMAN_APPROVED.value, allowed=True,

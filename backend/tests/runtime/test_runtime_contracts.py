@@ -112,5 +112,6 @@ def test_reason_code_vocabulary_is_closed_and_complete():
         "SNAPSHOT_FRESHNESS_HITL", "POLICY_DENIED", "ACTION_NOT_ELIGIBLE",
         "PLAN_EXPIRED", "PRECONDITION_CONFLICT", "BINDING_DRIFT", "UNSUPPORTED_ACTION",
         "ROW_COUNT_MISMATCH", "UNKNOWN_EXECUTION_OUTCOME", "INVALID_PLAN_HASH",
+        "RISK_REQUIRES_APPROVAL",
     }
     assert {member.value for member in ReasonCode} == expected
