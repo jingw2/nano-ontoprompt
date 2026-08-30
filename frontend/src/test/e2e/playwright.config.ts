@@ -27,6 +27,7 @@ export default defineConfig({
     'ontology_list.spec.ts',
     'settings.spec.ts',
     'graph_interaction.spec.ts',
+    'runtime-governance.spec.ts',
   ],
   fullyParallel: false,
   workers: 1,

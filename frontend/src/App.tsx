@@ -31,6 +31,12 @@ import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
 import ApprovalsPage from '@/pages/admin/ApprovalsPage'
 import ToolConnectionsPage from '@/pages/admin/ToolConnectionsPage'
 import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
+import RuntimeInvestigationPage from '@/pages/runtime/RuntimeInvestigationPage'
+import ActionPlanPage from '@/pages/runtime/ActionPlanPage'
+import SandboxPage from '@/pages/runtime/SandboxPage'
+import ApprovalQueuePage from '@/pages/runtime/ApprovalQueuePage'
+import ReconciliationPage from '@/pages/runtime/ReconciliationPage'
+import RefreshOperationsPage from '@/pages/runtime/RefreshOperationsPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -126,6 +132,14 @@ export default function App() {
           {/* Back-compat redirects: 和解操作 + MCP 待审批 merged into one admin-only Approvals menu */}
           <Route path="/admin/agent-reconciliations" element={<Navigate to="/admin/approvals?tab=reconciliation" replace />} />
           <Route path="/mcp/write-requests" element={<Navigate to="/admin/approvals?tab=mcp" replace />} />
+
+          {/* ── Runtime governance + refresh operator surfaces (Task 27) ── */}
+          <Route path="/runtime/refresh/:sourceId" element={<ProtectedRoute><RefreshOperationsPage /></ProtectedRoute>} />
+          <Route path="/runtime/investigate" element={<ProtectedRoute><RuntimeInvestigationPage /></ProtectedRoute>} />
+          <Route path="/runtime/action-plans/:planId" element={<ProtectedRoute><ActionPlanPage /></ProtectedRoute>} />
+          <Route path="/runtime/sandbox/:planId" element={<ProtectedRoute><SandboxPage /></ProtectedRoute>} />
+          <Route path="/runtime/approvals" element={<ProtectedRoute><ApprovalQueuePage /></ProtectedRoute>} />
+          <Route path="/runtime/reconciliation/:reconciliationId" element={<ProtectedRoute><AdminRoute><ReconciliationPage /></AdminRoute></ProtectedRoute>} />
         </Routes>
         </SessionRestore>
       </BrowserRouter>
