@@ -14,10 +14,18 @@ outbox and returns 202.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+
+from app.models.sandbox import SandboxSimulation
+from app.schemas.runtime import ReasonCode
+from app.services.runtime.credentials import RuntimeAccessError, RuntimeContext
+from app.services.runtime.risk import ExecutionClass, evaluate_execution_policy
+from app.services.runtime.sandbox import SandboxResult
+from app.services.runtime.service import RuntimeService
 
 APPROVAL_TTL_SECONDS = 60 * 60 * 24  # 24h expiry
 
@@ -36,6 +44,17 @@ def _new_id() -> str:
 
 def _correlation(operation: str, approval_id: str) -> str:
     return f"approval:{operation}:{approval_id}"
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    """SQLite (the unit-test harness) round-trips `DateTime(timezone=True)`
+    values as naive; PostgreSQL preserves tzinfo. Every value this module
+    ever compares against is UTC, so a naive read is always UTC too —
+    mirrors the identical helper in `app.services.runtime.credentials` and
+    `app.services.runtime.policy`."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def create_approval(
@@ -247,3 +266,101 @@ def sweep_expired_approvals(db: Session) -> int:
     ))
     db.commit()
     return result.rowcount or 0
+
+
+# --- Runtime exact-plan approval (Task 23) --------------------------------
+#
+# A distinct approval authority from the P5B tool-call flow above: it never
+# touches `agent_approvals`/`agent_turns` at all, because its subject — an
+# immutable, snapshot-pinned `RuntimePlan` (Task 15) — is a different kind
+# of thing than a proposed tool-call execution. It reuses only what
+# genuinely generalizes from the P5B flow's conventions: `_now()`/`_new_id()`
+# /`_correlation()` below, and the same "exact match or reject" precondition
+# discipline `resolve_approval` already applies to `base_revision`/
+# `preview_hash`, applied here to a plan's own `plan_hash`/`expiry` instead.
+
+
+@dataclass(frozen=True)
+class ApprovalReceipt:
+    """Proof that exactly one already-simulated `RuntimePlan` (Task 15/22)
+    was approved by its own exact `plan_hash`, by the same dual principal
+    (Agent + user) it was proposed for.
+
+    Bounded by the SAME `expiry` as the plan it approves — it never grants
+    any authority beyond that window, and never grants *ongoing* write
+    authority at all: this is a point-in-time receipt, not a durable grant.
+    A later execution (a subsequent Milestone 3 task) must independently
+    re-verify this receipt's `plan_hash`/`expiry` against the plan's own
+    current state before acting on it, exactly as `approve_exact_plan`
+    itself does at approval time.
+    """
+
+    plan_id: str
+    plan_hash: str
+    approver_agent_id: str
+    approver_user_id: str
+    approved_at: datetime
+    execution_class: str
+    expiry: datetime
+    correlation_id: str
+
+
+def _latest_sandbox_result(db: Session, plan_id: str) -> SandboxResult | None:
+    """The most recent `SandboxSimulation` (Task 22) for `plan_id`, projected
+    onto the same `SandboxResult` shape `simulate_action` returns. Read-only:
+    ownership of the `sandbox_simulations` table stays with
+    `app.services.runtime.sandbox`; this function never writes it."""
+    row = db.execute(
+        select(SandboxSimulation)
+        .where(SandboxSimulation.action_plan_id == plan_id)
+        .order_by(SandboxSimulation.created_at.desc())
+    ).scalars().first()
+    if row is None:
+        return None
+    return SandboxResult(
+        simulation_id=row.id, action_plan_id=row.action_plan_id, expected_rows=row.expected_rows,
+        before_after_diff=dict(row.before_after_diff), impact_summary=dict(row.impact_summary),
+        rule_outcome=tuple(row.rule_outcome), policy_result=dict(row.policy_result),
+        precondition_hashes=dict(row.precondition_hashes), expires_at=row.expires_at,
+    )
+
+
+def approve_exact_plan(
+    db: Session, *, plan_id: str, presented_plan_hash: str, approver_context: RuntimeContext, now: datetime,
+) -> ApprovalReceipt:
+    """Accept one exact, unexpired plan hash for a plan Task 23's risk
+    evaluator (`app.services.runtime.risk.evaluate_execution_policy`) has
+    actually routed to `HUMAN_APPROVED` — never an `AUTOMATIC` plan (which
+    needs no approval) and never a `REJECTED` one (which must never become
+    approvable no matter what hash is presented).
+
+    Writes nothing: a `RuntimePlan` row is immutable (Task 15) once
+    persisted, and this receipt itself grants no ongoing write authority, so
+    there is no durable state for this function to own beyond what it reads
+    and re-verifies on every call.
+    """
+    plan = RuntimeService().get_action_plan(plan_id, approver_context, db)
+
+    if presented_plan_hash != plan.plan_hash:
+        raise RuntimeAccessError(ReasonCode.INVALID_PLAN_HASH.value)
+    if _as_aware_utc(now) >= _as_aware_utc(plan.expiry):
+        raise RuntimeAccessError(ReasonCode.PLAN_EXPIRED.value)
+
+    sandbox_result = _latest_sandbox_result(db, plan_id)
+    if sandbox_result is None:
+        raise RuntimeAccessError(ReasonCode.PRECONDITION_CONFLICT.value)
+
+    decision = evaluate_execution_policy(plan, sandbox_result, approver_context, now)
+    if decision.execution_class != ExecutionClass.HUMAN_APPROVED.value:
+        raise RuntimeAccessError(
+            decision.reason_code if decision.execution_class == ExecutionClass.REJECTED.value
+            else ReasonCode.POLICY_DENIED.value
+        )
+
+    return ApprovalReceipt(
+        plan_id=plan.id, plan_hash=plan.plan_hash,
+        approver_agent_id=approver_context.principal.agent_id,
+        approver_user_id=approver_context.principal.user_id,
+        approved_at=now, execution_class=decision.execution_class,
+        expiry=_as_aware_utc(plan.expiry), correlation_id=_correlation("approve_plan", plan.id),
+    )
