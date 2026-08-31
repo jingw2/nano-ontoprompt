@@ -31,7 +31,19 @@ def _new_id() -> str:
 
 
 class SemanticSnapshot(Base):
-    """One immutable materialization of a published ontology release."""
+    """One immutable materialization of a published ontology release.
+
+    "Immutable"/"materialization" here refers to this row's own lineage,
+    quality, and hash metadata — it is NOT a point-in-time content freeze of
+    the underlying data. No `EntityInstance.row_data` is copied or captured
+    by materialization, and `EntityInstance` rows are updated in place with
+    no history table preserving prior revisions. Querying against this
+    snapshot (via `RuntimeService.investigate`) always reads the LIVE,
+    current `EntityInstance` rows at query time, not their state as of
+    materialization. See `app/services/runtime/snapshots.py`'s module
+    docstring for the full explanation; this is a known, accepted
+    limitation for this milestone, not a bug.
+    """
 
     __tablename__ = "semantic_snapshots"
     __table_args__ = (

@@ -161,7 +161,15 @@ def _resolve_target_instance(
     both belongs to `release.ontology_id` AND whose entity type is declared
     in `release`'s own pinned manifest — a live row under the same
     ontology_id that the pinned release's manifest never declared (e.g. a
-    schema change since this release was cut) must never resolve."""
+    schema change since this release was cut) must never resolve.
+
+    This reads the LIVE `EntityInstance` table at query time, unconditionally
+    — there is no point-in-time/`as_of` filtering here. The snapshot pin only
+    scopes WHICH entity types/rows are eligible (via the release's manifest);
+    it does not freeze or affect row CONTENT. If a row was edited after the
+    pinned snapshot was materialized, this returns the current, edited
+    `row_data`/`revision`, never the value as of materialization time.
+    """
     if not target_selector:
         return None
     manifest_entity_ids = _manifest_entity_ids(release)
@@ -196,7 +204,16 @@ def _query_snapshot_scoped_instances(
     """Bounded, portable read of current instances for `release.ontology_id`
     (optionally filtered by entity type and a case-insensitive substring
     match against the row), scoped to entity types the PINNED release's
-    manifest actually declares — see `_manifest_entity_ids`."""
+    manifest actually declares — see `_manifest_entity_ids`.
+
+    This reads the LIVE `EntityInstance` table at query time, unconditionally
+    — there is no point-in-time/`as_of` filtering here. Pinning to a
+    `SemanticSnapshot` only scopes WHICH entity types are eligible; it does
+    not freeze row CONTENT. Every call returns whatever `row_data` currently
+    exists for these rows right now, regardless of when the snapshot being
+    investigated against was materialized — edits made after materialization
+    are visible immediately, not the content as of that snapshot.
+    """
     if limit <= 0:
         return []
     manifest_entity_ids = _manifest_entity_ids(release)

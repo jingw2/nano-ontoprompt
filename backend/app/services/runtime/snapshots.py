@@ -1,4 +1,16 @@
-"""Atomic creation and immutable reads of governed semantic snapshots."""
+"""Atomic creation and immutable reads of governed semantic snapshots.
+
+A materialized `SemanticSnapshot` freezes lineage, quality, and hash
+METADATA only — it is NOT a point-in-time content freeze. No
+`EntityInstance.row_data` is ever copied or captured by materialization,
+and `EntityInstance` rows are updated in place with no history table
+preserving prior revisions. Querying against a snapshot later (via
+`RuntimeService.investigate`) always reads the LIVE, current state of the
+underlying `EntityInstance` rows at query time, never their state as of
+materialization. This is a known, accepted limitation for this milestone,
+not a bug — see `materialize_snapshot`'s own docstring and
+`SemanticSnapshot`'s model docstring for the same caveat.
+"""
 
 from __future__ import annotations
 
@@ -164,6 +176,16 @@ def materialize_snapshot(
     context (Task 11/12's original call shape); `materialize_refresh_snapshot`
     (Task 20) is the only caller that supplies real values, copied verbatim
     from a successful `RefreshRun`.
+
+    IMPORTANT — this freezes lineage, quality, and hash METADATA only. It is
+    NOT a point-in-time content freeze: no `EntityInstance.row_data` is
+    copied or captured here, and `EntityInstance` rows are updated in place
+    with no history table preserving prior revisions. Querying against this
+    snapshot later (via `RuntimeService.investigate`) always reads whatever
+    `EntityInstance` rows currently exist at query time — if a row was
+    edited after this snapshot was materialized, that later edit is exactly
+    what comes back, not the row's state as of materialization. See
+    `SemanticSnapshot`'s own docstring for the same caveat.
     """
     try:
         release, project, creator = _validate_release_and_creator(
