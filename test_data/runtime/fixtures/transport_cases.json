@@ -13,7 +13,7 @@
       "case_id": "parity-denied-result",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-01"

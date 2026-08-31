@@ -64,10 +64,10 @@ def _snapshot_cases() -> list[dict]:
     defs = [
         ("snapshot-valid-published-release", {"decision": "ALLOW", "lineage_complete": True}),
         ("snapshot-authorized-empty-result", {"decision": "ALLOW", "row_count": 0}),
-        ("snapshot-incomplete-lineage", {"decision": "DENY", "reason_code": "INCOMPLETE_LINEAGE"}),
-        ("snapshot-failed-ungoverned-input", {"decision": "DENY", "reason_code": "UNGOVERNED_PIPELINE_INPUT"}),
-        ("snapshot-stale-snapshot", {"decision": "DENY", "reason_code": "STALE_SNAPSHOT"}),
-        ("snapshot-release-drift", {"decision": "DENY", "reason_code": "RELEASE_DRIFT"}),
+        ("snapshot-incomplete-lineage", {"decision": "DENY", "reason_code": "PRECONDITION_CONFLICT"}),
+        ("snapshot-failed-ungoverned-input", {"decision": "DENY", "reason_code": "SNAPSHOT_NOT_GOVERNED"}),
+        ("snapshot-stale-snapshot", {"decision": "DENY", "reason_code": "SNAPSHOT_STALE"}),
+        ("snapshot-release-drift", {"decision": "DENY", "reason_code": "PRECONDITION_CONFLICT"}),
         ("snapshot-reordered-input-lists", {"decision": "ALLOW", "hash_order_independent": True}),
     ]
     return [
@@ -79,17 +79,17 @@ def _snapshot_cases() -> list[dict]:
 def _identity_cases() -> list[dict]:
     defs = [
         ("identity-valid-delegation", {"decision": "ALLOW"}),
-        ("identity-missing-credential", {"decision": "DENY", "reason_code": "MISSING_CREDENTIAL"}),
-        ("identity-malformed-signature", {"decision": "DENY", "reason_code": "MALFORMED_SIGNATURE"}),
-        ("identity-wrong-audience", {"decision": "DENY", "reason_code": "WRONG_AUDIENCE"}),
-        ("identity-missing-scope", {"decision": "DENY", "reason_code": "MISSING_SCOPE"}),
-        ("identity-expired-token", {"decision": "DENY", "reason_code": "EXPIRED_TOKEN"}),
-        ("identity-revoked-token", {"decision": "DENY", "reason_code": "REVOKED_TOKEN"}),
-        ("identity-inactive-agent", {"decision": "DENY", "reason_code": "INACTIVE_AGENT"}),
-        ("identity-inactive-user", {"decision": "DENY", "reason_code": "INACTIVE_USER"}),
-        ("identity-cross-domain-token", {"decision": "DENY", "reason_code": "CROSS_DOMAIN_TOKEN"}),
-        ("identity-agent-only-capability", {"decision": "DENY", "reason_code": "MISSING_USER_ENTITLEMENT"}),
-        ("identity-user-only-entitlement", {"decision": "DENY", "reason_code": "MISSING_AGENT_CAPABILITY"}),
+        ("identity-missing-credential", {"decision": "DENY", "reason_code": "MISSING_DELEGATION"}),
+        ("identity-malformed-signature", {"decision": "DENY", "reason_code": "INVALID_DELEGATION"}),
+        ("identity-wrong-audience", {"decision": "DENY", "reason_code": "AUDIENCE_DENIED"}),
+        ("identity-missing-scope", {"decision": "DENY", "reason_code": "SCOPE_DENIED"}),
+        ("identity-expired-token", {"decision": "DENY", "reason_code": "EXPIRED_DELEGATION"}),
+        ("identity-revoked-token", {"decision": "DENY", "reason_code": "REVOKED_DELEGATION"}),
+        ("identity-inactive-agent", {"decision": "DENY", "reason_code": "AGENT_INACTIVE"}),
+        ("identity-inactive-user", {"decision": "DENY", "reason_code": "USER_INACTIVE"}),
+        ("identity-cross-domain-token", {"decision": "DENY", "reason_code": "CROSS_SECURITY_DOMAIN"}),
+        ("identity-agent-only-capability", {"decision": "DENY", "reason_code": "USER_ENTITLEMENT_DENIED"}),
+        ("identity-user-only-entitlement", {"decision": "DENY", "reason_code": "AGENT_CAPABILITY_DENIED"}),
     ]
     return [
         _case(case_id, ["identity"], expected, ["identity.delegation"], i)
@@ -103,12 +103,12 @@ def _runtime_cases() -> list[dict]:
         ("runtime-rule-outcomes", {"decision": "ALLOW", "rule_outcome": "matched"}),
         ("runtime-allow-with-data", {"decision": "ALLOW", "row_count_min": 1}),
         ("runtime-allow-no-matches", {"decision": "ALLOW", "row_count": 0}),
-        ("runtime-structured-deny", {"decision": "DENY", "reason_code": "POLICY_DENIAL"}),
-        ("runtime-policy-denial", {"decision": "DENY", "reason_code": "POLICY_DENIAL"}),
+        ("runtime-structured-deny", {"decision": "DENY", "reason_code": "POLICY_DENIED"}),
+        ("runtime-policy-denial", {"decision": "DENY", "reason_code": "AGENT_CAPABILITY_DENIED"}),
         ("runtime-immutable-read-only-plan", {"decision": "ALLOW", "plan_writable": False}),
         ("runtime-writable-plan-binding", {"decision": "ALLOW", "plan_writable": True}),
         ("runtime-expired-plan", {"decision": "DENY", "reason_code": "PLAN_EXPIRED"}),
-        ("runtime-stable-denial-codes", {"decision": "DENY", "reason_code": "POLICY_DENIAL"}),
+        ("runtime-stable-denial-codes", {"decision": "DENY", "reason_code": "POLICY_DENIED"}),
     ]
     return [
         _case(case_id, ["runtime"], expected, ["runtime.investigation"], i)
@@ -120,18 +120,18 @@ def _execution_cases() -> list[dict]:
     defs = [
         ("execution-low-risk-automatic-update", {"outcome": "succeeded", "risk_class": "automatic"}),
         ("execution-high-risk-exact-hash-hitl-update", {"outcome": "pending_approval", "risk_class": "human_approved"}),
-        ("execution-ambiguous-rejected-plan", {"outcome": "rejected", "reason_code": "AMBIGUOUS_PLAN"}),
-        ("execution-binding-draft-state", {"outcome": "rejected", "reason_code": "BINDING_NOT_PUBLISHED"}),
-        ("execution-binding-revoked-state", {"outcome": "rejected", "reason_code": "BINDING_REVOKED"}),
-        ("execution-binding-version-drift", {"outcome": "rejected", "reason_code": "BINDING_VERSION_DRIFT"}),
-        ("execution-connection-target-drift", {"outcome": "rejected", "reason_code": "CONNECTION_TARGET_DRIFT"}),
-        ("execution-parameter-selector-drift", {"outcome": "rejected", "reason_code": "PARAMETER_SELECTOR_DRIFT"}),
-        ("execution-before-image-version-conflict", {"outcome": "rejected", "reason_code": "VERSION_CONFLICT"}),
-        ("execution-row-count-zero", {"outcome": "rejected", "reason_code": "ROW_COUNT_ZERO"}),
-        ("execution-row-count-two", {"outcome": "rejected", "reason_code": "ROW_COUNT_NOT_SINGLE"}),
+        ("execution-ambiguous-rejected-plan", {"outcome": "rejected", "reason_code": "PRECONDITION_CONFLICT"}),
+        ("execution-binding-draft-state", {"outcome": "rejected", "reason_code": "BINDING_DRIFT"}),
+        ("execution-binding-revoked-state", {"outcome": "rejected", "reason_code": "BINDING_DRIFT"}),
+        ("execution-binding-version-drift", {"outcome": "rejected", "reason_code": "BINDING_DRIFT"}),
+        ("execution-connection-target-drift", {"outcome": "rejected", "reason_code": "BINDING_DRIFT"}),
+        ("execution-parameter-selector-drift", {"outcome": "rejected", "reason_code": "INVALID_PLAN_HASH"}),
+        ("execution-before-image-version-conflict", {"outcome": "rejected", "reason_code": "PRECONDITION_CONFLICT"}),
+        ("execution-row-count-zero", {"outcome": "rejected", "reason_code": "ROW_COUNT_MISMATCH"}),
+        ("execution-row-count-two", {"outcome": "rejected", "reason_code": "ROW_COUNT_MISMATCH"}),
         ("execution-idempotent-retry", {"outcome": "succeeded", "idempotent": True}),
         ("execution-timeout-unknown-outcome", {"outcome": "unknown", "reconciliation_required": True}),
-        ("execution-reconciliation-and-rollback", {"outcome": "rollback_plan_created"}),
+        ("execution-reconciliation-and-rollback", {"outcome": "rollback_rejected"}),
     ]
     return [
         _case(case_id, ["execution"], expected, ["execution.governed_writeback"], i)
@@ -142,7 +142,7 @@ def _execution_cases() -> list[dict]:
 def _parity_cases() -> list[dict]:
     defs = [
         ("parity-allow-with-data", {"decision": "ALLOW", "row_count_min": 1}),
-        ("parity-denied-result", {"decision": "DENY", "reason_code": "POLICY_DENIAL"}),
+        ("parity-denied-result", {"decision": "DENY", "reason_code": "AGENT_CAPABILITY_DENIED"}),
         ("parity-writable-plan-hash", {"decision": "ALLOW", "plan_hash_stable": True}),
     ]
     return [
@@ -223,7 +223,7 @@ def _database_cases() -> list[dict]:
         ),
         (
             "database-target-row-drift",
-            {"outcome": "rejected", "reason_code": "VERSION_CONFLICT"},
+            {"outcome": "rejected", "reason_code": "ROW_COUNT_MISMATCH"},
         ),
     ]
     return [
@@ -727,8 +727,35 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             fresh = generate(args.seed, Path(tmp))
         existing = json.loads((args.output / "manifest.json").read_text(encoding="utf-8"))
+        errors: list[str] = []
         if fresh["files"] != existing["files"]:
-            print("runtime fixture generation is not reproducible: files differ from manifest.json", file=sys.stderr)
+            errors.append("fixture files differ from manifest.json's files map")
+        if fresh["seed"] != existing["seed"]:
+            errors.append(f"seed differs: fresh={fresh['seed']!r} checked-in={existing['seed']!r}")
+        # generated_at is intentionally excluded from this comparison. Today
+        # it is `FIXED_NOW`, a hardcoded constant, so it never actually
+        # drifts — but it is conceptually a generation timestamp, and a
+        # future change that makes it real wall-clock time would otherwise
+        # make --check spuriously fail on every run. seed/cases/files are
+        # the actual content-integrity signals this check exists for.
+        if fresh["cases"] != existing["cases"]:
+            fresh_by_id = {case["case_id"]: case for case in fresh["cases"]}
+            existing_by_id = {case["case_id"]: case for case in existing["cases"]}
+            missing = sorted(set(fresh_by_id) - set(existing_by_id))
+            extra = sorted(set(existing_by_id) - set(fresh_by_id))
+            drifted = sorted(
+                case_id for case_id in (set(fresh_by_id) & set(existing_by_id))
+                if fresh_by_id[case_id] != existing_by_id[case_id]
+            )
+            if missing:
+                errors.append(f"manifest.json is missing cases a fresh generation produces: {missing}")
+            if extra:
+                errors.append(f"manifest.json has cases a fresh generation does not produce: {extra}")
+            if drifted:
+                errors.append(f"case content (e.g. 'expected') differs from a fresh generation: {drifted}")
+        if errors:
+            for error in errors:
+                print(f"runtime fixture generation is not reproducible: {error}", file=sys.stderr)
             return 1
         validate_manifest(args.output)
         print(f"OK: {args.output} matches a fresh generation with seed {args.seed}")

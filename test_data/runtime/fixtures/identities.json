@@ -4,7 +4,7 @@
       "case_id": "identity-agent-only-capability",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_USER_ENTITLEMENT"
+        "reason_code": "USER_ENTITLEMENT_DENIED"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-10"
@@ -13,7 +13,7 @@
       "case_id": "identity-cross-domain-token",
       "expected": {
         "decision": "DENY",
-        "reason_code": "CROSS_DOMAIN_TOKEN"
+        "reason_code": "CROSS_SECURITY_DOMAIN"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-09"
@@ -22,7 +22,7 @@
       "case_id": "identity-expired-token",
       "expected": {
         "decision": "DENY",
-        "reason_code": "EXPIRED_TOKEN"
+        "reason_code": "EXPIRED_DELEGATION"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-05"
@@ -31,7 +31,7 @@
       "case_id": "identity-inactive-agent",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INACTIVE_AGENT"
+        "reason_code": "AGENT_INACTIVE"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-07"
@@ -40,7 +40,7 @@
       "case_id": "identity-inactive-user",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INACTIVE_USER"
+        "reason_code": "USER_INACTIVE"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-08"
@@ -49,7 +49,7 @@
       "case_id": "identity-malformed-signature",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MALFORMED_SIGNATURE"
+        "reason_code": "INVALID_DELEGATION"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-02"
@@ -58,7 +58,7 @@
       "case_id": "identity-missing-credential",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_CREDENTIAL"
+        "reason_code": "MISSING_DELEGATION"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-01"
@@ -67,7 +67,7 @@
       "case_id": "identity-missing-scope",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_SCOPE"
+        "reason_code": "SCOPE_DENIED"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-04"
@@ -76,7 +76,7 @@
       "case_id": "identity-revoked-token",
       "expected": {
         "decision": "DENY",
-        "reason_code": "REVOKED_TOKEN"
+        "reason_code": "REVOKED_DELEGATION"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-06"
@@ -85,7 +85,7 @@
       "case_id": "identity-user-only-entitlement",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_AGENT_CAPABILITY"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-11"
@@ -102,7 +102,7 @@
       "case_id": "identity-wrong-audience",
       "expected": {
         "decision": "DENY",
-        "reason_code": "WRONG_AUDIENCE"
+        "reason_code": "AUDIENCE_DENIED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-03"

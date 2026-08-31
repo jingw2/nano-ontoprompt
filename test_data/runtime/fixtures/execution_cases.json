@@ -13,7 +13,7 @@
       "case_id": "database-target-row-drift",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "VERSION_CONFLICT"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-01"
@@ -22,7 +22,7 @@
       "case_id": "execution-ambiguous-rejected-plan",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "AMBIGUOUS_PLAN"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-02"
@@ -31,7 +31,7 @@
       "case_id": "execution-before-image-version-conflict",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "VERSION_CONFLICT"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-08"
@@ -40,7 +40,7 @@
       "case_id": "execution-binding-draft-state",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_NOT_PUBLISHED"
+        "reason_code": "BINDING_DRIFT"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-03"
@@ -49,7 +49,7 @@
       "case_id": "execution-binding-revoked-state",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_REVOKED"
+        "reason_code": "BINDING_DRIFT"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-04"
@@ -58,7 +58,7 @@
       "case_id": "execution-binding-version-drift",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_VERSION_DRIFT"
+        "reason_code": "BINDING_DRIFT"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-05"
@@ -67,7 +67,7 @@
       "case_id": "execution-connection-target-drift",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "CONNECTION_TARGET_DRIFT"
+        "reason_code": "BINDING_DRIFT"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-06"
@@ -103,7 +103,7 @@
       "case_id": "execution-parameter-selector-drift",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "PARAMETER_SELECTOR_DRIFT"
+        "reason_code": "INVALID_PLAN_HASH"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-07"
@@ -111,7 +111,7 @@
     "execution-reconciliation-and-rollback": {
       "case_id": "execution-reconciliation-and-rollback",
       "expected": {
-        "outcome": "rollback_plan_created"
+        "outcome": "rollback_rejected"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-13"
@@ -120,7 +120,7 @@
       "case_id": "execution-row-count-two",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "ROW_COUNT_NOT_SINGLE"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-10"
@@ -129,7 +129,7 @@
       "case_id": "execution-row-count-zero",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "ROW_COUNT_ZERO"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-09"

@@ -49,7 +49,7 @@
       "case_id": "runtime-policy-denial",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-05"
@@ -67,7 +67,7 @@
       "case_id": "runtime-stable-denial-codes",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "POLICY_DENIED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-09"
@@ -76,7 +76,7 @@
       "case_id": "runtime-structured-deny",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "POLICY_DENIED"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-04"

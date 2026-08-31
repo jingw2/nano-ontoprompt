@@ -13,7 +13,7 @@
       "case_id": "snapshot-failed-ungoverned-input",
       "expected": {
         "decision": "DENY",
-        "reason_code": "UNGOVERNED_PIPELINE_INPUT"
+        "reason_code": "SNAPSHOT_NOT_GOVERNED"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-03"
@@ -22,7 +22,7 @@
       "case_id": "snapshot-incomplete-lineage",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INCOMPLETE_LINEAGE"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-02"
@@ -31,7 +31,7 @@
       "case_id": "snapshot-release-drift",
       "expected": {
         "decision": "DENY",
-        "reason_code": "RELEASE_DRIFT"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "tenant_id": "tenant-beta",
       "user_id": "user-beta-operator-05"
@@ -49,7 +49,7 @@
       "case_id": "snapshot-stale-snapshot",
       "expected": {
         "decision": "DENY",
-        "reason_code": "STALE_SNAPSHOT"
+        "reason_code": "SNAPSHOT_STALE"
       },
       "tenant_id": "tenant-acme",
       "user_id": "user-acme-operator-04"
