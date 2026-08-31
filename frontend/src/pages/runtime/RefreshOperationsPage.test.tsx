@@ -113,7 +113,8 @@ describe('RefreshOperationsPage', () => {
     const run = baseRun({ run_id: 'run-running-001', status: 'running', retry_reason: null })
     const cancelled = baseRun({
       run_id: 'run-running-001', status: 'cancelled', cancel_reason: 'planned source maintenance',
-      cancel_requested_by: 'user-1', terminal_at: '2026-08-30T00:00:00Z',
+      cancel_requested_by: 'user-1', cancel_requested_at: '2026-08-30T00:00:00Z',
+      terminal_at: '2026-08-30T00:00:00Z',
     })
     server.use(
       http.get('*/api/v2/refresh/sources/source-001/status', () => HttpResponse.json(baseStatus(run))),
@@ -129,6 +130,8 @@ describe('RefreshOperationsPage', () => {
     await userEvent.click(screen.getByTestId('cancel-refresh-run'))
     await waitFor(async () => expect(await screen.findByTestId('refresh-latest-status')).toHaveTextContent('CANCELLED'))
     expect(screen.getByTestId('refresh-cancel-reason')).toHaveTextContent('planned source maintenance')
+    expect(screen.getByTestId('refresh-cancel-requested-by')).toHaveTextContent('user-1')
+    expect(screen.getByTestId('refresh-cancel-requested-at')).toHaveTextContent('2026-08-30T00:00:00Z')
   })
 
   it('renders the timezone and business calendar returned after saving a schedule', async () => {

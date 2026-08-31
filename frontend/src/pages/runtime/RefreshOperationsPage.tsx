@@ -205,6 +205,12 @@ export default function RefreshOperationsPage() {
                 <span data-testid="refresh-cancel-requested-by">{latest.cancel_requested_by}</span>
               </>
             )}
+            {latest.cancel_requested_at && (
+              <>
+                <span className="text-gray-500">{t('runtime.refresh.cancel_requested_at', 'Cancel requested at')}</span>
+                <span data-testid="refresh-cancel-requested-at">{latest.cancel_requested_at}</span>
+              </>
+            )}
           </div>
 
           <div className="mt-3 flex items-center gap-2">
