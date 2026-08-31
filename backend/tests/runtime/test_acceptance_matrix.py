@@ -17,6 +17,7 @@ from tests.runtime.run_registered_cases import (  # noqa: E402
     load_case_execution_report,
     run_all_registered_cases,
 )
+from app.schemas.runtime import ReasonCode  # noqa: E402
 
 
 MANIFEST = RUNTIME_DATA / "manifest.json"
@@ -29,6 +30,23 @@ def test_design_case_has_exactly_one_executable_registered_target(case):
     assert len(targets) == 1
     assert [target.to_dict() for target in targets] == case["test_targets"]
     assert target_is_executable(targets[0])
+
+
+def test_case_expected_reason_codes_are_real_enum_members():
+    """Item 5 (2026-08-31 fix wave): `expected.reason_code` previously named
+    strings that were never checked against the real closed `ReasonCode`
+    vocabulary (`assert case["expected"]` only ever checked truthiness) — 29
+    of 70 cases drifted to a fictional or renamed value undetected. Assert
+    every declared `expected.reason_code`, when present, is a real member so
+    this class of drift fails the suite immediately instead of silently
+    rotting the release evidence artifact."""
+    real_codes = {member.value for member in ReasonCode}
+    for case in load_cases(MANIFEST):
+        reason_code = case["expected"].get("reason_code")
+        if reason_code is not None:
+            assert reason_code in real_codes, (
+                f"{case['case_id']!r} expected.reason_code {reason_code!r} is not a real ReasonCode member"
+            )
 
 
 def test_case_registry_is_bidirectional_and_complete():

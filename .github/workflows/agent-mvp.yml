@@ -49,9 +49,19 @@ jobs:
       - name: Frontend test:ci
         working-directory: frontend
         run: npm ci && npm run test:ci
-      - name: Runtime governance browser contract
+      # NOTE (2026-08-31 fix wave, Item 6): all three tests in this spec
+      # unconditionally `test.skip()` — this job starts no backend and sets
+      # no `AGENT_E2E_RUNTIME_*` seed env vars, so this step always exits
+      # green having executed zero tests. Deferring the live-browser proof
+      # to the Task 29-33 backend fixture is intentional (see that spec's
+      # own comments); the step name below only exists so CI output does not
+      # read as if governance coverage runs here today. Do not rename this
+      # back to a name implying real coverage until the seed fixture exists.
+      - name: Runtime governance E2E (self-skips until Task 29-33 backend fixture exists)
         working-directory: frontend
-        run: npx playwright test src/test/e2e/runtime-governance.spec.ts
+        run: |
+          npx playwright test src/test/e2e/runtime-governance.spec.ts --reporter=list
+          echo "::notice::Runtime governance E2E step executed 0 real assertions — all tests self-skip pending the Task 29-33 backend seed fixture. This is expected today, not a passing governance gate."
 
   m1-stabilization-gate:
     runs-on: ubuntu-latest

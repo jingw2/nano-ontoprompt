@@ -235,7 +235,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "VERSION_CONFLICT"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "layers": [
         "database"
@@ -361,7 +361,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "AMBIGUOUS_PLAN"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "layers": [
         "execution"
@@ -383,7 +383,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "VERSION_CONFLICT"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "layers": [
         "execution"
@@ -405,7 +405,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_NOT_PUBLISHED"
+        "reason_code": "BINDING_DRIFT"
       },
       "layers": [
         "execution"
@@ -427,7 +427,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_REVOKED"
+        "reason_code": "BINDING_DRIFT"
       },
       "layers": [
         "execution"
@@ -449,7 +449,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "BINDING_VERSION_DRIFT"
+        "reason_code": "BINDING_DRIFT"
       },
       "layers": [
         "execution"
@@ -471,7 +471,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "CONNECTION_TARGET_DRIFT"
+        "reason_code": "BINDING_DRIFT"
       },
       "layers": [
         "execution"
@@ -559,7 +559,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "PARAMETER_SELECTOR_DRIFT"
+        "reason_code": "INVALID_PLAN_HASH"
       },
       "layers": [
         "execution"
@@ -580,7 +580,7 @@
       ],
       "execution_mode": "deterministic",
       "expected": {
-        "outcome": "rollback_plan_created"
+        "outcome": "rollback_rejected"
       },
       "layers": [
         "execution"
@@ -602,7 +602,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "ROW_COUNT_NOT_SINGLE"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "layers": [
         "execution"
@@ -624,7 +624,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "outcome": "rejected",
-        "reason_code": "ROW_COUNT_ZERO"
+        "reason_code": "ROW_COUNT_MISMATCH"
       },
       "layers": [
         "execution"
@@ -720,7 +720,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_USER_ENTITLEMENT"
+        "reason_code": "USER_ENTITLEMENT_DENIED"
       },
       "layers": [
         "identity"
@@ -742,7 +742,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "CROSS_DOMAIN_TOKEN"
+        "reason_code": "CROSS_SECURITY_DOMAIN"
       },
       "layers": [
         "identity"
@@ -764,7 +764,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "EXPIRED_TOKEN"
+        "reason_code": "EXPIRED_DELEGATION"
       },
       "layers": [
         "identity"
@@ -786,7 +786,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INACTIVE_AGENT"
+        "reason_code": "AGENT_INACTIVE"
       },
       "layers": [
         "identity"
@@ -808,7 +808,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INACTIVE_USER"
+        "reason_code": "USER_INACTIVE"
       },
       "layers": [
         "identity"
@@ -830,7 +830,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MALFORMED_SIGNATURE"
+        "reason_code": "INVALID_DELEGATION"
       },
       "layers": [
         "identity"
@@ -852,7 +852,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_CREDENTIAL"
+        "reason_code": "MISSING_DELEGATION"
       },
       "layers": [
         "identity"
@@ -874,7 +874,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_SCOPE"
+        "reason_code": "SCOPE_DENIED"
       },
       "layers": [
         "identity"
@@ -896,7 +896,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "REVOKED_TOKEN"
+        "reason_code": "REVOKED_DELEGATION"
       },
       "layers": [
         "identity"
@@ -918,7 +918,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "MISSING_AGENT_CAPABILITY"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "layers": [
         "identity"
@@ -961,7 +961,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "WRONG_AUDIENCE"
+        "reason_code": "AUDIENCE_DENIED"
       },
       "layers": [
         "identity"
@@ -1170,7 +1170,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "layers": [
         "parity"
@@ -1362,7 +1362,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "AGENT_CAPABILITY_DENIED"
       },
       "layers": [
         "runtime"
@@ -1406,7 +1406,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "POLICY_DENIED"
       },
       "layers": [
         "runtime"
@@ -1428,7 +1428,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "POLICY_DENIAL"
+        "reason_code": "POLICY_DENIED"
       },
       "layers": [
         "runtime"
@@ -1520,7 +1520,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "UNGOVERNED_PIPELINE_INPUT"
+        "reason_code": "SNAPSHOT_NOT_GOVERNED"
       },
       "layers": [
         "snapshot"
@@ -1542,7 +1542,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "INCOMPLETE_LINEAGE"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "layers": [
         "snapshot"
@@ -1564,7 +1564,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "RELEASE_DRIFT"
+        "reason_code": "PRECONDITION_CONFLICT"
       },
       "layers": [
         "snapshot"
@@ -1608,7 +1608,7 @@
       "execution_mode": "deterministic",
       "expected": {
         "decision": "DENY",
-        "reason_code": "STALE_SNAPSHOT"
+        "reason_code": "SNAPSHOT_STALE"
       },
       "layers": [
         "snapshot"

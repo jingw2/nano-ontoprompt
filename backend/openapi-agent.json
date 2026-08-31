@@ -85,6 +85,52 @@
         "title": "ActionCreate",
         "type": "object"
       },
+      "ActionPlanRequestBody": {
+        "additionalProperties": false,
+        "description": "The REST wire shape for an action-plan proposal. Extra fields\n(including any caller-asserted `agent_id`/`user_id`) are rejected —\nidentity is always the verified delegated credential, never the body.",
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "object"
+          },
+          "semantic_snapshot_id": {
+            "title": "Semantic Snapshot Id",
+            "type": "string"
+          },
+          "target_selector": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Selector"
+          }
+        },
+        "required": [
+          "semantic_snapshot_id",
+          "action_id"
+        ],
+        "title": "ActionPlanRequestBody",
+        "type": "object"
+      },
       "ActionReviewRequest": {
         "properties": {
           "enabled": {
@@ -591,6 +637,21 @@
         "title": "AnswerClarificationRequest",
         "type": "object"
       },
+      "ApproveRequestBody": {
+        "additionalProperties": false,
+        "description": "POST /approve accepts only the plan's own exact hash — nothing else\nis ever read from the body (mirrors `ActionPlanRequestBody`'s\n`extra=\"forbid\"` discipline).",
+        "properties": {
+          "plan_hash": {
+            "title": "Plan Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_hash"
+        ],
+        "title": "ApproveRequestBody",
+        "type": "object"
+      },
       "ArchiveModelMigrationRequest": {
         "properties": {
           "base_revision": {
@@ -806,6 +867,21 @@
           "file"
         ],
         "title": "Body_upload_file_api_v1_ontologies__ontology_id__files_post",
+        "type": "object"
+      },
+      "CancelRefreshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "CancelRefreshRequest",
         "type": "object"
       },
       "CancelTurnRequest": {
@@ -1502,6 +1578,31 @@
         "title": "DatasetResponse",
         "type": "object"
       },
+      "DelegationRequestBody": {
+        "additionalProperties": false,
+        "description": "A signed-in user delegates only their own Runtime authority to one\npre-registered agent. Persisted agent audience/scope allowlists remain\nauthoritative at issuance and verification time.\n\n`scopes` is additionally restricted to `{READ_SCOPE, WRITE_SCOPE}` here,\nindependent of whatever an agent's own `allowed_scopes` happen to\npermit — a caller can never request a scope this transport does not\nitself recognize, regardless of how a given `OAuthClient` is configured.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Scopes",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "agent_id",
+          "scopes"
+        ],
+        "title": "DelegationRequestBody",
+        "type": "object"
+      },
       "EntityCreate": {
         "properties": {
           "canonical_id": {
@@ -1702,6 +1803,21 @@
         "title": "EntityUpdate",
         "type": "object"
       },
+      "ExecuteRequestBody": {
+        "additionalProperties": false,
+        "description": "POST /execute accepts only `{\"plan_hash\": string}` — never a\ncaller-selected target, parameters, SQL, identifiers, connection\ntarget, or transaction options. `execute_plan`'s own `selector`/\n`parameters` arguments are left at their default `None`; nothing this\nbody carries is ever passed to them.",
+        "properties": {
+          "plan_hash": {
+            "title": "Plan Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_hash"
+        ],
+        "title": "ExecuteRequestBody",
+        "type": "object"
+      },
       "ExtractionRequest": {
         "properties": {
           "constraints": {
@@ -1762,6 +1878,57 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InvestigationRequest": {
+        "additionalProperties": false,
+        "description": "A snapshot-pinned, policy-checked read request. Carries no authority\nof its own — the caller's identity is always the verified RuntimeContext,\nnever a field on this request.",
+        "properties": {
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "filters": {
+            "title": "Filters",
+            "type": "object"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "ontology_id": {
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "semantic_snapshot_id": {
+            "title": "Semantic Snapshot Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "semantic_snapshot_id",
+          "ontology_id"
+        ],
+        "title": "InvestigationRequest",
         "type": "object"
       },
       "IssueMcpTokenRequest": {
@@ -3165,6 +3332,584 @@
         "title": "RefreshConfigurationUpdate",
         "type": "object"
       },
+      "RefreshPolicy": {
+        "enum": [
+          "batch",
+          "micro_batch",
+          "event_driven"
+        ],
+        "title": "RefreshPolicy",
+        "type": "string"
+      },
+      "RefreshRunView": {
+        "additionalProperties": false,
+        "description": "Non-secret, serializable view of a durable refresh run.",
+        "properties": {
+          "already_terminal": {
+            "default": false,
+            "title": "Already Terminal",
+            "type": "boolean"
+          },
+          "cancel_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Reason"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "cancel_requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested By"
+          },
+          "config_version": {
+            "title": "Config Version",
+            "type": "integer"
+          },
+          "cursor_after": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor After"
+          },
+          "cursor_before": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor Before"
+          },
+          "cursor_contract": {
+            "title": "Cursor Contract",
+            "type": "string"
+          },
+          "dead_letter_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dead Letter Id"
+          },
+          "dispatch_queue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch Queue"
+          },
+          "dispatch_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch State"
+          },
+          "duplicate_count": {
+            "default": 0,
+            "title": "Duplicate Count",
+            "type": "integer"
+          },
+          "input_dataset_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Dataset Version Ids",
+            "type": "array"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "late_count": {
+            "default": 0,
+            "title": "Late Count",
+            "type": "integer"
+          },
+          "pipeline_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Run Id"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "replay_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay Status"
+          },
+          "resource": {
+            "title": "Resource",
+            "type": "string"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "retry_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "terminal_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal At"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "required": [
+          "run_id",
+          "source_id",
+          "resource",
+          "policy",
+          "status",
+          "config_version",
+          "cursor_contract"
+        ],
+        "title": "RefreshRunView",
+        "type": "object"
+      },
+      "RefreshScheduleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "backfill_window_seconds": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Backfill Window Seconds",
+            "type": "integer"
+          },
+          "business_calendar": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Business Calendar",
+            "type": "array"
+          },
+          "cron_expr": {
+            "title": "Cron Expr",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_pending_runs": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Max Pending Runs",
+            "type": "integer"
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
+          },
+          "sla_seconds": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Sla Seconds",
+            "type": "integer"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron_expr"
+        ],
+        "title": "RefreshScheduleRequest",
+        "type": "object"
+      },
+      "RefreshScheduleView": {
+        "additionalProperties": false,
+        "description": "Public schedule fields; no source connection details are returned.",
+        "properties": {
+          "backfill_window_seconds": {
+            "default": 0,
+            "title": "Backfill Window Seconds",
+            "type": "integer"
+          },
+          "business_calendar": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Business Calendar",
+            "type": "array"
+          },
+          "cron_expr": {
+            "title": "Cron Expr",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_pending_runs": {
+            "default": 1,
+            "title": "Max Pending Runs",
+            "type": "integer"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
+          },
+          "sla_seconds": {
+            "default": 0,
+            "title": "Sla Seconds",
+            "type": "integer"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_type": {
+            "title": "Target Type",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "target_type",
+          "target_id",
+          "cron_expr",
+          "timezone"
+        ],
+        "title": "RefreshScheduleView",
+        "type": "object"
+      },
+      "RefreshStatus": {
+        "additionalProperties": false,
+        "description": "Current source-owned refresh state and sanitized latest-run summary.",
+        "properties": {
+          "backfill_window_seconds": {
+            "default": 0,
+            "title": "Backfill Window Seconds",
+            "type": "integer"
+          },
+          "config_version": {
+            "title": "Config Version",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "cursor_contract": {
+            "title": "Cursor Contract",
+            "type": "string"
+          },
+          "cursor_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor Observed At"
+          },
+          "dlq_count": {
+            "default": 0,
+            "title": "Dlq Count",
+            "type": "integer"
+          },
+          "duplicate_count": {
+            "default": 0,
+            "title": "Duplicate Count",
+            "type": "integer"
+          },
+          "fencing_token": {
+            "title": "Fencing Token",
+            "type": "integer"
+          },
+          "freshness_lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Lag Seconds"
+          },
+          "input_dataset_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Dataset Version Id"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "late_count": {
+            "default": 0,
+            "title": "Late Count",
+            "type": "integer"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefreshRunView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_schedule_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Schedule At"
+          },
+          "pipeline_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Run Id"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "resource": {
+            "title": "Resource",
+            "type": "string"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "sla_status": {
+            "default": "not_configured",
+            "title": "Sla Status",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "resource",
+          "policy",
+          "config_version",
+          "cursor_contract",
+          "fencing_token"
+        ],
+        "title": "RefreshStatus",
+        "type": "object"
+      },
+      "RefreshTriggerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "backfill_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill From"
+          },
+          "backfill_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill To"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RefreshPolicy"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RefreshTriggerRequest",
+        "type": "object"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -3295,6 +4040,24 @@
           "explicit_schema_metadata"
         ],
         "title": "RemediatePropertyRequest",
+        "type": "object"
+      },
+      "ReplayRefreshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "dead_letter_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dead Letter Id"
+          }
+        },
+        "title": "ReplayRefreshRequest",
         "type": "object"
       },
       "ResolveApprovalRequest": {
@@ -3512,6 +4275,13 @@
         "title": "RevokeOntologyProjectAccessGrantRequest",
         "type": "object"
       },
+      "RollbackRequestBody": {
+        "additionalProperties": false,
+        "description": "POST /rollback-plans takes no caller-supplied fields — the execution\nto roll back is identified entirely by the path parameter, never the\nbody.\n\nKNOWN LIMITATION (2026-08-31 fix wave, Item 4): `create_rollback_plan`\ncan only succeed when the original execution's predicted diff captured a\nreal `before` image. Every plan that reaches `execute_plan` today goes\nthrough the governed bound-action path, and `create_action_plan`'s\nbound-target resolution never captures a before-image (it always sets\n`target_row: None`) — so this endpoint will currently reject every plan\nthat the real system can actually execute. It is only structurally\ncapable of succeeding for a currently-unreachable unbound-plan scenario.\nMaking rollback actually functional requires capturing a real\nbefore-image at the `_fetch_expected_version` read point in\n`execution.py`, which is a separate, larger, out-of-scope task.",
+        "properties": {},
+        "title": "RollbackRequestBody",
+        "type": "object"
+      },
       "RuleUpdate": {
         "properties": {
           "rule_key": {
@@ -3545,6 +4315,64 @@
           }
         },
         "title": "RuntimeSwitchRequest",
+        "type": "object"
+      },
+      "ScheduleUpdate": {
+        "description": "Enterprise timing controls for a connection's persisted refresh\nschedule — mirrors `schedule_service.ScheduleRequest`'s optional fields\nso `cron_expr` alone keeps behaving exactly as before.",
+        "properties": {
+          "backfill_window_seconds": {
+            "default": 0,
+            "title": "Backfill Window Seconds",
+            "type": "integer"
+          },
+          "business_calendar": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Business Calendar",
+            "type": "array"
+          },
+          "cron_expr": {
+            "title": "Cron Expr",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_pending_runs": {
+            "default": 1,
+            "title": "Max Pending Runs",
+            "type": "integer"
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
+          },
+          "sla_seconds": {
+            "default": 0,
+            "title": "Sla Seconds",
+            "type": "integer"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron_expr"
+        ],
+        "title": "ScheduleUpdate",
         "type": "object"
       },
       "SearchRequest": {
@@ -12897,7 +13725,7 @@
     },
     "/api/v2/connections/{connection_id}/schedule": {
       "post": {
-        "description": "为连接设置 Cron 调度表达式",
+        "description": "Compatibility delegate for the typed refresh schedule operation.",
         "operationId": "set_schedule_api_v2_connections__connection_id__schedule_post",
         "parameters": [
           {
@@ -12908,17 +13736,18 @@
               "title": "Connection Id",
               "type": "string"
             }
-          },
-          {
-            "in": "query",
-            "name": "cron_expr",
-            "required": true,
-            "schema": {
-              "title": "Cron Expr",
-              "type": "string"
-            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -12952,7 +13781,7 @@
     },
     "/api/v2/connections/{connection_id}/sync": {
       "post": {
-        "description": "手动触发数据同步",
+        "description": "手动触发数据同步 through the persisted refresh policy.\n\nThe compatibility response/task name is retained for valid batch and\nmicro-batch connections, but event-driven sources must use the signed\nwebhook route and can never be sent to the polling queue.",
         "operationId": "trigger_sync_api_v2_connections__connection_id__sync_post",
         "parameters": [
           {
@@ -16829,6 +17658,405 @@
         ]
       }
     },
+    "/api/v2/refresh/events/webhook/{source_id}": {
+      "post": {
+        "description": "Verify raw signed bytes before parsing and enqueue only a durable ID.",
+        "operationId": "receive_webhook_api_v2_refresh_events_webhook__source_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Webhook",
+        "tags": [
+          "v2-refresh-events"
+        ]
+      }
+    },
+    "/api/v2/refresh/health": {
+      "get": {
+        "operationId": "refresh_health_api_v2_refresh_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Health",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
+    "/api/v2/refresh/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancel_refresh_api_v2_refresh_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Refresh",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
+    "/api/v2/refresh/runs/{run_id}/replay": {
+      "post": {
+        "operationId": "replay_refresh_api_v2_refresh_runs__run_id__replay_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replay Refresh",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
+    "/api/v2/refresh/sources/{source_id}/run": {
+      "post": {
+        "operationId": "run_refresh_api_v2_refresh_sources__source_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Refresh",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
+    "/api/v2/refresh/sources/{source_id}/schedule": {
+      "get": {
+        "operationId": "get_schedule_api_v2_refresh_sources__source_id__schedule_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Schedule",
+        "tags": [
+          "v2-refresh"
+        ]
+      },
+      "put": {
+        "operationId": "update_schedule_api_v2_refresh_sources__source_id__schedule_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Schedule",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
+    "/api/v2/refresh/sources/{source_id}/status": {
+      "get": {
+        "operationId": "refresh_status_api_v2_refresh_sources__source_id__status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Status",
+        "tags": [
+          "v2-refresh"
+        ]
+      }
+    },
     "/api/v2/retention-holds": {
       "get": {
         "operationId": "list_holds_api_v2_retention_holds_get",
@@ -17068,6 +18296,542 @@
         "summary": "Activate Policy",
         "tags": [
           "v2-retention"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans": {
+      "post": {
+        "operationId": "create_action_plan_api_v2_runtime_action_plans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionPlanRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Action Plan Api V2 Runtime Action Plans Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Action Plan",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/{plan_id}": {
+      "get": {
+        "operationId": "get_action_plan_api_v2_runtime_action_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Action Plan Api V2 Runtime Action Plans  Plan Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Action Plan",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/{plan_id}/approve": {
+      "post": {
+        "operationId": "approve_plan_api_v2_runtime_action_plans__plan_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Approve Plan Api V2 Runtime Action Plans  Plan Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Plan",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/{plan_id}/execute": {
+      "post": {
+        "operationId": "execute_plan_route_api_v2_runtime_action_plans__plan_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Execute Plan Route Api V2 Runtime Action Plans  Plan Id  Execute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Execute Plan Route",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/{plan_id}/sandbox": {
+      "get": {
+        "operationId": "get_sandbox_api_v2_runtime_action_plans__plan_id__sandbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Sandbox Api V2 Runtime Action Plans  Plan Id  Sandbox Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Sandbox",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/delegation-agents": {
+      "get": {
+        "description": "List only pre-registered Runtime-capable agent metadata. Existing\nbearer credentials remain unobservable and cannot be selected or reused.",
+        "operationId": "list_delegation_agents_api_v2_runtime_delegation_agents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response List Delegation Agents Api V2 Runtime Delegation Agents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Delegation Agents",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/delegations": {
+      "post": {
+        "description": "Mint a short-lived, memory-only Runtime credential for the signed-in\nuser. The browser cannot assert or override either principal.",
+        "operationId": "issue_browser_delegation_api_v2_runtime_delegations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DelegationRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Issue Browser Delegation Api V2 Runtime Delegations Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Browser Delegation",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/execution-status/{plan_id}": {
+      "get": {
+        "operationId": "get_execution_status_api_v2_runtime_execution_status__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Execution Status Api V2 Runtime Execution Status  Plan Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Execution Status",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/executions/{execution_id}/rollback-plans": {
+      "post": {
+        "operationId": "create_rollback_plan_route_api_v2_runtime_executions__execution_id__rollback_plans_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "execution_id",
+            "required": true,
+            "schema": {
+              "title": "Execution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Rollback Plan Route Api V2 Runtime Executions  Execution Id  Rollback Plans Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Rollback Plan Route",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/investigate": {
+      "post": {
+        "operationId": "investigate_api_v2_runtime_investigate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestigationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Investigate",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/reconciliations/{reconciliation_id}": {
+      "get": {
+        "operationId": "get_reconciliation_api_v2_runtime_reconciliations__reconciliation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reconciliation_id",
+            "required": true,
+            "schema": {
+              "title": "Reconciliation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Reconciliation Api V2 Runtime Reconciliations  Reconciliation Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Reconciliation",
+        "tags": [
+          "v2-runtime"
         ]
       }
     },
