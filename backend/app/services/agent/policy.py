@@ -102,6 +102,23 @@ _RUNTIME_OPERATIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/api/v1/agent-sessions/{session_id}/application-state"): frozenset({"run"}),
     ("POST", "/api/v1/agent-sessions/{session_id}/application-state"): frozenset({"run"}),
     ("GET", "/api/v1/agent-turns/{turn_id}/audit"): frozenset({"run"}),
+    # Task 15/22/23/26 Runtime execution surface: writable-plan lifecycle
+    # operations over a managed-action-binding target. "investigate" and
+    # "action-plans" creation/read/sandbox/approve are pre-execution
+    # previews (nothing is written yet); "execute" is the one operation
+    # that actually mutates the governed target row; the rollback-plan
+    # route also only ever proposes a not-yet-executed plan (Item 4 of the
+    # 2026-08-31 fix wave: it cannot succeed for any real bound plan today,
+    # but the operation it *models* is still preview, not execution).
+    ("POST", "/api/v2/runtime/investigate"): frozenset({"preview_instance_action"}),
+    ("POST", "/api/v2/runtime/action-plans"): frozenset({"preview_instance_action"}),
+    ("GET", "/api/v2/runtime/action-plans/{plan_id}"): frozenset({"read_instances"}),
+    ("GET", "/api/v2/runtime/execution-status/{plan_id}"): frozenset({"read_instances"}),
+    ("GET", "/api/v2/runtime/action-plans/{plan_id}/sandbox"): frozenset({"preview_instance_action"}),
+    ("POST", "/api/v2/runtime/action-plans/{plan_id}/approve"): frozenset({"preview_instance_action"}),
+    ("POST", "/api/v2/runtime/action-plans/{plan_id}/execute"): frozenset({"execute_instance_action"}),
+    ("GET", "/api/v2/runtime/reconciliations/{reconciliation_id}"): frozenset({"read_instances"}),
+    ("POST", "/api/v2/runtime/executions/{execution_id}/rollback-plans"): frozenset({"preview_instance_action"}),
 }
 
 # Endpoints that operate on the design/lifecycle plane (OntologyProjectAccessGrant).
@@ -140,6 +157,17 @@ _PLATFORM_PREFIXES = (
     "/api/v2/tool-connections",
     "/api/v2/skills",
     "/health",
+    # Refresh-source orchestration (schedules, runs, webhooks) is job/worker
+    # administration over a data-source connection, not an ontology
+    # data-capability operation — same category as /api/v2/incremental and
+    # /api/v2/retention above.
+    "/api/v2/refresh",
+    # Runtime credential issuance/listing (`/delegations`, `/delegation-
+    # agents`) is identity/administration, not a data-capability operation;
+    # the writable-plan lifecycle routes under this prefix are individually
+    # classified into `_RUNTIME_OPERATIONS` above and always resolve to
+    # "runtime" before this prefix is ever consulted.
+    "/api/v2/runtime",
 )
 
 

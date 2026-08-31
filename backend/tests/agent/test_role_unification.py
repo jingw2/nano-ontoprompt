@@ -116,6 +116,30 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/correct"),
         ("POST", "/api/v1/agents/{agent_id}/memories/{memory_id}/delete"),
         ("POST", "/api/v1/agents/{agent_id}/memories/conflicts/{conflict_id}/resolve"),
+        # Task 8/21/26 Runtime execution surface: authorized by a delegated
+        # Runtime credential's scope (`_require_runtime_context`), not by the
+        # session-role editor/admin ceiling this test otherwise enforces.
+        # `investigate` only ever requires READ_SCOPE; the rest require
+        # WRITE_SCOPE minted by `POST /delegations` (see below), which itself
+        # re-checks the caller's role before it will ever mint a write-scoped
+        # credential.
+        ("POST", "/api/v2/runtime/investigate"),
+        ("POST", "/api/v2/runtime/action-plans"),
+        ("POST", "/api/v2/runtime/action-plans/{plan_id}/approve"),
+        ("POST", "/api/v2/runtime/action-plans/{plan_id}/execute"),
+        ("POST", "/api/v2/runtime/executions/{execution_id}/rollback-plans"),
+        # `issue_browser_delegation` (app/routers/v2/runtime.py) checks
+        # `role_allows(current_user.role, "editor")` in the route body before
+        # it will mint a WRITE_SCOPE-capable credential — an in-handler
+        # editor check, functionally equivalent to `require_editor` but not
+        # expressed as a dependency this test's static walk can see.
+        ("POST", "/api/v2/runtime/delegations"),
+        # `receive_webhook` (app/routers/v2/refresh_events.py) is guarded by
+        # `ManagedWebhookAdapter.verify_and_normalize`'s HMAC signature/replay
+        # check over the raw request body — an external-source authenticity
+        # proof, not a session role, since the caller is never a signed-in
+        # user.
+        ("POST", "/api/v2/refresh/events/webhook/{source_id}"),
     }
     bypasses = []
     for route in app.routes:

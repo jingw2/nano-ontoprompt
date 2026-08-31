@@ -20,6 +20,7 @@ invariants:
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -238,7 +239,7 @@ def _seed_snapshot(db, release, user, *, snapshot_id=SNAPSHOT_ID):
         source_cursor={
             "source_id": "source-binding-001", "resource": "default",
             "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
-            "opaque_value": None, "observed_at": "2026-08-30T00:00:00+00:00",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     db.add(snapshot)
