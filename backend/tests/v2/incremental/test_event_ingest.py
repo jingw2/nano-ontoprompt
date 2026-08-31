@@ -725,6 +725,47 @@ def test_webhook_duplicate_acknowledgement_precedes_schema_validation(client, db
     assert published == [first.json()["run_id"]]
 
 
+def test_webhook_route_decrypts_managed_connection_config_for_secret_ref(client, db, monkeypatch):
+    """POST /api/v2/connections (app/routers/v2/connections.py's
+    create_connection) always persists `connection.config` encrypted:
+    `{"_encrypted": encryption_service.encrypt(json.dumps(body.config))}`.
+    This test replicates that exact encryption call (rather than hand-setting
+    plaintext `connection.config`, as every other webhook test in this file
+    does) so the webhook ingress is proven against the REAL persisted shape.
+    Before the fix, `_source_secret_ref` read `connection.config` raw and
+    never found `webhook_secret_ref` inside the `_encrypted` wrapper, so
+    every managed webhook source configured through the primary Connections
+    API always 503'd."""
+    from app.services import encryption_service
+
+    db.add(Connection(
+        id="source-001", name="orders-source", kind="rest", status="active",
+        config={"_encrypted": encryption_service.encrypt(json.dumps({
+            "cursor_contract": "watermark_primary_key", "webhook_secret_ref": SECRET,
+        }))},
+    ))
+    db.add(RefreshSourceState(
+        id="state-001", source_id="source-001", resource="orders",
+        cursor_contract="watermark_primary_key", config_version=1,
+        configuration={"schema_hash": "schema-v1"}, fencing_token=0,
+    ))
+    db.commit()
+
+    from app.tasks.v2 import refresh_tasks
+
+    monkeypatch.setattr(refresh_tasks.refresh_event_task, "delay", lambda run_id: None)
+    body = _body(event_id="evt-encrypted-001")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    response = client.post(
+        "/api/v2/refresh/events/webhook/source-001",
+        content=body,
+        headers={"X-Webhook-Signature": _signature(body, timestamp=timestamp), "X-Webhook-Timestamp": timestamp},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "received"
+
+
 def test_dlq_replay_creates_new_run_and_retains_original(db):
     _source(db)
     service = EventIngestService(max_attempts=1)
