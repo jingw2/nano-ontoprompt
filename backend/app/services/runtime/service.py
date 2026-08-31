@@ -419,6 +419,8 @@ class RuntimeService:
 
         citations = [EvidenceCitation(**citation) for citation in snapshot.evidence_summary.get("citations", [])]
         rule_outcomes = [RuleOutcome(rule_id="action_eligibility", result="pass", reason_code=ReasonCode.ALLOW)]
+        evidence_citations_dump = [citation.model_dump(mode="json") for citation in citations]
+        rule_outcomes_dump = [outcome.model_dump(mode="json") for outcome in rule_outcomes]
 
         precondition_hashes = (
             snapshot.materialization_hash,
@@ -450,6 +452,13 @@ class RuntimeService:
 
         now = datetime.now(timezone.utc)
         expiry = now + timedelta(seconds=ACTION_PLAN_TTL_SECONDS)
+        # Covers every field canonical.py's independent canonical_plan_fields
+        # already treats as semantic plan input (evidence/rules/risk/policy/
+        # expiry included) — two plans differing only in, say,
+        # risk_classification or policy_decision (freshness state/lag/HITL)
+        # must never hash identically. canonical.py's function remains a
+        # separate, independently-recomputable transport-parity check; this
+        # is the persisted plan_hash's own coverage, not that function.
         plan_hash = _canonical_hash({
             "semantic_snapshot_id": snapshot.id,
             "ontology_release_id": release.id,
@@ -464,6 +473,11 @@ class RuntimeService:
             "version_hash": version_hash,
             "precondition_hashes": list(precondition_hashes),
             "idempotency_key": request.idempotency_key,
+            "evidence_citations": evidence_citations_dump,
+            "rule_outcomes": rule_outcomes_dump,
+            "risk_classification": risk_classification,
+            "policy_decision": policy_decision,
+            "expiry": expiry.isoformat(),
         })
 
         row = RuntimePlan(
@@ -474,8 +488,8 @@ class RuntimeService:
             user_id=context.principal.user_id,
             action_id=action.id,
             input_facts=input_facts,
-            evidence_citations=[citation.model_dump(mode="json") for citation in citations],
-            rule_outcomes=[outcome.model_dump(mode="json") for outcome in rule_outcomes],
+            evidence_citations=evidence_citations_dump,
+            rule_outcomes=rule_outcomes_dump,
             managed_action_binding_id=managed_action_binding_id,
             binding_version=binding_version,
             parameters=parameters,

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -421,6 +421,59 @@ def test_create_action_plan_resolves_target_and_computes_before_image_hash(db, g
     )
     assert unscoped.before_image_hash != plan.before_image_hash
     assert unscoped.plan_hash != plan.plan_hash
+
+
+def test_plan_hash_changes_when_only_freshness_driven_policy_decision_differs(
+    db, governed_snapshot, runtime_context, monkeypatch,
+):
+    """The persisted `plan_hash` (`service.py`'s `create_action_plan`) must
+    cover `policy_decision`/`risk_classification`/`evidence_citations`/
+    `rule_outcomes`/`expiry`, not just the original 13 identity/target/
+    precondition fields — otherwise two plans differing only in, say, a
+    freshness-driven HITL requirement could hash identically, weakening the
+    "exact plan hash" approval model's ability to prove exactly what a
+    human/system approved.
+
+    `SemanticSnapshot` is immutable (mutating a persisted row's
+    `source_cursor` raises `SEMANTIC_SNAPSHOT_IMMUTABLE`), so freshness is
+    varied by monkeypatching `compute_snapshot_freshness` between two
+    otherwise-IDENTICAL `create_action_plan` calls (same snapshot id,
+    release, agent, user, action, target selector, parameters, and
+    idempotency_key): the first reads fresh, the second soft-stale (still
+    ALLOWED, `stale_action="human_approved"`) — `requires_hitl` flips from
+    False to True. Every one of the 13 originally-covered fields is
+    identical between the two plans (unscoped target keeps
+    `risk_classification` constant too; `before_image_hash`/`version_hash`/
+    `precondition_hashes` never depend on freshness) — before this fix, both
+    plans hashed identically despite genuinely different policy state.
+    """
+    from app.services.runtime import service as service_module
+    from app.services.runtime.policy import FreshnessView
+
+    fresh_view = FreshnessView(state="fresh", lag_seconds=60, cursor=None, sla_status="within_sla")
+    stale_view = FreshnessView(state="stale", lag_seconds=7200, cursor=None, sla_status="breached")
+    views = iter([fresh_view, stale_view])
+    monkeypatch.setattr(service_module, "compute_snapshot_freshness", lambda *a, **k: next(views))
+
+    request = valid_plan_request()
+    fresh_plan = RuntimeService().create_action_plan(request, runtime_context, db)
+    assert fresh_plan.policy_decision["requires_hitl"] is False
+
+    stale_plan = RuntimeService().create_action_plan(request, runtime_context, db)
+    assert stale_plan.policy_decision["requires_hitl"] is True
+
+    # Every previously-covered field is identical between the two plans.
+    assert stale_plan.semantic_snapshot_id == fresh_plan.semantic_snapshot_id
+    assert stale_plan.ontology_release_id == fresh_plan.ontology_release_id
+    assert stale_plan.target_key == fresh_plan.target_key
+    assert stale_plan.parameters == fresh_plan.parameters
+    assert stale_plan.before_image_hash == fresh_plan.before_image_hash
+    assert stale_plan.version_hash == fresh_plan.version_hash
+    assert stale_plan.precondition_hashes == fresh_plan.precondition_hashes
+    assert stale_plan.risk_classification == fresh_plan.risk_classification
+    assert stale_plan.idempotency_key == fresh_plan.idempotency_key
+
+    assert stale_plan.plan_hash != fresh_plan.plan_hash
 
 
 def test_create_action_plan_rejects_ineligible_action(db, governed_snapshot, runtime_context):
