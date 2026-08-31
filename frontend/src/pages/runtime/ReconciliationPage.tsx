@@ -89,6 +89,12 @@ export default function ReconciliationPage() {
 
       {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
 
+      <p className="text-xs text-gray-500 mb-1" data-testid="rollback-limitation-notice">
+        {t(
+          'runtime.reconciliation.rollback_limitation',
+          'Rollback plans currently only succeed for a not-yet-reachable unbound-plan scenario — every plan executed through the governed bound-action path today will be denied.',
+        )}
+      </p>
       <button type="button" disabled={busy} onClick={() => void createRollback()}
         data-testid="create-rollback-plan" className="px-3 py-1.5 text-xs bg-black text-white rounded disabled:opacity-40">
         {t('runtime.reconciliation.create_rollback', 'Create rollback plan')}

@@ -107,7 +107,7 @@ from app.services.runtime.service import (
     RuntimeService,
 )
 from app.services.runtime.snapshots import SnapshotValidationError, get_snapshot
-from app.services.runtime.writers.base import FrozenActionPlan, WriterError
+from app.services.runtime.writers.base import FrozenActionPlan, WriterError, _validate_identifier
 from app.services.runtime.writers.mysql import MySQLRowWriter
 from app.services.runtime.writers.postgres import PostgresRowWriter
 
@@ -273,7 +273,22 @@ def _fetch_expected_version(
     same identifier-quoting convention as the writer it feeds. Zero or more
     than one matching row is `PRECONDITION_CONFLICT`, discovered here,
     read-only, before any write is attempted.
+
+    Every identifier interpolated into the SELECT below is re-validated with
+    the same `_validate_identifier` allowlist the writers themselves always
+    apply before building SQL (Item 7, 2026-08-31 fix wave) — this function
+    never trusts that `schema_name`/`table_name`/`version_column`/primary-key
+    column names arriving on a `ManagedActionBinding` are safe merely because
+    an earlier stage (publish-time validation in `action_bindings.py`)
+    already checked them, matching this module family's "always re-validate,
+    never trust upstream" discipline.
     """
+    for field, name in (
+        ("schema_name", schema_name), ("table_name", table_name), ("version_column", version_column),
+    ):
+        _validate_identifier(name, field=field)
+    for column, _value in primary_key_tuple:
+        _validate_identifier(column, field="primary_key_tuple")
     where_params = {f"pk__{column}": value for column, value in primary_key_tuple}
     if dialect == "postgresql":
         import psycopg2
@@ -532,6 +547,7 @@ def execute_plan(
                 "dialect": binding.dialect,
                 "affected_rows": write_receipt.affected_rows,
                 "primary_key_tuple": [list(pair) for pair in write_receipt.primary_key_tuple],
+                "expected_version": write_receipt.expected_version,
             },
         )
         _mark_execution_terminal(

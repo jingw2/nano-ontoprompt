@@ -159,6 +159,7 @@ class MySQLRowWriter:
             idempotency_key=plan.idempotency_key,
             status="committed",
             correlation_id=f"managed-write:{plan.managed_action_binding_id}:{plan.idempotency_key}",
+            expected_version=plan.expected_version,
         )
 
 

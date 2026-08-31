@@ -135,10 +135,12 @@ class FrozenActionPlan:
     (`action_bindings.py`) exactly: an ordered, server-resolved primary-key
     identity and the binding's own typed, allowlisted writable values.
     `expected_version` is the optimistic-locking precondition value a writer
-    must include in its WHERE clause alongside the primary key — the value
-    `version_column` was known to hold when this plan was frozen; a live row
-    whose `version_column` no longer matches it is, by definition, a target
-    that drifted since this plan was frozen, and must never be written to.
+    must include in its WHERE clause alongside the primary key. Since Task 26
+    this is a live read taken immediately before the write (see
+    `execution.py`'s `_fetch_expected_version`), not a value frozen when the
+    plan itself was created — a live row whose `version_column` no longer
+    matches it is, by definition, a target that changed between that read and
+    this write, and must never be written to.
     """
 
     managed_action_binding_id: str
@@ -163,7 +165,15 @@ class WriteReceipt:
     """Proof of exactly one governed row write. Never carries `credential_ref`
     or any secret value — a writer resolves a credential only to open its
     own connection, and that value is never serialized onto anything this
-    module returns, logs, or raises."""
+    module returns, logs, or raises.
+
+    `expected_version` is the same live-read optimistic-lock precondition
+    value the writer used in its WHERE clause (`FrozenActionPlan.
+    expected_version`) — carried onto the receipt, and from there into the
+    durable audit `lineage`, so the audit trail can tell which row
+    generation a given write actually applied to (distinct successive
+    writes to the same row would otherwise produce byte-identical
+    before/after/version hashes with no way to order them)."""
 
     dialect: str
     primary_key_tuple: tuple[tuple[str, str], ...]
@@ -174,6 +184,7 @@ class WriteReceipt:
     idempotency_key: str
     status: str
     correlation_id: str
+    expected_version: Any
 
 
 @runtime_checkable

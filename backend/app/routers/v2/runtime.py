@@ -85,12 +85,16 @@ def _denial_body(reason_code: str) -> dict[str, Any]:
 
 def _require_runtime_context(required_scope: str):
     """A dependency requiring a verified delegated credential (Task 13) for
-    `RUNTIME_REST_AUDIENCE` and `required_scope`. Reuses the same bearer
-    extractor and verification function `app.deps.runtime.get_runtime_context`
-    wraps, but raises the domain `RuntimeAccessError` instead of an
-    `HTTPException` so every denial — whether from credential verification or
-    from `RuntimeService` itself — is mapped to the wire exactly once, by
-    `runtime_access_error_handler` below."""
+    `RUNTIME_REST_AUDIENCE` and `required_scope`. Reuses the same
+    `runtime_bearer` extractor and `verify_delegated_credential` verification
+    function (`app.deps.runtime`/`app.services.runtime.credentials`), but
+    raises the domain `RuntimeAccessError` instead of an `HTTPException` so
+    every denial — whether from credential verification or from
+    `RuntimeService` itself — is mapped to the wire exactly once, by
+    `runtime_access_error_handler` below. (`app.deps.runtime.get_runtime_context`
+    — a dead-code dependency factory with a divergent bare-`HTTPException`
+    denial shape — was removed in the 2026-08-31 fix wave; this function has
+    always been the one Runtime routes actually use.)"""
 
     def _dependency(
         credentials: HTTPAuthorizationCredentials = Depends(runtime_bearer),
@@ -157,7 +161,19 @@ class ExecuteRequestBody(BaseModel):
 class RollbackRequestBody(BaseModel):
     """POST /rollback-plans takes no caller-supplied fields — the execution
     to roll back is identified entirely by the path parameter, never the
-    body."""
+    body.
+
+    KNOWN LIMITATION (2026-08-31 fix wave, Item 4): `create_rollback_plan`
+    can only succeed when the original execution's predicted diff captured a
+    real `before` image. Every plan that reaches `execute_plan` today goes
+    through the governed bound-action path, and `create_action_plan`'s
+    bound-target resolution never captures a before-image (it always sets
+    `target_row: None`) — so this endpoint will currently reject every plan
+    that the real system can actually execute. It is only structurally
+    capable of succeeding for a currently-unreachable unbound-plan scenario.
+    Making rollback actually functional requires capturing a real
+    before-image at the `_fetch_expected_version` read point in
+    `execution.py`, which is a separate, larger, out-of-scope task."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -502,6 +518,11 @@ def get_reconciliation(
     return _serialize_reconciliation_case(case)
 
 
+# NOTE (2026-08-31 fix wave, Item 4): despite the 201-created status code
+# below, this endpoint will currently reject every plan executed through the
+# governed bound-action path — see `RollbackRequestBody`'s docstring above
+# for why. Do not read a 201 response model here as evidence the capability
+# is generally available.
 @router.post("/executions/{execution_id}/rollback-plans", status_code=201)
 def create_rollback_plan_route(
     execution_id: str,

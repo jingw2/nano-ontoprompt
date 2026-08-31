@@ -107,6 +107,7 @@ class _FakeWriter:
                 before_image_hash=plan.before_image_hash, after_image_hash="e" * 64,
                 version_hash=plan.version_hash, idempotency_key=plan.idempotency_key,
                 status="committed", correlation_id="fake-writer-correlation",
+                expected_version=plan.expected_version,
             )
         if self.mode == "timeout":
             raise TimeoutError("simulated network partition — commit outcome unknown")
@@ -393,6 +394,36 @@ def test_automatic_execution_persists_execution_fence_row(runtime_db):
     assert stored.plan_id == receipt.plan_id
 
 
+def test_write_receipt_and_audit_lineage_carry_expected_version(runtime_db):
+    """Item 3 (2026-08-31 fix wave): `expected_version` is the live
+    optimistic-lock precondition value read immediately before the write
+    (`_fetch_expected_version`). It must reach `WriteReceipt`,
+    `RuntimeExecution.writer_receipt`, and the audit event's `lineage` — the
+    only way the durable audit trail can distinguish which row generation a
+    given write actually applied to (`before_image_hash`/`after_image_hash`/
+    `version_hash` are otherwise byte-identical across successive writes to
+    the same row)."""
+    captured_lineage: dict = {}
+
+    def _capturing_append_audit(connection, **kwargs) -> dict:
+        captured_lineage.update(kwargs.get("lineage") or {})
+        return {"id": f"audit-{uuid.uuid4()}"}
+
+    binding = _seed_baseline(runtime_db, dialect="postgresql")
+    plan = _seed_plan_and_sandbox(runtime_db, binding, before_image={"status": "pending"})
+    context = _context()
+
+    with mock.patch.object(execution_module, "_resolve_connection_url", return_value="stub://unused"), \
+            mock.patch.object(execution_module, "_fetch_expected_version", return_value=7), \
+            mock.patch.object(execution_module, "_writer_for_dialect", return_value=_FakeWriter("success")), \
+            mock.patch.object(execution_module, "append_audit", side_effect=_capturing_append_audit), \
+            mock.patch.object(execution_module, "persist_idempotency", side_effect=_fake_persist_idempotency):
+        receipt = execute_plan(runtime_db, plan_id=plan.id, presented_plan_hash=plan.plan_hash, context=context)
+
+    assert receipt.writer_receipt["expected_version"] == 7
+    assert captured_lineage["expected_version"] == 7
+
+
 def test_idempotent_retry_never_calls_the_writer_twice(runtime_db):
     """A second `execute_plan` call for the SAME already-terminal plan must
     return the existing receipt, never a fresh write — the execution fence's
@@ -437,6 +468,7 @@ class _BlockingWriter:
             before_image_hash=plan.before_image_hash, after_image_hash="e" * 64,
             version_hash=plan.version_hash, idempotency_key=plan.idempotency_key,
             status="committed", correlation_id="fake-writer-correlation",
+            expected_version=plan.expected_version,
         )
 
 
