@@ -498,6 +498,57 @@ def test_bounded_backfill_window_advances_cursor(db):
     assert result.cursor_after.watermark == "2026-08-25T12:00:00Z"
 
 
+def test_manual_trigger_reuses_active_run_but_creates_new_one_after_terminal(db):
+    """`trigger_refresh`'s idempotency lookup must only reuse a run of the
+    exact same request while that run is still ACTIVE (queued/running — see
+    `ACTIVE_RUN_STATUSES`). A duplicate request while the original run is
+    still active is truly idempotent and returns the SAME run. But once that
+    run reaches a terminal state, the identical request must create a
+    genuinely NEW run — before the fix, the server-derived idempotency key
+    matched forever regardless of status, permanently wedging manual refresh
+    for this source/resource short of bumping config_version."""
+    source = Connection(
+        id="source-001", name="orders-source", kind="rest", status="active",
+        config={"cursor_contract": "watermark_primary_key"},
+        refresh_policy="micro_batch", cursor_contract="watermark_primary_key",
+    )
+    db.add(source)
+    db.commit()
+
+    first = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert first.status == "queued"
+
+    # True idempotency: a duplicate request while the run is still active
+    # returns the SAME run, unchanged.
+    duplicate_while_active = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert duplicate_while_active.id == first.id
+
+    # Force the run to a terminal state, as a worker eventually would.
+    first.status = "succeeded"
+    first.terminal_at = NOW
+    db.commit()
+
+    second = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert second.id != first.id
+    assert second.status == "queued"
+
+    # The same true-idempotency guarantee holds for the new run too.
+    duplicate_of_second = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert duplicate_of_second.id == second.id
+
+
 def test_dlq_replay_does_not_mutate_failed_run(db):
     connector = _SourceConnector(error=RuntimeError("source unavailable"))
     _polling_source(db, connector=connector)

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.v2.connection import Connection
@@ -27,6 +27,7 @@ from app.models.v2.refresh import (
 )
 from app.schemas.refresh import RefreshError, RefreshPolicy
 from app.services.v2.incremental.contract import (
+    ACTIVE_RUN_STATUSES,
     _lock_source_state,
     _lock_or_create_source_state,
     request_refresh_cancellation,
@@ -227,7 +228,14 @@ def trigger_refresh(
     backfill_from: datetime | None, backfill_to: datetime | None,
     operator_id: str, now: datetime,
 ) -> RefreshRun:
-    """Persist one idempotent, queued run from server-owned source state."""
+    """Persist one idempotent, queued run from server-owned source state.
+
+    Idempotency only holds while a matching run is still active (queued or
+    running): a duplicate request against an active run returns that same
+    run. Once the matching run reaches a terminal state, the next request
+    creates a genuinely new run rather than replaying the stale terminal one
+    forever.
+    """
     now = _as_utc(now) or _now()
     connection = db.get(Connection, source_id)
     if connection is None:
@@ -261,19 +269,51 @@ def trigger_refresh(
     backfill_key = ""
     if backfill_from is not None or backfill_to is not None:
         backfill_key = f":{_as_utc(backfill_from).isoformat()}:{_as_utc(backfill_to).isoformat()}"
-    idempotency_key = f"manual:{source_id}:{resource}:{policy.value}{backfill_key}"
+    base_key = f"manual:{source_id}:{resource}:{policy.value}{backfill_key}"
+    # Only an ACTIVE run (queued/running — see ACTIVE_RUN_STATUSES) under this
+    # key is idempotently reused: a genuine retry of the exact same request
+    # while the original run is still in flight must return that SAME run.
+    # Once a run under this key reaches a terminal state, it must NOT be
+    # returned forever (that would permanently wedge manual refresh for this
+    # source/resource short of bumping config_version) — a fresh request
+    # creates a genuinely new run instead.
     existing = db.execute(
         select(RefreshRun).where(
             RefreshRun.source_id == source_id,
             RefreshRun.resource == resource,
             RefreshRun.config_version == state.config_version,
-            RefreshRun.idempotency_key == idempotency_key,
+            or_(
+                RefreshRun.idempotency_key == base_key,
+                RefreshRun.idempotency_key.like(f"{base_key}#%"),
+            ),
+            RefreshRun.status.in_(ACTIVE_RUN_STATUSES),
         ).order_by(RefreshRun.created_at.desc())
     ).scalars().first()
     if existing is not None:
         db.commit()
         db.refresh(existing)
         return existing
+
+    # No active run holds the base key, but a terminal run from an earlier
+    # request may still occupy it: (source_id, resource, config_version,
+    # idempotency_key) is DB-unique, so inserting a new run under the exact
+    # same base key would violate that constraint. Suffix a deterministic
+    # generation counter — derived from how many runs already used this base
+    # key — so the new attempt still gets a stable key (true idempotency for
+    # concurrent duplicates of *this* request while it is active) without
+    # colliding with the prior, now-terminal, run.
+    prior_attempts = db.execute(
+        select(func.count()).select_from(RefreshRun).where(
+            RefreshRun.source_id == source_id,
+            RefreshRun.resource == resource,
+            RefreshRun.config_version == state.config_version,
+            or_(
+                RefreshRun.idempotency_key == base_key,
+                RefreshRun.idempotency_key.like(f"{base_key}#%"),
+            ),
+        )
+    ).scalar_one()
+    idempotency_key = base_key if prior_attempts == 0 else f"{base_key}#{prior_attempts}"
 
     run = RefreshRun(
         id=str(uuid.uuid4()), source_id=source_id, resource=resource,
