@@ -124,6 +124,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Guarded dependency install
         run: cd backend && python scripts/bootstrap_backend.py
+      # Installed early (before any step collects backend/tests/) rather than
+      # only in "SDK runtime contract" below: tests/runtime/test_transport_parity.py
+      # imports ontexus_runtime at module level and is collected by plain
+      # `pytest -q` ("Backend core suites") on every matrix run, not just
+      # python-version 3.12. Installing it once here for the whole job avoids
+      # a ModuleNotFoundError wherever that file gets collected first.
+      - name: Install ontexus_runtime SDK
+        run: python -m pip install -e sdk
       - name: Migration through the guard
         run: |
           cd backend
@@ -163,10 +171,23 @@ jobs:
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
             python -m pytest -q
+      - name: Start runtime Postgres/MySQL fixtures
+        if: matrix.python-version == '3.12'
+        run: docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
       - name: Runtime release registry and acceptance gate
         if: matrix.python-version == '3.12'
+        env:
+          # Consumed directly by the dual-dialect deterministic cases (e.g.
+          # database-row-parity, execution-row-count-zero/two) that
+          # run_registered_cases.py dispatches as pytest subprocesses — those
+          # subprocesses inherit this env, and each dialect test skips
+          # (rather than fails) without it, which run_registered_cases's own
+          # assert_deterministic_report treats as a failure.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
         run: |
           python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+          python -m pytest test_data/runtime/test_fixture_manifest.py -q
           cd backend
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
@@ -174,6 +195,9 @@ jobs:
           python -m tests.runtime.run_registered_cases \
             --manifest ../test_data/runtime/manifest.json \
             --report ../artifacts/runtime/deterministic-cases.json
+      - name: Stop runtime Postgres/MySQL fixtures
+        if: always() && matrix.python-version == '3.12'
+        run: docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans
       - name: Refresh, queue, and Runtime integration gate
         if: matrix.python-version == '3.12'
         run: |
@@ -187,7 +211,6 @@ jobs:
         if: matrix.python-version == '3.12'
         run: |
           REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
-          (cd "$REPO_ROOT" && python -m pip install -e sdk)
           (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
       - name: Validate application Compose definitions
         if: matrix.python-version == '3.12'
