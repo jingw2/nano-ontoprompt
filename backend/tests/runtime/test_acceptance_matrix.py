@@ -86,6 +86,20 @@ def test_manifest_represents_all_required_release_dimensions():
     assert terminal["already_terminal"] is True
 
 
+def test_manifest_declares_all_three_cancellation_safe_point_cases():
+    """The manifest has always correctly HAD three cancellation safe-point
+    cases plus a 4th cancel-already-terminal case, but nothing asserted the
+    specific required SET of case_ids — the existing per-case-id checks
+    above only validate fields on whatever cancel-* cases HAPPEN to exist,
+    never that these three specifically exist. If one were deleted from the
+    manifest, nothing here would have caught it. This asserts the required
+    set directly so that regression is caught immediately."""
+    required = {"cancel-before-pull", "cancel-inflight-page", "cancel-after-tentative-materialization"}
+    case_ids = {case["case_id"] for case in load_cases(MANIFEST)}
+    missing = required - case_ids
+    assert not missing, f"manifest is missing required cancellation safe-point cases: {sorted(missing)}"
+
+
 def test_registry_runner_executes_every_deterministic_case_once(tmp_path):
     results = run_all_registered_cases(MANIFEST, report_path=tmp_path / "deterministic-cases.json")
     expected_ids = {case["case_id"] for case in load_cases(MANIFEST) if case["execution_mode"] == "deterministic"}
