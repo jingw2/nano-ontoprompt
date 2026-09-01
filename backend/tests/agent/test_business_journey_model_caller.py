@@ -30,6 +30,12 @@ from evals.business_journeys.contracts import (
 from evals.business_journeys.deepseek_client import DeepSeekVisionClient
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """Keep the one bounded exponential-backoff retry from actually sleeping."""
+    monkeypatch.setattr(DeepSeekVisionClient, "_sleep", staticmethod(lambda seconds: None))
+
+
 def _chat_response(model: str = MODEL_ID) -> httpx.Response:
     body = {"model": model, "choices": [{"message": {"content": json.dumps({"answer": "ok"})}}]}
     return httpx.Response(200, json=body)
@@ -192,8 +198,20 @@ def test_fourth_logical_call_exceeds_journey_budget(mock_runtime):
 
 
 # ---------------------------------------------------------------------------
-# select_journey_model_config: no provider/model/origin fallback.
+# select_journey_model_config: no provider/model/origin fallback, no stale
+# pin, and real (string, not pre-decoded) JSON column values -- exactly what
+# a raw `db.execute(text(...))` SELECT returns against this repo's SQLite
+# test database, which a fake handing back an already-`list` value would
+# never exercise.
 # ---------------------------------------------------------------------------
+
+
+class _FakeScalarResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
 
 
 class _FakeMappingResult:
@@ -213,23 +231,39 @@ class _FakeExecuteResult:
 
 
 class _FakeDb:
-    def __init__(self, row):
-        self._row = row
+    """Distinguishes the two queries `select_journey_model_config` issues,
+    the way a real SQLAlchemy session against `model_config_versions` /
+    `model_configs` would: one row lookup, one active-pin scalar check."""
 
-    def execute(self, _statement, _params=None):
+    def __init__(self, row, *, is_active: bool = True):
+        self._row = row
+        self._is_active = is_active
+
+    def execute(self, statement, _params=None):
+        sql = str(statement)
+        if "model_configs" in sql and "active_version_id" in sql:
+            return _FakeScalarResult(1 if (self._row is not None and self._is_active) else None)
         return _FakeExecuteResult(self._row)
 
 
-def test_select_journey_model_config_returns_immutable_version_on_exact_match():
-    row = {
+def _row(*, provider="deepseek", api_base=OFFICIAL_ORIGIN, model_id=MODEL_ID, contract_json=None):
+    """A fake `model_config_versions` row shaped exactly like a real raw
+    `text()` SELECT against SQLite returns it: `model_contract` comes back
+    as a JSON-encoded string, not a pre-decoded Python list."""
+    if contract_json is None:
+        contract_json = json.dumps([{"provider_model_revision": model_id}])
+    return {
         "id": "cfg-1",
-        "provider": "deepseek",
-        "api_base": OFFICIAL_ORIGIN,
-        "model_contract": [{"provider_model_revision": MODEL_ID}],
+        "provider": provider,
+        "api_base": api_base,
+        "model_contract": contract_json,
         "behavior_hash": "hash-1",
         "created_at": "2026-08-27T00:00:00Z",
     }
-    config = select_journey_model_config("cfg-1", db=_FakeDb(row))
+
+
+def test_select_journey_model_config_returns_immutable_version_on_exact_match():
+    config = select_journey_model_config("cfg-1", db=_FakeDb(_row()))
     assert config.version_id == "cfg-1"
     assert config.provider == "deepseek"
     assert config.model_id == MODEL_ID
@@ -238,44 +272,32 @@ def test_select_journey_model_config_returns_immutable_version_on_exact_match():
 
 
 def test_select_journey_model_config_rejects_model_drift():
-    row = {
-        "id": "cfg-1",
-        "provider": "deepseek",
-        "api_base": OFFICIAL_ORIGIN,
-        "model_contract": [{"provider_model_revision": "deepseek-v4-flash"}],
-        "behavior_hash": "hash-1",
-        "created_at": "2026-08-27T00:00:00Z",
-    }
+    row = _row(contract_json=json.dumps([{"provider_model_revision": "deepseek-v4-flash"}]))
     with pytest.raises(ModelConfigurationError, match="MODEL_ID_MISMATCH"):
         select_journey_model_config("cfg-1", db=_FakeDb(row))
 
 
 def test_select_journey_model_config_rejects_provider_drift():
-    row = {
-        "id": "cfg-1",
-        "provider": "openai",
-        "api_base": OFFICIAL_ORIGIN,
-        "model_contract": [{"provider_model_revision": MODEL_ID}],
-        "behavior_hash": "hash-1",
-        "created_at": "2026-08-27T00:00:00Z",
-    }
     with pytest.raises(ModelConfigurationError, match="PROVIDER_MISMATCH"):
-        select_journey_model_config("cfg-1", db=_FakeDb(row))
+        select_journey_model_config("cfg-1", db=_FakeDb(_row(provider="openai")))
 
 
 def test_select_journey_model_config_rejects_origin_drift():
-    row = {
-        "id": "cfg-1",
-        "provider": "deepseek",
-        "api_base": "https://evil.example.invalid",
-        "model_contract": [{"provider_model_revision": MODEL_ID}],
-        "behavior_hash": "hash-1",
-        "created_at": "2026-08-27T00:00:00Z",
-    }
     with pytest.raises(ModelConfigurationError, match="ORIGIN_MISMATCH"):
-        select_journey_model_config("cfg-1", db=_FakeDb(row))
+        select_journey_model_config("cfg-1", db=_FakeDb(_row(api_base="https://evil.example.invalid")))
 
 
 def test_select_journey_model_config_rejects_missing_version():
     with pytest.raises(ModelConfigurationError, match="MODEL_CONFIG_VERSION_NOT_FOUND"):
         select_journey_model_config("missing", db=_FakeDb(None))
+
+
+def test_select_journey_model_config_rejects_stale_non_active_pin():
+    with pytest.raises(ModelConfigurationError, match="MODEL_CONFIG_VERSION_NOT_ACTIVE"):
+        select_journey_model_config("cfg-1", db=_FakeDb(_row(), is_active=False))
+
+
+def test_select_journey_model_config_rejects_malformed_contract_json():
+    row = _row(contract_json="not-json")
+    with pytest.raises(ModelConfigurationError, match="MODEL_CONTRACT_MALFORMED"):
+        select_journey_model_config("cfg-1", db=_FakeDb(row))

@@ -106,11 +106,15 @@ def select_llm_model_config(
 def select_journey_model_config(version_id: str, db=None):
     """Resolve one pinned business-journey DeepSeek vision model config version.
 
-    Rejects any provider/model/origin drift and never selects another
-    provider or model in its place -- there is no fallback. Raises
-    `ModelConfigurationError` with a stable reason code on any mismatch or
-    missing version.
+    Rejects any provider/model/origin drift, never selects another provider
+    or model in its place, and rejects a stale pin (the version must be its
+    identity's current ACTIVE version) -- mirroring
+    `resolve_llm_caller_by_version`'s "no stale pins" check. Raises
+    `ModelConfigurationError` with a stable reason code on any mismatch,
+    missing version, or non-active pin. There is no fallback.
     """
+    import json as _json
+
     from sqlalchemy import text as _text
 
     from evals.business_journeys.contracts import (
@@ -135,9 +139,30 @@ def select_journey_model_config(version_id: str, db=None):
         ).mappings().one_or_none()
         if row is None:
             raise ModelConfigurationError(f"MODEL_CONFIG_VERSION_NOT_FOUND: {version_id}")
+
+        active = db.execute(
+            _text("SELECT 1 FROM model_configs WHERE active_version_id = :id LIMIT 1"),
+            {"id": version_id},
+        ).scalar_one_or_none()
+        if not active:
+            raise ModelConfigurationError(f"MODEL_CONFIG_VERSION_NOT_ACTIVE: {version_id}")
+
         if row["provider"] != "deepseek":
             raise ModelConfigurationError(f"PROVIDER_MISMATCH: {row['provider']!r}")
-        contract = row["model_contract"] or []
+
+        # `model_contract` is a JSON column; a raw `text()` SELECT (needed so
+        # this stays testable against a plain fake/dict-backed `db`, not only
+        # a real ORM session) returns it as a JSON-encoded string on SQLite,
+        # not an auto-decoded Python list -- decode explicitly rather than
+        # indexing into the raw `'['` character.
+        contract_raw = row["model_contract"]
+        if isinstance(contract_raw, str):
+            try:
+                contract = _json.loads(contract_raw) if contract_raw else []
+            except ValueError as exc:
+                raise ModelConfigurationError(f"MODEL_CONTRACT_MALFORMED: {version_id}") from exc
+        else:
+            contract = contract_raw or []
         observed_model_id = (
             contract[0].get("provider_model_revision") if contract and isinstance(contract[0], dict) else None
         )

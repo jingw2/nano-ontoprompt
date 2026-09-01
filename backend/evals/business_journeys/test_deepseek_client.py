@@ -23,6 +23,13 @@ from evals.business_journeys.contracts import (
 from evals.business_journeys.deepseek_client import DeepSeekVisionClient, validate_official_url
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """The retry loop does a real bounded exponential backoff; keep tests
+    fast by swapping in a no-op delay instead of actually sleeping."""
+    monkeypatch.setattr(DeepSeekVisionClient, "_sleep", staticmethod(lambda seconds: None))
+
+
 def _chat_response(model: str = MODEL_ID) -> httpx.Response:
     body = {"model": model, "choices": [{"message": {"content": json.dumps({"answer": "ok"})}}]}
     return httpx.Response(200, json=body)

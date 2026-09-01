@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 from urllib.parse import urlsplit
@@ -31,6 +32,8 @@ _MODELS_PATH = "/models"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _ALLOWED_HOST = "api.deepseek.com"
 _MAX_HTTP_ATTEMPTS = 2
+_BACKOFF_BASE_SECONDS = 0.5
+_BACKOFF_MAX_SECONDS = 2.0
 
 
 def validate_official_url(url: str) -> None:
@@ -42,11 +45,18 @@ def validate_official_url(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme != "https":
         raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_SCHEME_INVALID: {url}")
+    try:
+        has_port = parts.port is not None
+    except ValueError as exc:
+        # `.port` raises a raw ValueError for a non-numeric or out-of-range
+        # port (e.g. ":abc" or ":99999") instead of returning None; convert
+        # it to our typed failure so no caller can be surprised by it.
+        raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_PORT_INVALID: {url}") from exc
     if parts.username or parts.password:
         raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_USERINFO_REJECTED: {url}")
     if parts.hostname != _ALLOWED_HOST:
         raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_HOST_INVALID: {url}")
-    if parts.port is not None:
+    if has_port:
         raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_PORT_INVALID: {url}")
     if parts.query:
         raise DeepSeekEndpointError(f"DEEPSEEK_ENDPOINT_QUERY_REJECTED: {url}")
@@ -69,8 +79,17 @@ class DeepSeekVisionClient:
 
     No endpoint/model-base constructor parameter exists: the two URLs this
     client ever builds are ``OFFICIAL_ORIGIN + "/models"`` and
-    ``OFFICIAL_ORIGIN + "/chat/completions"``.
+    ``OFFICIAL_ORIGIN + "/chat/completions"``. The constructor's parameter
+    set is asserted exactly by ``test_client_has_no_endpoint_override_and_
+    uses_official_origin``, so the one bounded exponential-backoff delay
+    before the single retry is not a constructor parameter -- it is the
+    ``_sleep`` class attribute (delay computed by ``_backoff_delay_seconds``)
+    below, which a test can override (e.g. ``monkeypatch.setattr(
+    DeepSeekVisionClient, "_sleep", staticmethod(lambda seconds: None))``)
+    to stay fast without changing the public signature.
     """
+
+    _sleep = staticmethod(time.sleep)
 
     def __init__(self, api_key: str, *, timeout_seconds: float = 45.0, transport: httpx.BaseTransport | None = None) -> None:
         if not api_key:
@@ -78,6 +97,17 @@ class DeepSeekVisionClient:
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._transport = transport
+
+    @staticmethod
+    def _backoff_delay_seconds(attempt: int) -> float:
+        """Bounded exponential backoff for the delay before a retry.
+
+        ``attempt`` is the attempt number that just failed (1 for the
+        first). Only ever called once today (``_MAX_HTTP_ATTEMPTS`` is 2,
+        so there is exactly one retry), but the formula is genuinely
+        exponential, not a fixed sleep.
+        """
+        return min(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), _BACKOFF_MAX_SECONDS)
 
     def _client(self) -> httpx.Client:
         kwargs: dict[str, object] = {
@@ -157,6 +187,7 @@ class DeepSeekVisionClient:
                             http_attempts=attempt,
                         ) from exc
                     retry_count += 1
+                    self._sleep(self._backoff_delay_seconds(attempt))
                     continue
 
                 self._reject_redirect(response, url)
@@ -169,6 +200,7 @@ class DeepSeekVisionClient:
                             http_attempts=attempt,
                         )
                     retry_count += 1
+                    self._sleep(self._backoff_delay_seconds(attempt))
                     continue
 
                 if response.status_code != 200:

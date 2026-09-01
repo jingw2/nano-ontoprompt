@@ -10,6 +10,7 @@ fixture-specific.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -20,11 +21,23 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .contracts import (
     ArtifactSafetyError,
-    JourneyManifest,
     ScanResult,
     SanitizedBrowserArtifactRef,
     sha256_text,
 )
+
+# `JourneyManifest` is Task 1's real typed manifest, not a second,
+# hand-invented type here. Follow the same cross-directory import
+# convention Task 1's own `backend/tests/runtime/run_registered_cases.py`
+# uses: put `test_data/runtime` on sys.path and import the module directly
+# (it is not a package under `backend/`, so `from .contracts import ...`
+# cannot reach it).
+REPO_ROOT = Path(__file__).resolve().parents[3]
+_RUNTIME_DATA_DIR = REPO_ROOT / "test_data" / "runtime"
+if str(_RUNTIME_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_DATA_DIR))
+
+from journey_registry import JourneyManifest, load_journey_manifest  # noqa: E402
 
 SCANNER_VERSION = "1"
 
@@ -39,9 +52,6 @@ _SENSITIVE_HEADER_KEYS = {
     "set-cookie",
     "proxy-authorization",
 }
-
-_RAW_ARTIFACT_SUFFIXES = {".zip", ".png", ".jpg", ".jpeg", ".webm", ".log"}
-
 
 # ---------------------------------------------------------------------------
 # Closed schemas.
@@ -74,7 +84,7 @@ class ArtifactAllowlist(BaseModel):
     tool_trace_ids: tuple[str, ...]
     audit_event_ids: tuple[str, ...]
     backend_trace_ids: tuple[str, ...]
-    browser_artifacts: tuple[Mapping[str, object], ...] = ()
+    browser_artifacts: tuple[SanitizedBrowserArtifactRef, ...] = ()
 
 
 class ScannerFailureSummary(BaseModel):
@@ -98,25 +108,160 @@ class ScannerFailureSummary(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def build_fixture_forbidden_values(manifest: JourneyManifest) -> frozenset[str]:
-    """Union every literal value a journey fixture is willing to disclose.
+_MIN_FORBIDDEN_CELL_LENGTH = 4
 
-    Every fixture cell/document projection, prompt-injection sentinel,
-    synthetic secret/header/JWT value, PII sentinel, and production URL the
-    manifest carries becomes one forbidden string. There is no separate,
-    hand-maintained list.
+
+def _add_cell_value(values: set[str], text: str) -> None:
+    """Add one extracted cell/paragraph value, skipping anything too short to
+    be a meaningful forbidden value. A bare "S" or "256" is common enough
+    (spreadsheet codes, row counts) that treating it as forbidden would flag
+    unrelated, legitimate substrings elsewhere (e.g. inside a field name like
+    "fixture_manifest_sha256") rather than an actual echoed fixture cell."""
+    text = text.strip()
+    if len(text) >= _MIN_FORBIDDEN_CELL_LENGTH:
+        values.add(text)
+
+
+def _extract_csv_cells(path: Path) -> set[str]:
+    values: set[str] = set()
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.reader(handle):
+            for cell in row:
+                _add_cell_value(values, cell)
+    return values
+
+
+def _extract_xlsx_cells(path: Path) -> set[str]:
+    from openpyxl import load_workbook
+
+    values: set[str] = set()
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        for sheet in workbook.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                for cell in row:
+                    if cell is None:
+                        continue
+                    _add_cell_value(values, str(cell))
+    finally:
+        workbook.close()
+    return values
+
+
+def _extract_docx_text(path: Path) -> set[str]:
+    from docx import Document
+
+    values: set[str] = set()
+    document = Document(str(path))
+    for paragraph in document.paragraphs:
+        _add_cell_value(values, paragraph.text)
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                _add_cell_value(values, cell.text)
+    return values
+
+
+def _extract_input_values(entry: Mapping[str, object]) -> set[str]:
+    """Pull the real synthetic cell/paragraph content out of one fixture
+    input's referenced file (a real, existing, read-only domain source file
+    under ``test_data/...``, per ``entry["path"]``). This is the content a
+    real DeepSeek response or browser artifact could actually echo back;
+    images are skipped (no OCR here)."""
+    rel_path = str(entry.get("path", ""))
+    if not rel_path:
+        return set()
+    full_path = REPO_ROOT / rel_path
+    if not full_path.exists():
+        return set()
+    media_type = str(entry.get("media_type", ""))
+    try:
+        if media_type == "text/csv":
+            return _extract_csv_cells(full_path)
+        if media_type.endswith("spreadsheetml.sheet"):
+            return _extract_xlsx_cells(full_path)
+        if media_type.endswith("wordprocessingml.document"):
+            return _extract_docx_text(full_path)
+    except Exception:
+        # A source file this scanner cannot parse contributes no forbidden
+        # values rather than failing manifest loading.
+        return set()
+    return set()
+
+
+def _collect_dialogue_values(scenario: Mapping[str, object]) -> set[str]:
+    """Every literal string in one dialogue scenario -- the question,
+    expected keywords, dialogue id, and outcome labels -- except
+    ``citation_source_ids``. Citation IDs are excluded on purpose: they are
+    exactly the identifiers ``ArtifactAllowlist.citation_ids`` is meant to
+    legitimately disclose (the semantic validator requires a real response to
+    cite them), so forbidding them would make every passing scan impossible."""
+    values: set[str] = set()
+
+    def walk(node: object, *, skip: bool) -> None:
+        if isinstance(node, str):
+            if node and not skip:
+                values.add(node)
+        elif isinstance(node, Mapping):
+            for key, value in node.items():
+                walk(value, skip=(key == "citation_source_ids"))
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item, skip=skip)
+
+    walk(scenario, skip=False)
+    return values
+
+
+def _collect_pii_secret_sentinels(payload: object) -> set[str]:
+    """Any embedded synthetic PII/secret sentinel string found anywhere in a
+    JSON-shaped fragment (e.g. ``manifest.semantic_minima``), found via the
+    same structural patterns ``scan_artifact`` itself checks for."""
+    text = json.dumps(payload, ensure_ascii=False, default=str)
+    values: set[str] = set()
+    values.update(_EMAIL_RE.findall(text))
+    values.update(match.group(0) for match in _BEARER_RE.finditer(text))
+    values.update(_JWT_RE.findall(text))
+    return values
+
+
+def build_fixture_forbidden_values(manifest: JourneyManifest) -> frozenset[str]:
+    """Derive every forbidden value from the real, loaded Task 1 manifest.
+
+    Sources: the actual synthetic cell/paragraph content of every referenced
+    input file, every literal string in the dialogue scenarios (minus
+    citation IDs -- see ``_collect_dialogue_values``), every synthetic
+    target/hash identifier in the governance outcomes and HITL plan
+    instances, and any PII/secret-shaped string embedded in the semantic
+    minima. Governance/plan branch names (``id``/``branch``/
+    ``execution_class``/``expected_status``) are deliberately excluded: they
+    are the same small enum ``ArtifactAllowlist.state_transitions`` is meant
+    to legitimately carry (``approved``/``rejected``/``expired``/
+    ``automatic``), so forbidding them would make every passing scan
+    impossible. There is no hand-maintained literal list here.
     """
     values: set[str] = set()
-    for group in (
-        manifest.fixture_cells,
-        manifest.prompt_injection_sentinels,
-        manifest.secret_sentinels,
-        manifest.pii_sentinels,
-        manifest.production_urls,
-    ):
-        for value in group:
-            if value:
-                values.add(str(value))
+
+    for entry in manifest.inputs:
+        values.update(_extract_input_values(entry))
+
+    for scenario in manifest.dialogue_scenarios:
+        values.update(_collect_dialogue_values(scenario))
+
+    for outcome in manifest.governance_outcomes:
+        for key in ("required_plan_hash", "target_before_hash", "target_after_hash"):
+            value = outcome.get(key)
+            if isinstance(value, str) and value:
+                values.add(value)
+
+    for plan in manifest.plan_instances:
+        for key in ("target_fixture_id", "target_before_hash", "target_after_hash"):
+            value = plan.get(key)
+            if isinstance(value, str) and value:
+                values.add(value)
+
+    values.update(_collect_pii_secret_sentinels(manifest.semantic_minima))
+
     return frozenset(values)
 
 
@@ -317,17 +462,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("staging_dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--failure-summary", type=Path, required=True)
-    parser.add_argument("--manifest-sha256", required=True)
-    parser.add_argument("--journey-id", required=True)
-    parser.add_argument("--fixture-version", required=True)
+    parser.add_argument("--journey-id", required=True, choices=("supply_chain", "finance", "credit"))
+    parser.add_argument(
+        "--runtime-root",
+        type=Path,
+        default=_RUNTIME_DATA_DIR,
+        help="Root containing <journey_id>/manifest.json (defaults to test_data/runtime).",
+    )
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args(argv)
 
-    manifest = JourneyManifest(
-        journey_id=args.journey_id,
-        fixture_version=args.fixture_version,
-        manifest_sha256=args.manifest_sha256,
-    )
+    manifest = load_journey_manifest(args.journey_id, args.runtime_root)
     result = scan_and_materialize(
         args.staging_dir,
         output_dir=args.output,

@@ -14,7 +14,10 @@ import sqlite3
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Final, Literal, Mapping, Sequence
+from typing import Final, Literal, Mapping
+
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict as PydanticConfigDict
 
 MODEL_ID: Final[str] = "deepseek-v4-flash-vision-exp"
 OFFICIAL_ORIGIN: Final[str] = "https://api.deepseek.com"
@@ -179,31 +182,14 @@ class SemanticValidation:
 
 
 # ---------------------------------------------------------------------------
-# Fixture manifest (this package's own minimal shape; independent of Task 1's
-# ``test_data/runtime/journey_registry.JourneyManifest`` Python type).
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class JourneyManifest:
-    """Every literal value a journey fixture corpus is willing to disclose.
-
-    ``build_fixture_forbidden_values`` unions these tuples into the scanner's
-    forbidden-value set; nothing here is a hand-maintained scanner literal.
-    """
-
-    journey_id: str
-    fixture_version: str
-    manifest_sha256: str
-    fixture_cells: tuple[str, ...] = ()
-    prompt_injection_sentinels: tuple[str, ...] = ()
-    secret_sentinels: tuple[str, ...] = ()
-    pii_sentinels: tuple[str, ...] = ()
-    production_urls: tuple[str, ...] = ()
-
-
-# ---------------------------------------------------------------------------
 # Ledger.
+#
+# NOTE: this module deliberately does NOT define its own `JourneyManifest`.
+# The real, typed manifest is Task 1's `test_data/runtime/journey_registry.
+# JourneyManifest`; `evals.business_journeys.artifacts` imports it directly
+# (following the cross-directory import convention already established by
+# `backend/tests/runtime/run_registered_cases.py`) rather than this module
+# defining a second, incompatible shape.
 # ---------------------------------------------------------------------------
 
 
@@ -384,45 +370,24 @@ class ModelCallLedger:
 # ---------------------------------------------------------------------------
 
 
-class SanitizedBrowserArtifactRef:
+class SanitizedBrowserArtifactRef(PydanticBaseModel):
     """Redacted metadata for one browser artifact; never raw content.
 
-    A plain, closed value object (no framework dependency) so callers cannot
-    accidentally add an extra field carrying raw content.
+    A closed pydantic model (``extra="forbid"``) so no one can widen it into
+    a raw-content carrier, and so it composes directly as
+    ``ArtifactAllowlist.browser_artifacts``'s element type instead of an
+    open ``Mapping`` that would accept arbitrary keys/values.
     """
 
-    __slots__ = ("kind", "original_name_hash", "size_bytes", "content_type")
+    model_config = PydanticConfigDict(extra="forbid", frozen=True)
 
-    def __init__(self, *, kind: str, original_name_hash: str, size_bytes: int, content_type: str) -> None:
-        self.kind = kind
-        self.original_name_hash = original_name_hash
-        self.size_bytes = size_bytes
-        self.content_type = content_type
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SanitizedBrowserArtifactRef):
-            return NotImplemented
-        return (
-            self.kind == other.kind
-            and self.original_name_hash == other.original_name_hash
-            and self.size_bytes == other.size_bytes
-            and self.content_type == other.content_type
-        )
-
-    def __repr__(self) -> str:  # pragma: no cover - debug aid only
-        return (
-            f"SanitizedBrowserArtifactRef(kind={self.kind!r}, "
-            f"original_name_hash={self.original_name_hash!r}, "
-            f"size_bytes={self.size_bytes!r}, content_type={self.content_type!r})"
-        )
+    kind: str
+    original_name_hash: str
+    size_bytes: int
+    content_type: str
 
     def to_dict(self) -> Mapping[str, object]:
-        return {
-            "kind": self.kind,
-            "original_name_hash": self.original_name_hash,
-            "size_bytes": self.size_bytes,
-            "content_type": self.content_type,
-        }
+        return self.model_dump(mode="json")
 
 
 @dataclass(frozen=True)
