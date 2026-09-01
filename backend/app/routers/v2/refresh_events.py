@@ -10,6 +10,7 @@ from app.deps import get_db
 from app.models.v2.connection import Connection
 from app.models.v2.refresh import RefreshSourceState
 from app.services.v2.incremental.event_adapters import EventIngressError, ManagedWebhookAdapter
+from app.schemas.refresh import RefreshError
 from app.services.v2.incremental.event_ingest import EventIngestService
 from app.services.v2.incremental.operations import _connection_configuration
 
@@ -25,7 +26,13 @@ def _source_secret_ref(db: Session, source_id: str) -> str:
     # Reuse operations.py's decrypt-or-plaintext helper rather than reading
     # the raw `_encrypted` wrapper directly — a source whose webhook secret
     # was set via the primary Connections API would otherwise never resolve.
-    config = _connection_configuration(connection)
+    # An unreadable config is not a security-relevant guard here: it is
+    # already treated the same as "no secret configured", which falls
+    # through to the 503 below rather than accepting an unsigned webhook.
+    try:
+        config = _connection_configuration(connection)
+    except RefreshError:
+        config = {}
     secret_ref = config.get("webhook_secret_ref") or config.get("webhook_secret")
     if not secret_ref:
         state = db.query(RefreshSourceState).filter(

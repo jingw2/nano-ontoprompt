@@ -172,6 +172,18 @@ def _source_resource(
 
 
 def _connection_configuration(connection: Connection) -> dict[str, Any]:
+    """Decrypt-or-plaintext read of `Connection.config`.
+
+    Raises `RefreshError("CONNECTION_CONFIG_UNAVAILABLE", ...)` if an
+    `_encrypted` payload is present but cannot be decrypted/parsed — a
+    caller that silently treated this the same as "no configuration set"
+    would trust whatever an untrusted caller (e.g. an event envelope)
+    claims about the source instead of failing closed. Each caller decides
+    how to handle that failure: fail closed where the configuration gates
+    a security-relevant guard (see `EventIngestService.accept`), or fall
+    back to a safe default where it does not (see `_policy_for_source`,
+    `refresh_events._source_secret_ref`).
+    """
     raw = dict(connection.config or {})
     encrypted = raw.get("_encrypted")
     if encrypted:
@@ -179,8 +191,10 @@ def _connection_configuration(connection: Connection) -> dict[str, Any]:
             from app.services import encryption_service
 
             raw = json.loads(encryption_service.decrypt(encrypted))
-        except Exception:
-            raw = {}
+        except Exception as exc:
+            raise RefreshError(
+                "CONNECTION_CONFIG_UNAVAILABLE", "connection configuration could not be decrypted",
+            ) from exc
     return raw
 
 
@@ -188,7 +202,14 @@ def _policy_for_source(
     connection: Connection, state: RefreshSourceState | None,
 ) -> RefreshPolicy:
     configured = (state.configuration or {}).get("refresh_policy") if state is not None else None
-    configured = configured or connection.refresh_policy or _connection_configuration(connection).get("refresh_policy")
+    configured = configured or connection.refresh_policy
+    if not configured:
+        try:
+            configured = _connection_configuration(connection).get("refresh_policy")
+        except RefreshError:
+            # Not a security-relevant guard — an unreadable config just
+            # means no override was found; fall through to the default.
+            pass
     try:
         return RefreshPolicy(configured or RefreshPolicy.MICRO_BATCH.value)
     except ValueError as exc:

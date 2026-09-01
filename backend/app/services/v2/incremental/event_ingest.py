@@ -255,7 +255,19 @@ class EventIngestService:
             # configuration.
             from app.services.v2.incremental.operations import _connection_configuration
 
-            connection_config = _connection_configuration(connection)
+            # Fail closed: a connection with an `_encrypted` config that
+            # cannot be decrypted must never be treated the same as "no
+            # configuration set" — that would let `configured_contract`
+            # below fall through to the incoming (untrusted) envelope's own
+            # claimed contract, defining the durable baseline from
+            # attacker-controlled input. No RefreshSourceState or
+            # RefreshInboxEvent row has been created yet at this point.
+            try:
+                connection_config = _connection_configuration(connection)
+            except RefreshError as exc:
+                raise EventIngressError(
+                    "CONFIGURATION_UNAVAILABLE", "connection configuration could not be resolved",
+                ) from exc
         else:
             connection_config = {}
         configured_contract = (

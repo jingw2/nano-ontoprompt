@@ -354,6 +354,34 @@ def test_event_accept_rejects_mismatched_contract_when_connection_config_is_encr
     assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-001").count() == 0
 
 
+def test_event_accept_fails_closed_when_connection_config_cannot_be_decrypted(db):
+    """A connection whose `_encrypted` config cannot be decrypted (corrupt
+    ciphertext, key rotation, storage bit-rot) must never be treated the
+    same as "no configuration set" -- that would silently let
+    `configured_contract` fall through to whatever the incoming envelope
+    itself claims, defining the durable baseline from untrusted input.
+    `accept()` must reject the event instead, and must not create a
+    `RefreshSourceState` or `RefreshInboxEvent` row for it."""
+    db.add(Connection(
+        id="source-001", name="orders-source", kind="rest", status="active",
+        config={"_encrypted": "not-a-valid-ciphertext"},
+    ))
+    db.commit()
+
+    record = _record(event_id="evt-first")
+    record.pop("watermark")
+    record.pop("primary_key")
+    record["source_cursor"] = "opaque-001"
+    record["schema_hash"] = "a-different-schema"
+    envelope = ManagedOutboxAdapter.normalize(record, source_id="source-001", received_at=FIXED_NOW)
+
+    with pytest.raises(EventIngressError) as exc:
+        EventIngestService().accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert exc.value.reason_code == "CONFIGURATION_UNAVAILABLE"
+    assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-001").count() == 0
+    assert db.query(RefreshInboxEvent).filter(RefreshInboxEvent.source_id == "source-001").count() == 0
+
+
 def test_dispatch_pending_yields_to_a_committed_cancellation(db):
     """An operator's committed `cancel_requested` must win over publishing a
     stale event to the broker. `drain_pending` loads the run via
