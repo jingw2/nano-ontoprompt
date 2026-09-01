@@ -261,10 +261,13 @@ def materialize_snapshot(
 def _refresh_run_relates_to_dataset_versions(
     db: Session, *, run: Any, dataset_version_ids: Sequence[str],
 ) -> bool:
-    """Confirm `run` actually produced at least one of the requested dataset
+    """Confirm `run` actually produced EVERY one of the requested dataset
     versions before it is ever allowed to stamp its freshness/cursor onto
     them — an unrelated, ungoverned refresh must never be recorded as
-    silently fresh (see this module's docstring).
+    silently fresh (see this module's docstring). A partial match is not
+    enough: a request mixing one version this run produced with one it
+    never touched must still be rejected, or the unrelated version would
+    silently inherit this run's freshness/cursor.
 
     Relatedness holds either directly (`DatasetVersion.refresh_run_id`
     points at this run) or via the pipeline run this refresh recorded
@@ -278,23 +281,26 @@ def _refresh_run_relates_to_dataset_versions(
     ids = list(dataset_version_ids)
     if not ids:
         return False
+    unresolved = set(ids)
     direct = db.execute(
         select(DatasetVersion.id).where(
-            DatasetVersion.id.in_(ids),
+            DatasetVersion.id.in_(unresolved),
             DatasetVersion.refresh_run_id == run.id,
-        ).limit(1)
-    ).scalar_one_or_none()
-    if direct is not None:
+        )
+    ).scalars().all()
+    unresolved.difference_update(direct)
+    if not unresolved:
         return True
     if not run.pipeline_run_id:
         return False
     via_pipeline_run = db.execute(
-        select(PipelineRunInput.id).where(
-            PipelineRunInput.dataset_version_id.in_(ids),
+        select(PipelineRunInput.dataset_version_id).where(
+            PipelineRunInput.dataset_version_id.in_(unresolved),
             PipelineRunInput.pipeline_run_id == run.pipeline_run_id,
-        ).limit(1)
-    ).scalar_one_or_none()
-    return via_pipeline_run is not None
+        )
+    ).scalars().all()
+    unresolved.difference_update(via_pipeline_run)
+    return not unresolved
 
 
 def materialize_refresh_snapshot(

@@ -346,6 +346,30 @@ def test_unrelated_refresh_run_cannot_stamp_freshness_onto_unconnected_dataset_v
     assert snapshot.lineage_summary == {}
 
 
+def test_partially_related_dataset_version_set_cannot_stamp_freshness_either(db):
+    """A request mixing one dataset version this run actually produced with
+    one it never touched must still degrade to "unknown" -- checking only
+    that AT LEAST ONE requested version is related would let the unrelated
+    version silently inherit this run's freshness/cursor, which is exactly
+    the exploit `_refresh_run_relates_to_dataset_versions` exists to close."""
+    release = _ensure_release(db)
+    # Two independently governed dataset versions, each produced by its own
+    # distinct RefreshRun.
+    materialize_refresh_fixture(db, refresh_run_id="refresh-success-001")
+    materialize_refresh_fixture(db, refresh_run_id="refresh-success-002")
+
+    snapshot = materialize_refresh_snapshot(
+        db, refresh_run_id="refresh-success-001", ontology_release_id=release.id,
+        dataset_version_ids=["dv-refresh-success-001", "dv-refresh-success-002"],
+        created_by=USER_ID,
+    )
+
+    assert snapshot.freshness_state == "unknown"
+    assert snapshot.freshness_lag_seconds is None
+    assert snapshot.source_cursor is None
+    assert snapshot.lineage_summary == {}
+
+
 def test_get_last_successful_refresh_run_reads_the_durable_source_state_pointer(db):
     """`get_last_successful_refresh_run` must read the authoritative
     `RefreshSourceState.last_successful_run_id` pointer `record_refresh_outcome`
