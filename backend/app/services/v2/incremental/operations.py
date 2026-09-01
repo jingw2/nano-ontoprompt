@@ -158,16 +158,13 @@ def _source_resource(
     connection = db.get(Connection, source_id)
     if connection is None:
         raise RefreshError("SOURCE_NOT_FOUND", f"no source connection {source_id}")
-    raw = dict(connection.config or {})
-    # Connection configs are normally encrypted.  A persisted resource hint
-    # is optional; credentials are never accepted from this request path.
-    if raw.get("_encrypted"):
-        try:
-            from app.services import encryption_service
-
-            raw = json.loads(encryption_service.decrypt(raw["_encrypted"]))
-        except Exception:
-            raw = {}
+    # Fail closed: an `_encrypted` config that cannot be decrypted must
+    # never be silently treated as "no resource hint configured" -- that
+    # would resolve to DEFAULT_RESOURCE and let a manual refresh trigger
+    # create a RefreshSourceState/RefreshRun for the wrong resource instead
+    # of surfacing the broken configuration. Credentials are never
+    # accepted from this request path; only the resource hint is read.
+    raw = _connection_configuration(connection)
     return str(raw.get("resource") or raw.get("table") or DEFAULT_RESOURCE)
 
 

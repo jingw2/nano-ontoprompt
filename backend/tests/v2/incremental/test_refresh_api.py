@@ -179,6 +179,38 @@ def test_refresh_trigger_and_replay_are_bounded_and_idempotent(
     assert sent[1]["queue"] == "refresh.replay"
 
 
+def test_refresh_trigger_fails_closed_when_connection_config_cannot_be_decrypted(
+    client, db, operator_headers,
+):
+    """`POST /sources/{source_id}/run` resolves its `resource` via
+    `_source_resource`, which used to carry its own inline decrypt-or-
+    plaintext read of `Connection.config` and silently fall back to
+    `DEFAULT_RESOURCE` on any decrypt/JSON failure -- the same fail-open
+    bug class fixed for `EventIngestService.accept()`, just reached via
+    the manual refresh-trigger route instead of an inbound event. A
+    connection with no pre-existing `RefreshSourceState` (so
+    `_source_resource` must fall through to the connection config) and a
+    corrupt `_encrypted` payload must reject the request instead of
+    silently creating a `RefreshSourceState`/`RefreshRun` for a guessed
+    resource."""
+    db.add(Connection(
+        id="source-002", name="broken-source", kind="rest", status="active",
+        config={"_encrypted": "not-a-valid-ciphertext"},
+        refresh_policy="micro_batch", cursor_contract="watermark_primary_key",
+    ))
+    db.commit()
+
+    response = client.post(
+        "/api/v2/refresh/sources/source-002/run",
+        json={"mode": "micro_batch"}, headers=operator_headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "CONNECTION_CONFIG_UNAVAILABLE"
+    assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-002").count() == 0
+    assert db.query(RefreshRun).filter(RefreshRun.source_id == "source-002").count() == 0
+
+
 def test_refresh_cancel_persists_durable_request_and_returns_terminal_safe_state(
     client, db, refresh_source, operator_headers,
 ):
