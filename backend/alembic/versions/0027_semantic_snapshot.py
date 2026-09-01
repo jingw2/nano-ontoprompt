@@ -244,20 +244,20 @@ def upgrade() -> None:
         op.add_column("ontology_releases", sa.Column("status", sa.String(20), nullable=True))
     op.execute(
         """
-        UPDATE ontology_releases AS release
+        UPDATE ontology_releases AS rel
            SET status = CASE
              WHEN EXISTS (
                SELECT 1 FROM ontology_projects AS project
-                WHERE project.id = release.ontology_id
-                  AND project.latest_published_release_id = release.id
+                WHERE project.id = rel.ontology_id
+                  AND project.latest_published_release_id = rel.id
              ) THEN 'published'
              WHEN EXISTS (
                SELECT 1 FROM ontology_projects AS project
-               JOIN ontology_releases AS published_release
+               JOIN (SELECT id, version_no FROM ontology_releases) AS published_release
                  ON published_release.id = project.latest_published_release_id
-                WHERE project.id = release.ontology_id
+                WHERE project.id = rel.ontology_id
                   AND project.latest_published_release_id IS NOT NULL
-                  AND published_release.version_no > release.version_no
+                  AND published_release.version_no > rel.version_no
              ) THEN 'revoked'
              ELSE 'draft'
            END
@@ -303,7 +303,7 @@ def upgrade() -> None:
         sa.Column("evidence_summary", sa.JSON(), nullable=False),
         sa.Column("materialization_hash", sa.String(64), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default="materialized"),
-        sa.Column("created_by", sa.String(), nullable=False),
+        sa.Column("created_by", sa.String(36), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.PrimaryKeyConstraint("id", name="pk_semantic_snapshots"),
         sa.ForeignKeyConstraint(
@@ -335,8 +335,8 @@ def upgrade() -> None:
         "semantic_snapshot_inputs",
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("snapshot_id", sa.String(36), nullable=False),
-        sa.Column("dataset_version_id", sa.String(), nullable=False),
-        sa.Column("pipeline_run_id", sa.String(), nullable=False),
+        sa.Column("dataset_version_id", sa.String(36), nullable=False),
+        sa.Column("pipeline_run_id", sa.String(36), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.PrimaryKeyConstraint("id", name="pk_semantic_snapshot_inputs"),
         sa.ForeignKeyConstraint(

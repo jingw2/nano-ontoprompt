@@ -44,7 +44,7 @@ def _uuid_check(column: str) -> str:
     if dialect == "postgresql":
         return f"{column} ~ '{UUID_PATTERN}'"
     if dialect == "mysql":
-        return f"BINARY {column} REGEXP '{UUID_PATTERN}'"
+        return f"{column} REGEXP '{UUID_PATTERN}'"
     if dialect == "sqlite":
         return f"{column} GLOB '{UUID_GLOB}'"
     return f"length({column}) = 36"

@@ -19,6 +19,7 @@ from urllib.parse import quote
 import pytest
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Integer,
@@ -57,12 +58,14 @@ def _migration_head() -> str:
 
 
 def _pre_refresh_tables() -> MetaData:
-    """Return the small baseline needed by migrations 0022-0027.
+    """Return the small baseline needed to run migrations 0021 through head.
 
     The fixture schema is intentionally not a copy of the application
-    database. These are the v2 tables that existed before the refresh
-    contract migration; Alembic owns creation of every refresh table and all
-    Task 9 columns under test.
+    database. These are the v2/semantic/runtime-identity tables that exist
+    before revision 0021; Alembic owns creation of every refresh, snapshot,
+    and runtime table from there through head. This list must grow whenever
+    a later migration references a pre-existing table/column this fixture
+    doesn't yet define — it is not scoped to any single task's migrations.
     """
     metadata = MetaData()
     # Task 11's migration backfills OntologyRelease.status from the current
@@ -74,6 +77,10 @@ def _pre_refresh_tables() -> MetaData:
         Column("id", String(36), primary_key=True),
     )
     Table(
+        "security_domains", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    Table(
         "ontology_projects", metadata,
         Column("id", String(36), primary_key=True),
         Column("latest_published_release_id", String(36), nullable=True),
@@ -82,9 +89,30 @@ def _pre_refresh_tables() -> MetaData:
         "ontology_releases", metadata,
         Column("id", String(36), primary_key=True),
         Column("ontology_id", String(36), nullable=False),
+        Column("version_no", BigInteger, nullable=False),
         Column("manifest_bytes", LargeBinary(), nullable=False),
         Column("schema_hash", LargeBinary(), nullable=False),
         Column("created_by", String(36), nullable=False),
+    )
+    # Task 13's migration (0029) extends oauth_clients with a runtime
+    # identity contract (security_domain_id FK, allowed_audiences,
+    # capability_names); later migrations (0030, 0033) FK into it as the
+    # registered Agent/service identity.
+    Table(
+        "oauth_clients", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("client_name", String(200), nullable=False),
+        Column("redirect_uris", JSON, nullable=False),
+        Column("allowed_scopes", JSON, nullable=False),
+        Column("is_active", Boolean, nullable=False),
+        Column("created_by", String(36), nullable=False),
+    )
+    # Referenced by runtime_plans/sandbox_simulations/managed_action_bindings
+    # (0030, 0032, 0033) as the Action a writable plan proposes.
+    Table(
+        "actions", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
     )
     for table_name, columns in {
         "v2_connections": [

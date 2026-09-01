@@ -82,7 +82,7 @@ class SemanticSnapshot(Base):
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="materialized", server_default="materialized")
     created_by: Mapped[str] = mapped_column(
-        String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False,
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now,
@@ -105,10 +105,10 @@ class SemanticSnapshotInput(Base):
         String(36), ForeignKey("semantic_snapshots.id", ondelete="RESTRICT"), nullable=False,
     )
     dataset_version_id: Mapped[str] = mapped_column(
-        String, ForeignKey("v2_dataset_versions.id", ondelete="RESTRICT"), nullable=False,
+        String(36), ForeignKey("v2_dataset_versions.id", ondelete="RESTRICT"), nullable=False,
     )
     pipeline_run_id: Mapped[str] = mapped_column(
-        String, ForeignKey("v2_pipeline_runs.id", ondelete="RESTRICT"), nullable=False,
+        String(36), ForeignKey("v2_pipeline_runs.id", ondelete="RESTRICT"), nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now,

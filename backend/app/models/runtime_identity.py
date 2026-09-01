@@ -33,7 +33,7 @@ class RuntimeDelegatedCredential(Base):
     client_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("oauth_clients.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     audience: Mapped[str] = mapped_column(String(200), nullable=False)
     scope: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
