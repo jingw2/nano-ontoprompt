@@ -103,6 +103,61 @@ def select_llm_model_config(
             db.close()
 
 
+def select_journey_model_config(version_id: str, db=None):
+    """Resolve one pinned business-journey DeepSeek vision model config version.
+
+    Rejects any provider/model/origin drift and never selects another
+    provider or model in its place -- there is no fallback. Raises
+    `ModelConfigurationError` with a stable reason code on any mismatch or
+    missing version.
+    """
+    from sqlalchemy import text as _text
+
+    from evals.business_journeys.contracts import (
+        MODEL_ID,
+        OFFICIAL_ORIGIN,
+        ImmutableModelConfigVersion,
+        ModelConfigurationError,
+    )
+
+    owns_db = db is None
+    if owns_db:
+        from app.database import SessionLocal
+
+        db = SessionLocal()
+    try:
+        row = db.execute(
+            _text(
+                "SELECT id, provider, api_base, model_contract, behavior_hash, created_at "
+                "FROM model_config_versions WHERE id = :id"
+            ),
+            {"id": version_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise ModelConfigurationError(f"MODEL_CONFIG_VERSION_NOT_FOUND: {version_id}")
+        if row["provider"] != "deepseek":
+            raise ModelConfigurationError(f"PROVIDER_MISMATCH: {row['provider']!r}")
+        contract = row["model_contract"] or []
+        observed_model_id = (
+            contract[0].get("provider_model_revision") if contract and isinstance(contract[0], dict) else None
+        )
+        if observed_model_id != MODEL_ID:
+            raise ModelConfigurationError(f"MODEL_ID_MISMATCH: {observed_model_id!r}")
+        if row["api_base"] != OFFICIAL_ORIGIN:
+            raise ModelConfigurationError(f"ORIGIN_MISMATCH: {row['api_base']!r}")
+        return ImmutableModelConfigVersion(
+            version_id=row["id"],
+            provider="deepseek",
+            model_id=MODEL_ID,
+            origin=OFFICIAL_ORIGIN,
+            behavior_hash=row["behavior_hash"],
+            frozen_at=row["created_at"],
+        )
+    finally:
+        if owns_db:
+            db.close()
+
+
 def llm_call_kwargs(model_config, db=None) -> dict | None:
     if not model_config:
         return None
