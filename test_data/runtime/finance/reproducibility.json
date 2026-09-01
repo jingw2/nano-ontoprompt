@@ -1,0 +1,8 @@
+{
+  "canonical_serialization": "json.dumps(sort_keys=True, indent=2, ensure_ascii=False) + trailing newline",
+  "fixture_version": "2026-08-27.1",
+  "generated_at": "2026-08-26T00:00:00Z",
+  "manifest_sha256": "9f426b310c7e1f0bd6d479b192572aadfafd6a51cf6c0146ff87e0791ddb4831",
+  "regenerate_command": "python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output <dir>",
+  "seed": 20260826
+}

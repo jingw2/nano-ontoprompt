@@ -28,11 +28,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import registry  # noqa: E402
+import journey_registry  # noqa: E402
 
 MANIFEST_VERSION = 1
 FIXED_NOW = "2026-08-26T00:00:00Z"
 TENANTS = ["tenant-acme", "tenant-beta"]
 REQUIRED_CASE_FIELDS = ("case_id", "expected", "coverage", "layers", "test_targets")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+JOURNEY_FIXTURE_VERSION = "2026-08-27.1"
 
 # ---------------------------------------------------------------------------
 # Case catalog
@@ -259,6 +263,383 @@ def _journey_cases(seed: int) -> list[dict]:
             )
         )
     return cases
+
+
+# ---------------------------------------------------------------------------
+# Business journey corpora (test_data/runtime/{supply_chain,finance,credit}/)
+#
+# The three legacy `journey-*` cases above are a pre-existing, separately
+# tested placeholder (backend/tests/runtime/test_registered_case_execution.py
+# asserts `journey-supply-chain` is real_model_browser and excluded from the
+# deterministic runner) and are left untouched. The functions below build the
+# real, versioned, 15-case-per-journey corpus that `journey_registry.py`
+# reads from test_data/runtime/<journey_id>/*.json -- a separate namespace
+# from the generic manifest.json cases above, so case IDs like
+# "edge-empty-result" can repeat once per journey without colliding.
+# ---------------------------------------------------------------------------
+
+# (kind, media_type, repo-relative path, fixture_id) per journey. The image
+# entry is a pre-rendered (not regenerated here) page-1 PNG derived from the
+# corresponding PDF using this repository's own PDF-to-image tooling
+# (app/services/v2/pipeline/steps/document_to_md.py's PyMuPDF renderer) --
+# never pdftoppm, since this repository does not depend on Poppler.
+JOURNEY_SOURCE_FILES: dict[str, list[tuple[str, str, str, str]]] = {
+    "supply_chain": [
+        ("tabular", "text/csv", "test_data/供应链/inventory_transactions.csv", "input-supply_chain-inventory-transactions-csv"),
+        (
+            "tabular",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "test_data/供应链/supplier_database.xlsx",
+            "input-supply_chain-supplier-database-xlsx",
+        ),
+        (
+            "document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "test_data/供应链/procurement_policy.docx",
+            "input-supply_chain-procurement-policy-docx",
+        ),
+        (
+            "image",
+            "image/png",
+            "test_data/runtime/supply_chain/warehouse_management_page1.png",
+            "input-supply_chain-warehouse-management-page1-png",
+        ),
+    ],
+    "finance": [
+        (
+            "tabular",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "test_data/财务/financial_data.xlsx",
+            "input-finance-financial-data-xlsx",
+        ),
+        ("tabular", "text/csv", "test_data/财务/cash_flow.csv", "input-finance-cash-flow-csv"),
+        ("tabular", "text/csv", "test_data/财务/expense_reports.csv", "input-finance-expense-reports-csv"),
+        (
+            "document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "test_data/财务/month_end_close.docx",
+            "input-finance-month-end-close-docx",
+        ),
+        ("image", "image/png", "test_data/runtime/finance/audit_report_page1.png", "input-finance-audit-report-page1-png"),
+    ],
+    "credit": [
+        ("tabular", "text/csv", "test_data/信贷/贷款申请记录.csv", "input-credit-loan-applications-csv"),
+        ("tabular", "text/csv", "test_data/信贷/客户档案信息.csv", "input-credit-customer-profiles-csv"),
+        ("tabular", "text/csv", "test_data/信贷/还款流水.csv", "input-credit-repayment-ledger-csv"),
+        (
+            "document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "test_data/信贷/风控审批政策.docx",
+            "input-credit-risk-approval-policy-docx",
+        ),
+        (
+            "image",
+            "image/png",
+            "test_data/runtime/credit/贷后催收报告_page1.png",
+            "input-credit-collection-report-page1-png",
+        ),
+    ],
+}
+
+# The original PDF each journey's rendered page-1 PNG is derived from, kept
+# only as a hashed source_ref (never uploaded, never re-copied).
+JOURNEY_PDF_SOURCE: dict[str, str] = {
+    "supply_chain": "test_data/供应链/warehouse_management.pdf",
+    "finance": "test_data/财务/audit_report.pdf",
+    "credit": "test_data/信贷/贷后催收报告.pdf",
+}
+
+JOURNEY_CITATION_IDS: dict[str, list[str]] = {
+    "supply_chain": ["input-supply_chain-inventory-transactions-csv", "input-supply_chain-procurement-policy-docx"],
+    "finance": ["input-finance-expense-reports-csv", "input-finance-month-end-close-docx"],
+    "credit": ["input-credit-loan-applications-csv", "input-credit-risk-approval-policy-docx"],
+}
+
+JOURNEY_NUMERIC_PREDICATES: dict[str, dict[str, float]] = {
+    "supply_chain": {"safety_stock_threshold_units": 20, "below_safety_stock_supplier_count_min": 1},
+    "finance": {"expense_budget_limit_cny": 50000, "duplicate_invoice_amount_tolerance_cny": 0.01},
+    "credit": {"credit_score_limit": 600, "credit_limit_increase_cap_cny": 20000},
+}
+
+JOURNEY_DIALOGUE_QUESTIONS: dict[str, str] = {
+    "supply_chain": "Which suppliers are below safety stock, and what purchase order action do you recommend?",
+    "finance": "Which expenses exceed the accounting period budget, and what journal entry do you recommend?",
+    "credit": "Which loan applications exceed the credit score limit, and what credit limit action do you recommend?",
+}
+
+# case_id -> the assertion text from the plan's case matrix table, used only
+# as documentation inside `expected["assertion"]`.
+JOURNEY_CASE_ASSERTIONS: dict[str, str] = {
+    "normal-pipeline-release": (
+        "Non-empty Pipeline, approved Curated rows, semantic minima, published release, MCP grant, "
+        "browser-created Agent binding, cited answer, exactly one tool round, automatic Sandbox receipt, "
+        "and high-risk plan available."
+    ),
+    "edge-empty-result": "No-match investigation is an explicit empty result with no invented entity or write.",
+    "edge-duplicate-or-missing": (
+        "Duplicate entities/invoices/applications are deduplicated; missing policy field is an explicit "
+        "quality/semantic result."
+    ),
+    "security-no-grant": (
+        "Missing, expired, revoked, cross-tenant, or unauthorized grant is denied without protected data or write."
+    ),
+    "security-stale-release": "Stale release/snapshot and caller/domain mismatch fail closed with no target mutation.",
+    "security-prompt-injection": (
+        "Prompt-injection text in an input document cannot change policy, expose data, or create an "
+        "unapproved action."
+    ),
+    "resilience-timeout-retry": "One timeout retry succeeds or the second retry fails; no third attempt/logical call.",
+    "resilience-429-retry": "One 429 retry succeeds or the second 429 fails; no third attempt/logical call.",
+    "resilience-provider-error": "Non-retryable provider error has one HTTP attempt and a typed failure.",
+    "resilience-mcp-timeout": "MCP timeout produces traceable failure and no duplicate write.",
+    "resilience-sse-reconnect": "SSE disconnect/reconnect preserves one turn, one tool round, and idempotent durable state.",
+    "writeback-automatic": "Low-risk reversible label/Sandbox action is automatic, audited, receipted, and reversible.",
+    "writeback-hitl-approved": "Exact immutable plan is approved and writes only the isolated target with a receipt.",
+    "writeback-hitl-rejected": "Rejection records the decision and leaves target before/after hashes identical.",
+    "writeback-hitl-expired": "Expiry records the decision and leaves target before/after hashes identical.",
+}
+
+# case_id -> risk_class (JourneyCase.risk_class, distinct from the generic
+# corpus's registry.RISK_CLASSES which has no "expired" tier).
+_JOURNEY_CASE_RISK_CLASS: dict[str, str] = {
+    "writeback-hitl-approved": "human_approved",
+    "writeback-hitl-rejected": "rejected",
+    "writeback-hitl-expired": "expired",
+}
+
+
+def _journey_source_hash(rel_path: str) -> str:
+    return _sha256((REPO_ROOT / rel_path).read_bytes())
+
+
+def build_journey_inputs(journey_id: str) -> dict:
+    inputs = []
+    input_hashes: dict[str, str] = {}
+    source_refs = []
+    for kind, media_type, rel_path, fixture_id in JOURNEY_SOURCE_FILES[journey_id]:
+        sha = _journey_source_hash(rel_path)
+        entry: dict[str, Any] = {
+            "kind": kind,
+            "media_type": media_type,
+            "path": rel_path,
+            "sha256": sha,
+            "fixture_id": fixture_id,
+        }
+        if kind == "image":
+            pdf_path = JOURNEY_PDF_SOURCE[journey_id]
+            entry["derived_from"] = pdf_path
+            entry["derived_from_sha256"] = _journey_source_hash(pdf_path)
+        inputs.append(entry)
+        input_hashes[fixture_id] = sha
+        source_refs.append({"path": rel_path, "sha256": sha})
+
+    pdf_path = JOURNEY_PDF_SOURCE[journey_id]
+    source_refs.append({"path": pdf_path, "sha256": _journey_source_hash(pdf_path)})
+    return {"inputs": inputs, "source_refs": source_refs, "input_hashes": input_hashes}
+
+
+def build_journey_semantic_minima(journey_id: str) -> dict:
+    minima = journey_registry.JOURNEY_MINIMA[journey_id]
+    return {
+        "entities": minima["entities"],
+        "relations": minima["relations"],
+        "rules": minima["rules"],
+        "actions": minima["actions"],
+        "keywords": minima["keywords"],
+        "low_risk_action": minima["low_risk_action"],
+        "high_risk_action": minima["high_risk_action"],
+        "source_citation_ids": JOURNEY_CITATION_IDS[journey_id],
+        "numeric_predicates": JOURNEY_NUMERIC_PREDICATES[journey_id],
+    }
+
+
+def build_journey_dialogues(journey_id: str) -> dict:
+    minima = journey_registry.JOURNEY_MINIMA[journey_id]
+    scenario = {
+        "dialogue_id": f"{journey_id}-governed-dialogue",
+        "question": JOURNEY_DIALOGUE_QUESTIONS[journey_id],
+        "expected_keywords": minima["keywords"],
+        "citation_source_ids": JOURNEY_CITATION_IDS[journey_id],
+        "normal_outcome": {"decision": "ALLOW", "risk_class": "automatic", "action": minima["low_risk_action"]},
+        "high_risk_outcome": {
+            "decision": "ALLOW",
+            "risk_class": "human_approved",
+            "action": minima["high_risk_action"],
+        },
+    }
+    return {"dialogue_scenarios": [scenario]}
+
+
+def build_journey_governance(journey_id: str, seed: int) -> dict:
+    def h(label: str) -> str:
+        return hashlib.sha256(f"{seed}:{journey_id}:{label}".encode("utf-8")).hexdigest()
+
+    automatic_before, automatic_after = h("automatic-before"), h("automatic-after")
+    approved_before, approved_after = h("approved-before"), h("approved-after")
+    rejected_hash = h("rejected-target")
+    expired_hash = h("expired-target")
+
+    governance_outcomes = [
+        {
+            "id": "automatic",
+            "execution_class": "automatic",
+            "expected_status": "succeeded",
+            "target_before_hash": automatic_before,
+            "target_after_hash": automatic_after,
+            "must_write": True,
+            "required_plan_hash": None,
+        },
+        {
+            "id": "approved",
+            "execution_class": "human_approved",
+            "expected_status": "succeeded",
+            "target_before_hash": approved_before,
+            "target_after_hash": approved_after,
+            "must_write": True,
+            "required_plan_hash": h("approved-plan-hash"),
+        },
+        {
+            "id": "rejected",
+            "execution_class": "human_approved",
+            "expected_status": "rejected",
+            "target_before_hash": rejected_hash,
+            "target_after_hash": rejected_hash,
+            "must_write": False,
+            "required_plan_hash": h("rejected-plan-hash"),
+        },
+        {
+            "id": "expired",
+            "execution_class": "human_approved",
+            "expected_status": "expired",
+            "target_before_hash": expired_hash,
+            "target_after_hash": expired_hash,
+            "must_write": False,
+            "required_plan_hash": h("expired-plan-hash"),
+        },
+    ]
+    plan_instances = [
+        {
+            "branch": "approved",
+            "target_fixture_id": f"target-{journey_id}-approved",
+            "expected_status": "succeeded",
+            "must_write": True,
+            "target_before_hash": approved_before,
+            "target_after_hash": approved_after,
+        },
+        {
+            "branch": "rejected",
+            "target_fixture_id": f"target-{journey_id}-rejected",
+            "expected_status": "rejected",
+            "must_write": False,
+            "target_before_hash": rejected_hash,
+            "target_after_hash": rejected_hash,
+        },
+        {
+            "branch": "expired",
+            "target_fixture_id": f"target-{journey_id}-expired",
+            "expected_status": "expired",
+            "must_write": False,
+            "target_before_hash": expired_hash,
+            "target_after_hash": expired_hash,
+        },
+    ]
+    return {"governance_outcomes": governance_outcomes, "plan_instances": plan_instances}
+
+
+def build_journey_case_matrix(
+    journey_id: str, journey_hash: str, governance_doc: dict
+) -> dict:
+    outcomes_by_id = {outcome["id"]: outcome for outcome in governance_doc["governance_outcomes"]}
+    cases = []
+    for case_id in journey_registry.CASE_IDS:
+        risk_class = _JOURNEY_CASE_RISK_CLASS.get(case_id, "automatic")
+        fixture_hashes: dict[str, str] = {"input_manifest_sha256": journey_hash}
+        outcome_id = {
+            "normal-pipeline-release": "automatic",
+            "writeback-automatic": "automatic",
+            "writeback-hitl-approved": "approved",
+            "writeback-hitl-rejected": "rejected",
+            "writeback-hitl-expired": "expired",
+        }.get(case_id)
+        if outcome_id is not None:
+            outcome = outcomes_by_id[outcome_id]
+            fixture_hashes["target_before_hash"] = outcome["target_before_hash"]
+            fixture_hashes["target_after_hash"] = outcome["target_after_hash"]
+
+        if case_id == journey_registry.NORMAL_CASE_ID:
+            execution_mode = "real_model_browser"
+            target = journey_registry.browser_target(journey_id).to_dict()
+        else:
+            execution_mode = "deterministic"
+            target = journey_registry.DETERMINISTIC_CASE_TARGETS[case_id].to_dict()
+
+        cases.append(
+            {
+                "case_id": case_id,
+                "journey_id": journey_id,
+                "coverage": [f"business_journey.{journey_id}.{case_id.replace('-', '_')}"],
+                "expected": {"assertion": JOURNEY_CASE_ASSERTIONS[case_id]},
+                "layers": ["business_journey"],
+                "fixture_manifest_sha256": journey_hash,
+                "risk_class": risk_class,
+                "fixture_hashes": fixture_hashes,
+                "execution_mode": execution_mode,
+                "skip_allowed": False,
+                "test_targets": [target],
+            }
+        )
+    return {"cases": cases}
+
+
+def build_journey_manifest_doc(journey_id: str, seed: int) -> dict:
+    return {
+        "schema_version": 1,
+        "journey_id": journey_id,
+        "fixture_version": JOURNEY_FIXTURE_VERSION,
+        "seed": seed,
+        "model_id": registry.JOURNEY_MODEL_ID,
+        "logical_model_calls": 3,
+        "max_tool_rounds_per_turn": 1,
+        "max_http_attempts": 6,
+    }
+
+
+def build_journey_reproducibility(seed: int, journey_hash: str) -> dict:
+    return {
+        "seed": seed,
+        "fixture_version": JOURNEY_FIXTURE_VERSION,
+        "manifest_sha256": journey_hash,
+        "canonical_serialization": "json.dumps(sort_keys=True, indent=2, ensure_ascii=False) + trailing newline",
+        "generated_at": FIXED_NOW,
+        "regenerate_command": f"python test_data/runtime/generate_runtime_fixtures.py --seed {seed} --output <dir>",
+    }
+
+
+def build_journey_corpus(journey_id: str, seed: int) -> dict[str, dict]:
+    """Build the 7 JSON documents for one journey's fixture corpus."""
+
+    inputs_doc = build_journey_inputs(journey_id)
+    minima_doc = build_journey_semantic_minima(journey_id)
+    dialogues_doc = build_journey_dialogues(journey_id)
+    governance_doc = build_journey_governance(journey_id, seed)
+    journey_hash = journey_registry.compute_corpus_hash(inputs_doc, minima_doc, dialogues_doc, governance_doc)
+
+    return {
+        f"{journey_id}/manifest.json": build_journey_manifest_doc(journey_id, seed),
+        f"{journey_id}/inputs.json": inputs_doc,
+        f"{journey_id}/semantic_minima.json": minima_doc,
+        f"{journey_id}/dialogues.json": dialogues_doc,
+        f"{journey_id}/governance.json": governance_doc,
+        f"{journey_id}/case_matrix.json": build_journey_case_matrix(journey_id, journey_hash, governance_doc),
+        f"{journey_id}/reproducibility.json": build_journey_reproducibility(seed, journey_hash),
+    }
+
+
+def build_all_journey_corpora(seed: int) -> dict[str, dict]:
+    files: dict[str, dict] = {}
+    for journey_id in journey_registry.JOURNEY_IDS:
+        files.update(build_journey_corpus(journey_id, seed))
+    return files
 
 
 def build_case_defs(seed: int) -> list[dict]:
@@ -619,6 +1000,34 @@ Refresh runs (`RefreshRun.status`) move through
 `cancel-after-tentative-materialization` in `manifest.json` exercise the
 three safe points above; each has `cancel_outcome: "cancelled"` and
 `cursor_outcome: "unchanged"`.
+
+## Business journey corpora
+
+`supply_chain/`, `finance/`, and `credit/` are separate, versioned fixture
+corpora for the real-model business journey acceptance plan
+(`docs/superpowers/plans/2026-08-27-real-model-business-journeys-implementation.md`).
+Each journey directory holds seven files: `manifest.json` (schema/seed/model
+scalars), `inputs.json` (hashed, repository-relative references to existing
+`test_data/供应链|财务|信贷/` source files plus one deterministically rendered
+PDF-page-1 PNG -- never a copy of source bytes), `semantic_minima.json`
+(required entities/relations/rules/actions/keywords), `dialogues.json` (one
+governed dialogue with a normal and a high-risk outcome), `governance.json`
+(the `automatic`/`approved`/`rejected`/`expired` outcomes and their three
+`plan_instances`), `case_matrix.json` (the 15 exact cases from the plan's
+case matrix table), and `reproducibility.json` (the seed and a canonical
+content hash). `journey_registry.py` -- a separate module from `registry.py`
+-- is the authoritative loader/validator (`load_journey_manifest`,
+`validate_journey_manifest`, `journey_cases`, `assert_journey_case`) for this
+corpus; case IDs like `edge-empty-result` repeat once per journey by design,
+so they live in each journey's own `case_matrix.json` rather than the shared
+`manifest.json` cases list. Only each journey's `normal-pipeline-release`
+case is `execution_mode: "real_model_browser"`; the other 14 are
+deterministic and reuse the closest already-passing pytest node that proves
+the same governed-runtime property (see `journey_registry.py`'s
+`DETERMINISTIC_CASE_TARGETS` for the full, disclosed mapping). The rendered
+PNGs are produced once with this repository's own PyMuPDF-based PDF-to-image
+renderer (`app/services/v2/pipeline/steps/document_to_md.py`), not
+regenerated by this script, and are hashed like any other static input.
 """
 
 
@@ -649,6 +1058,8 @@ def generate(seed: int, output_dir: Path) -> dict:
     (output_dir / "fixtures").mkdir(parents=True, exist_ok=True)
     (output_dir / "db" / "postgres").mkdir(parents=True, exist_ok=True)
     (output_dir / "db" / "mysql").mkdir(parents=True, exist_ok=True)
+    for journey_id in journey_registry.JOURNEY_IDS:
+        (output_dir / journey_id).mkdir(parents=True, exist_ok=True)
 
     case_defs = build_case_defs(seed)
     cases = [_finalize_case(case) for case in case_defs]
@@ -665,6 +1076,7 @@ def generate(seed: int, output_dir: Path) -> dict:
     json_files: dict[str, dict] = {
         **build_fixture_files(cases),
         "playwright_seed.json": build_playwright_seed(),
+        **build_all_journey_corpora(seed),
     }
 
     files: dict[str, str] = {}

@@ -1,0 +1,66 @@
+{
+  "governance_outcomes": [
+    {
+      "execution_class": "automatic",
+      "expected_status": "succeeded",
+      "id": "automatic",
+      "must_write": true,
+      "required_plan_hash": null,
+      "target_after_hash": "d0e15f8b7d994046d322fd08c6e5ce177dcf3b107b3798fdd6a321a6d339108d",
+      "target_before_hash": "b1a23288828e57002619f7756344368a25320a7459a889907d68fcfa9a389454"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "succeeded",
+      "id": "approved",
+      "must_write": true,
+      "required_plan_hash": "d0d1c39254713923fddc730830bf116111b76b98dd2d2e99272a933d898d185d",
+      "target_after_hash": "90b856fd050873687482b9a0dba3d96ca6b9e099d3a0d1363a860316e49330eb",
+      "target_before_hash": "7c69711c7da37fede036fc1133a5a221d7db524a6b0101b771f1cee137f8f9f7"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "rejected",
+      "id": "rejected",
+      "must_write": false,
+      "required_plan_hash": "e91a3942d0850439d96b88bb8197b7043052669fae562ef48ecb52675f65aa7c",
+      "target_after_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3",
+      "target_before_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "expired",
+      "id": "expired",
+      "must_write": false,
+      "required_plan_hash": "031aae1de9aa2af7fc4019c3b39e81e1c29124dd5652127e8e482f8affec5c16",
+      "target_after_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f",
+      "target_before_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f"
+    }
+  ],
+  "plan_instances": [
+    {
+      "branch": "approved",
+      "expected_status": "succeeded",
+      "must_write": true,
+      "target_after_hash": "90b856fd050873687482b9a0dba3d96ca6b9e099d3a0d1363a860316e49330eb",
+      "target_before_hash": "7c69711c7da37fede036fc1133a5a221d7db524a6b0101b771f1cee137f8f9f7",
+      "target_fixture_id": "target-credit-approved"
+    },
+    {
+      "branch": "rejected",
+      "expected_status": "rejected",
+      "must_write": false,
+      "target_after_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3",
+      "target_before_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3",
+      "target_fixture_id": "target-credit-rejected"
+    },
+    {
+      "branch": "expired",
+      "expected_status": "expired",
+      "must_write": false,
+      "target_after_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f",
+      "target_before_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f",
+      "target_fixture_id": "target-credit-expired"
+    }
+  ]
+}

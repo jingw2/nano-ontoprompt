@@ -1,0 +1,419 @@
+{
+  "cases": [
+    {
+      "case_id": "normal-pipeline-release",
+      "coverage": [
+        "business_journey.supply_chain.normal_pipeline_release"
+      ],
+      "execution_mode": "real_model_browser",
+      "expected": {
+        "assertion": "Non-empty Pipeline, approved Curated rows, semantic minima, published release, MCP grant, browser-created Agent binding, cited answer, exactly one tool round, automatic Sandbox receipt, and high-risk plan available."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "target_after_hash": "808982109159e3da01d9c3587d3a8936bfd32e7066b0a0bc627435c48e42639f",
+        "target_before_hash": "f755608ca1f329d456528eb85ae2a7af7562eed624a38e2b4cea13efe7dd1f76"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "playwright",
+          "path": "frontend/src/test/e2e/business-journeys.spec.ts",
+          "selector": "supply chain journey completes the governed browser loop"
+        }
+      ]
+    },
+    {
+      "case_id": "edge-empty-result",
+      "coverage": [
+        "business_journey.supply_chain.edge_empty_result"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "No-match investigation is an explicit empty result with no invented entity or write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_api.py",
+          "selector": "test_investigate_api_returns_empty_allow_for_no_match"
+        }
+      ]
+    },
+    {
+      "case_id": "edge-duplicate-or-missing",
+      "coverage": [
+        "business_journey.supply_chain.edge_duplicate_or_missing"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Duplicate entities/invoices/applications are deduplicated; missing policy field is an explicit quality/semantic result."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_materialization.py",
+          "selector": "test_collect_lineage_returns_sorted_deduplicated_ids_and_safe_summaries"
+        }
+      ]
+    },
+    {
+      "case_id": "security-no-grant",
+      "coverage": [
+        "business_journey.supply_chain.security_no_grant"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Missing, expired, revoked, cross-tenant, or unauthorized grant is denied without protected data or write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_credentials.py",
+          "selector": "test_invalid_delegation_is_structured_denial[missing]"
+        }
+      ]
+    },
+    {
+      "case_id": "security-stale-release",
+      "coverage": [
+        "business_journey.supply_chain.security_stale_release"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Stale release/snapshot and caller/domain mismatch fail closed with no target mutation."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_freshness.py",
+          "selector": "test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"
+        }
+      ]
+    },
+    {
+      "case_id": "security-prompt-injection",
+      "coverage": [
+        "business_journey.supply_chain.security_prompt_injection"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Prompt-injection text in an input document cannot change policy, expose data, or create an unapproved action."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_untrusted_artifact.py",
+          "selector": "test_strips_script_tags"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-timeout-retry",
+      "coverage": [
+        "business_journey.supply_chain.resilience_timeout_retry"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "One timeout retry succeeds or the second retry fails; no third attempt/logical call."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_playwright_adapter.py",
+          "selector": "test_browse_page_evaluate_timeout_maps_to_playwright_timeout"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-429-retry",
+      "coverage": [
+        "business_journey.supply_chain.resilience_429_retry"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "One 429 retry succeeds or the second 429 fails; no third attempt/logical call."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_service.py",
+          "selector": "test_idempotent_retry_never_calls_the_writer_twice"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-provider-error",
+      "coverage": [
+        "business_journey.supply_chain.resilience_provider_error"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Non-retryable provider error has one HTTP attempt and a typed failure."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_mcp_client.py",
+          "selector": "test_call_tool_surfaces_protocol_error"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-mcp-timeout",
+      "coverage": [
+        "business_journey.supply_chain.resilience_mcp_timeout"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "MCP timeout produces traceable failure and no duplicate write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_mcp_client.py",
+          "selector": "test_call_tool_wraps_ssrf_block"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-sse-reconnect",
+      "coverage": [
+        "business_journey.supply_chain.resilience_sse_reconnect"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "SSE disconnect/reconnect preserves one turn, one tool round, and idempotent durable state."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_event_stream.py",
+          "selector": "test_stream_gap_detection"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-automatic",
+      "coverage": [
+        "business_journey.supply_chain.writeback_automatic"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Low-risk reversible label/Sandbox action is automatic, audited, receipted, and reversible."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "target_after_hash": "808982109159e3da01d9c3587d3a8936bfd32e7066b0a0bc627435c48e42639f",
+        "target_before_hash": "f755608ca1f329d456528eb85ae2a7af7562eed624a38e2b4cea13efe7dd1f76"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_service.py",
+          "selector": "test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-approved",
+      "coverage": [
+        "business_journey.supply_chain.writeback_hitl_approved"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Exact immutable plan is approved and writes only the isolated target with a receipt."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "target_after_hash": "a046886efccff70db5b1fc621170ea9b0d29a62dc3ec2d9993a779635ac2e13c",
+        "target_before_hash": "376ffa4dfe7ab7ee2fb2c7feedd4c258887c7d5d6c84c2092a698146a5f6be19"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "human_approved",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_high_risk_plan_requires_exact_hash_hitl"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-rejected",
+      "coverage": [
+        "business_journey.supply_chain.writeback_hitl_rejected"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Rejection records the decision and leaves target before/after hashes identical."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "target_after_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50",
+        "target_before_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "rejected",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_approve_exact_plan_rejects_wrong_hash"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-expired",
+      "coverage": [
+        "business_journey.supply_chain.writeback_hitl_expired"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Expiry records the decision and leaves target before/after hashes identical."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "target_after_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa",
+        "target_before_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa"
+      },
+      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "journey_id": "supply_chain",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "expired",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_approve_exact_plan_rejects_expired_plan"
+        }
+      ]
+    }
+  ]
+}

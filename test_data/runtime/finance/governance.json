@@ -1,0 +1,66 @@
+{
+  "governance_outcomes": [
+    {
+      "execution_class": "automatic",
+      "expected_status": "succeeded",
+      "id": "automatic",
+      "must_write": true,
+      "required_plan_hash": null,
+      "target_after_hash": "cf118e2a5a3dd84dbc465a80354f7641dfdf524668fb850d992e082977afb4c9",
+      "target_before_hash": "761889d99867972c540dcd34cbda734c9135181dba8aee57b5169139f3eec197"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "succeeded",
+      "id": "approved",
+      "must_write": true,
+      "required_plan_hash": "21a54959dc87f6eabd2818c39c0d741a907686c56621b8336b84d0a1e05e7eeb",
+      "target_after_hash": "ab74a5403965647e9da43d1f35c038daa35c4f55dcfdd2dcb4c01f79872a7457",
+      "target_before_hash": "e3f8daa49fda1e54f29a2f8d26d4b627ede4bbef248bf6bc10516ac4c5a0f8dd"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "rejected",
+      "id": "rejected",
+      "must_write": false,
+      "required_plan_hash": "14e45aec2868950895610eb2d7159e74195188ef35272532b15e2641add784fa",
+      "target_after_hash": "33aa6e78ad7645d80e95a58b71262aa64518b9b73ce8b4301773df52edccf40e",
+      "target_before_hash": "33aa6e78ad7645d80e95a58b71262aa64518b9b73ce8b4301773df52edccf40e"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "expired",
+      "id": "expired",
+      "must_write": false,
+      "required_plan_hash": "7456ee98b37f9f3b7fe1cfc4614d396593f6b994a1f5bb6d9bd980794834b6ca",
+      "target_after_hash": "f23d429415cf05d77d6a34e6cf3a982f6362ddbf60742357bda5f77fec17f9d4",
+      "target_before_hash": "f23d429415cf05d77d6a34e6cf3a982f6362ddbf60742357bda5f77fec17f9d4"
+    }
+  ],
+  "plan_instances": [
+    {
+      "branch": "approved",
+      "expected_status": "succeeded",
+      "must_write": true,
+      "target_after_hash": "ab74a5403965647e9da43d1f35c038daa35c4f55dcfdd2dcb4c01f79872a7457",
+      "target_before_hash": "e3f8daa49fda1e54f29a2f8d26d4b627ede4bbef248bf6bc10516ac4c5a0f8dd",
+      "target_fixture_id": "target-finance-approved"
+    },
+    {
+      "branch": "rejected",
+      "expected_status": "rejected",
+      "must_write": false,
+      "target_after_hash": "33aa6e78ad7645d80e95a58b71262aa64518b9b73ce8b4301773df52edccf40e",
+      "target_before_hash": "33aa6e78ad7645d80e95a58b71262aa64518b9b73ce8b4301773df52edccf40e",
+      "target_fixture_id": "target-finance-rejected"
+    },
+    {
+      "branch": "expired",
+      "expected_status": "expired",
+      "must_write": false,
+      "target_after_hash": "f23d429415cf05d77d6a34e6cf3a982f6362ddbf60742357bda5f77fec17f9d4",
+      "target_before_hash": "f23d429415cf05d77d6a34e6cf3a982f6362ddbf60742357bda5f77fec17f9d4",
+      "target_fixture_id": "target-finance-expired"
+    }
+  ]
+}

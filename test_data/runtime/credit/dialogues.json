@@ -1,0 +1,28 @@
+{
+  "dialogue_scenarios": [
+    {
+      "citation_source_ids": [
+        "input-credit-loan-applications-csv",
+        "input-credit-risk-approval-policy-docx"
+      ],
+      "dialogue_id": "credit-governed-dialogue",
+      "expected_keywords": [
+        "borrower",
+        "application",
+        "repayment",
+        "credit limit"
+      ],
+      "high_risk_outcome": {
+        "action": "credit_limit_update",
+        "decision": "ALLOW",
+        "risk_class": "human_approved"
+      },
+      "normal_outcome": {
+        "action": "risk_label",
+        "decision": "ALLOW",
+        "risk_class": "automatic"
+      },
+      "question": "Which loan applications exceed the credit score limit, and what credit limit action do you recommend?"
+    }
+  ]
+}

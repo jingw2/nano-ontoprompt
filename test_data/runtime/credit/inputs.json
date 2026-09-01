@@ -1,0 +1,74 @@
+{
+  "input_hashes": {
+    "input-credit-collection-report-page1-png": "bab3a7e3d7491f6ed332baa3a178f80295aa2632a11b6c8fd76b4d90a8d8d062",
+    "input-credit-customer-profiles-csv": "4b0c5c532a0258905692fb2cb022a96e1d3fdcc9eb710b134fa0011e303fae2d",
+    "input-credit-loan-applications-csv": "17ddb94860af61f063d033b7eac77f802c084acd80ec614fa5b0b7bf7c0fdb8b",
+    "input-credit-repayment-ledger-csv": "cd8c68e161bdb39a82c051978413260159a7477cdccec74ae2b5e0c6756be007",
+    "input-credit-risk-approval-policy-docx": "a76c1a03aa7f7112387fe8410d730b529bb1ec078c1eed2250c1b6ec86687832"
+  },
+  "inputs": [
+    {
+      "fixture_id": "input-credit-loan-applications-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/信贷/贷款申请记录.csv",
+      "sha256": "17ddb94860af61f063d033b7eac77f802c084acd80ec614fa5b0b7bf7c0fdb8b"
+    },
+    {
+      "fixture_id": "input-credit-customer-profiles-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/信贷/客户档案信息.csv",
+      "sha256": "4b0c5c532a0258905692fb2cb022a96e1d3fdcc9eb710b134fa0011e303fae2d"
+    },
+    {
+      "fixture_id": "input-credit-repayment-ledger-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/信贷/还款流水.csv",
+      "sha256": "cd8c68e161bdb39a82c051978413260159a7477cdccec74ae2b5e0c6756be007"
+    },
+    {
+      "fixture_id": "input-credit-risk-approval-policy-docx",
+      "kind": "document",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "path": "test_data/信贷/风控审批政策.docx",
+      "sha256": "a76c1a03aa7f7112387fe8410d730b529bb1ec078c1eed2250c1b6ec86687832"
+    },
+    {
+      "derived_from": "test_data/信贷/贷后催收报告.pdf",
+      "derived_from_sha256": "bb438d81c2b653ca52b7f0f93e970a10d73edc3fe7293e2d0abcda666d81fefa",
+      "fixture_id": "input-credit-collection-report-page1-png",
+      "kind": "image",
+      "media_type": "image/png",
+      "path": "test_data/runtime/credit/贷后催收报告_page1.png",
+      "sha256": "bab3a7e3d7491f6ed332baa3a178f80295aa2632a11b6c8fd76b4d90a8d8d062"
+    }
+  ],
+  "source_refs": [
+    {
+      "path": "test_data/信贷/贷款申请记录.csv",
+      "sha256": "17ddb94860af61f063d033b7eac77f802c084acd80ec614fa5b0b7bf7c0fdb8b"
+    },
+    {
+      "path": "test_data/信贷/客户档案信息.csv",
+      "sha256": "4b0c5c532a0258905692fb2cb022a96e1d3fdcc9eb710b134fa0011e303fae2d"
+    },
+    {
+      "path": "test_data/信贷/还款流水.csv",
+      "sha256": "cd8c68e161bdb39a82c051978413260159a7477cdccec74ae2b5e0c6756be007"
+    },
+    {
+      "path": "test_data/信贷/风控审批政策.docx",
+      "sha256": "a76c1a03aa7f7112387fe8410d730b529bb1ec078c1eed2250c1b6ec86687832"
+    },
+    {
+      "path": "test_data/runtime/credit/贷后催收报告_page1.png",
+      "sha256": "bab3a7e3d7491f6ed332baa3a178f80295aa2632a11b6c8fd76b4d90a8d8d062"
+    },
+    {
+      "path": "test_data/信贷/贷后催收报告.pdf",
+      "sha256": "bb438d81c2b653ca52b7f0f93e970a10d73edc3fe7293e2d0abcda666d81fefa"
+    }
+  ]
+}

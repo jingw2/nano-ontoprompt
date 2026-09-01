@@ -224,8 +224,11 @@ _DATABASE_TARGETS = {
 }
 
 # --- Business journey cases (real_model_browser) ------------------------------
+# Public (not underscore-prefixed): also reused by journey_registry.py's
+# per-journey `normal-pipeline-release` case so the three exact Playwright
+# titles are spelled out in exactly one place.
 _JOURNEY_SPEC = "frontend/src/test/e2e/business-journeys.spec.ts"
-_JOURNEY_TARGETS = {
+JOURNEY_BROWSER_TARGETS = {
     "journey-supply-chain": _playwright(_JOURNEY_SPEC, "supply chain journey completes the governed browser loop"),
     "journey-finance": _playwright(_JOURNEY_SPEC, "finance journey completes the governed browser loop"),
     "journey-credit": _playwright(_JOURNEY_SPEC, "credit journey completes the governed browser loop"),
@@ -239,7 +242,7 @@ CASE_REGISTRY: dict[str, TestTarget] = {
     **_PARITY_TARGETS,
     **_REFRESH_TARGETS,
     **_DATABASE_TARGETS,
-    **_JOURNEY_TARGETS,
+    **JOURNEY_BROWSER_TARGETS,
 }
 
 

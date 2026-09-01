@@ -1,0 +1,37 @@
+{
+  "actions": [
+    "risk_label",
+    "purchase_order_price_update"
+  ],
+  "entities": [
+    "Supplier",
+    "PurchaseOrder",
+    "InventoryItem",
+    "Warehouse"
+  ],
+  "high_risk_action": "purchase_order_price_update",
+  "keywords": [
+    "supplier",
+    "inventory",
+    "safety stock",
+    "purchase order"
+  ],
+  "low_risk_action": "risk_label",
+  "numeric_predicates": {
+    "below_safety_stock_supplier_count_min": 1,
+    "safety_stock_threshold_units": 20
+  },
+  "relations": [
+    "SUPPLIES",
+    "PLACED_WITH",
+    "CONTAINS",
+    "BELOW_SAFETY_STOCK"
+  ],
+  "rules": [
+    "inventory_below_safety_stock"
+  ],
+  "source_citation_ids": [
+    "input-supply_chain-inventory-transactions-csv",
+    "input-supply_chain-procurement-policy-docx"
+  ]
+}

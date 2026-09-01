@@ -1,0 +1,62 @@
+{
+  "input_hashes": {
+    "input-supply_chain-inventory-transactions-csv": "12ad6d5d1074cdf3f9d2ad8edd09f08c7865c1b0f6fef5061936d7782f13dbe8",
+    "input-supply_chain-procurement-policy-docx": "43ac0914b05c6b6393c7381fbd737ccfe9cbf863eed74df8e639785061c1bdfe",
+    "input-supply_chain-supplier-database-xlsx": "cab91f5ef58d4cf917a5b0adfc5a2e021bfb55d09ede34fa78185e6fb8f945e5",
+    "input-supply_chain-warehouse-management-page1-png": "90a4a8165a84ce0a6974ddfe1be701a6de12e1684c41c14028de381675bd3cef"
+  },
+  "inputs": [
+    {
+      "fixture_id": "input-supply_chain-inventory-transactions-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/供应链/inventory_transactions.csv",
+      "sha256": "12ad6d5d1074cdf3f9d2ad8edd09f08c7865c1b0f6fef5061936d7782f13dbe8"
+    },
+    {
+      "fixture_id": "input-supply_chain-supplier-database-xlsx",
+      "kind": "tabular",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "path": "test_data/供应链/supplier_database.xlsx",
+      "sha256": "cab91f5ef58d4cf917a5b0adfc5a2e021bfb55d09ede34fa78185e6fb8f945e5"
+    },
+    {
+      "fixture_id": "input-supply_chain-procurement-policy-docx",
+      "kind": "document",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "path": "test_data/供应链/procurement_policy.docx",
+      "sha256": "43ac0914b05c6b6393c7381fbd737ccfe9cbf863eed74df8e639785061c1bdfe"
+    },
+    {
+      "derived_from": "test_data/供应链/warehouse_management.pdf",
+      "derived_from_sha256": "65e615a16d06ab4ceab879bf3e8a93f51087facb81a50dca4c07395c6a473752",
+      "fixture_id": "input-supply_chain-warehouse-management-page1-png",
+      "kind": "image",
+      "media_type": "image/png",
+      "path": "test_data/runtime/supply_chain/warehouse_management_page1.png",
+      "sha256": "90a4a8165a84ce0a6974ddfe1be701a6de12e1684c41c14028de381675bd3cef"
+    }
+  ],
+  "source_refs": [
+    {
+      "path": "test_data/供应链/inventory_transactions.csv",
+      "sha256": "12ad6d5d1074cdf3f9d2ad8edd09f08c7865c1b0f6fef5061936d7782f13dbe8"
+    },
+    {
+      "path": "test_data/供应链/supplier_database.xlsx",
+      "sha256": "cab91f5ef58d4cf917a5b0adfc5a2e021bfb55d09ede34fa78185e6fb8f945e5"
+    },
+    {
+      "path": "test_data/供应链/procurement_policy.docx",
+      "sha256": "43ac0914b05c6b6393c7381fbd737ccfe9cbf863eed74df8e639785061c1bdfe"
+    },
+    {
+      "path": "test_data/runtime/supply_chain/warehouse_management_page1.png",
+      "sha256": "90a4a8165a84ce0a6974ddfe1be701a6de12e1684c41c14028de381675bd3cef"
+    },
+    {
+      "path": "test_data/供应链/warehouse_management.pdf",
+      "sha256": "65e615a16d06ab4ceab879bf3e8a93f51087facb81a50dca4c07395c6a473752"
+    }
+  ]
+}
