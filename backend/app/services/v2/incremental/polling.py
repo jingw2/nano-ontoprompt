@@ -331,7 +331,17 @@ def _assert_configuration_current(db: Session, run: RefreshRun) -> None:
 def _claim_queued_run(db: Session, *, run_id: str, lease_owner: str, now: datetime,
                       lease_seconds: int = 300) -> RefreshRun:
     """Claim a schedule-created queued run without creating a second run."""
-    run = db.execute(select(RefreshRun).where(RefreshRun.id == run_id).with_for_update()).scalar_one_or_none()
+    # populate_existing=True: same fix as contract.py's _lock_run (see that
+    # function's comment) — without it, a RefreshRun already in this
+    # session's identity map (e.g. loaded by db.get() just before this call)
+    # is returned as-is, ignoring the row FOR UPDATE just locked and
+    # re-read. Concretely: a cancellation committed by another process
+    # between that load and this claim would be silently discarded, and a
+    # terminally-cancelled run could be resurrected to "running".
+    run = db.execute(
+        select(RefreshRun).where(RefreshRun.id == run_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).scalar_one_or_none()
     if run is None:
         db.rollback()
         raise RefreshError("REFRESH_RUN_NOT_FOUND", f"no RefreshRun {run_id}")
