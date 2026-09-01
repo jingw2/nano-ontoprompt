@@ -328,7 +328,7 @@ def upgrade() -> None:
         op.create_check_constraint(
             "ck_semantic_snapshots_materialization_hash_hex",
             "semantic_snapshots",
-            "materialization_hash REGEXP '^[0-9a-f]{64}$'",
+            "REGEXP_LIKE(materialization_hash, '^[0-9a-f]{64}$', 'c')",
         )
 
     op.create_table(
