@@ -354,6 +354,37 @@ def test_event_accept_rejects_mismatched_contract_when_connection_config_is_encr
     assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-001").count() == 0
 
 
+def test_dispatch_pending_yields_to_a_committed_cancellation(db):
+    """An operator's committed `cancel_requested` must win over publishing a
+    stale event to the broker. `drain_pending` loads the run via
+    `db.get(RefreshRun, row.run_id)` with no intervening commit/rollback
+    before calling `dispatch_pending`, which then re-fetches the same row
+    FOR UPDATE -- so a cancellation committed by another session in that
+    window must still be observed. Before the fix, `dispatch_pending`'s
+    terminal guard set did not include `cancel_requested`, so this call
+    would fall through and publish the event to the broker anyway."""
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(event_id="evt-cancel-dispatch"), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert receipt.run_id is not None
+    assert db.get(RefreshRun, receipt.run_id).status == "running"
+
+    cancelled = request_refresh_cancellation(
+        db, run_id=receipt.run_id, requested_by="operator-001", reason="stop", now=FIXED_NOW,
+    )
+    assert cancelled.status == "cancel_requested"
+
+    dispatched: list[str] = []
+    result = service.dispatch_pending(
+        db, run_id=receipt.run_id, dispatch=lambda run_id: dispatched.append(run_id), now=FIXED_NOW,
+    )
+
+    assert result.status == "cancelled"
+    assert dispatched == []
+    assert db.get(RefreshRun, receipt.run_id).status == "cancelled"
+
+
 def test_broker_failure_is_reconciled_from_the_durable_inbox(db):
     _source(db)
     service = EventIngestService()

@@ -486,8 +486,17 @@ class EventIngestService:
         delivery after a dispatcher crash.
         """
         now = _as_utc(now)
+        # populate_existing=True: same fix as contract.py's _lock_run (see
+        # that function's comment) — `drain_pending` loads this run via
+        # `db.get(RefreshRun, row.run_id)` with no intervening commit or
+        # rollback before calling this method, so without this option the
+        # FOR UPDATE re-fetch below would return that stale identity-map
+        # instance instead of the row just locked and re-read — silently
+        # discarding a cancellation committed by another session in that
+        # window.
         run = db.execute(
-            select(RefreshRun).where(RefreshRun.id == run_id).with_for_update()
+            select(RefreshRun).where(RefreshRun.id == run_id).with_for_update(),
+            execution_options={"populate_existing": True},
         ).scalar_one_or_none()
         if run is None:
             raise RefreshError("REFRESH_RUN_NOT_FOUND", f"no RefreshRun {run_id}")
@@ -497,6 +506,19 @@ class EventIngestService:
         if row is None:
             db.rollback()
             raise RefreshError("INBOX_EVENT_NOT_FOUND", f"no durable inbox event for run {run_id}")
+        if run.status == "cancel_requested":
+            # An operator's committed cancellation must win over publishing
+            # a stale event to the broker — finalize the same
+            # cancel_requested -> cancelled transition process()'s own
+            # cancellation branch uses (contract.py's
+            # finalize_refresh_cancellation) instead of dispatching.
+            try:
+                finalize_refresh_cancellation(
+                    db, run_id=run.id, lease_owner=run.lease_owner, fencing_token=run.fencing_token, now=now,
+                )
+            except RefreshError:
+                pass
+            return _receipt(db, row, status="cancelled", reason_code="CANCELLED")
         if run.status in {"succeeded", "failed", "dead_lettered", "cancelled"}:
             db.commit()
             status = "dead_lettered" if run.status == "dead_lettered" else "processed" if run.status == "succeeded" else run.status
