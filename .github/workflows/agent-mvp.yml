@@ -222,9 +222,7 @@ jobs:
           cd backend
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
-            python -m pytest tests/v2/incremental tests/agent/test_celery_topology.py \
-              tests/v2/incremental/test_refresh_task_dispatch.py \
-              tests/v2/incremental/test_refresh_operability.py tests/runtime -q
+            python -m pytest tests/v2/incremental tests/agent/test_celery_topology.py tests/runtime -q
       - name: SDK runtime contract
         if: matrix.python-version == '3.12'
         run: |

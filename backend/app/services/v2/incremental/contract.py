@@ -109,7 +109,19 @@ def _lock_or_create_source_state(
 
 
 def _lock_run(db: Session, *, run_id: str) -> RefreshRun:
-    run = db.execute(select(RefreshRun).where(RefreshRun.id == run_id).with_for_update()).scalar_one_or_none()
+    # populate_existing=True: without it, a RefreshRun already loaded into
+    # this session's identity map (e.g. flushed earlier in the same
+    # transaction) is returned as-is, ignoring the row FOR UPDATE just
+    # locked and re-read from the database. Concretely: an operator's
+    # cancellation commits `status='cancel_requested'` after this worker's
+    # session already loaded the run, and this call returns the stale
+    # pre-cancellation instance instead of the row it just locked, letting
+    # record_refresh_outcome commit the run as succeeded/failed with the
+    # cancellation silently ignored.
+    run = db.execute(
+        select(RefreshRun).where(RefreshRun.id == run_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).scalar_one_or_none()
     if run is None:
         db.rollback()
         raise RefreshError("REFRESH_RUN_NOT_FOUND", f"no RefreshRun {run_id}")

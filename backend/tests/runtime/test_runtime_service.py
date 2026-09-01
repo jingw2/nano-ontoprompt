@@ -498,6 +498,82 @@ def test_plan_hash_changes_when_only_freshness_driven_policy_decision_differs(
     assert stale_plan.plan_hash != fresh_plan.plan_hash
 
 
+@pytest.mark.parametrize("varied_field", [
+    "evidence_citations", "rule_outcomes", "risk_classification", "policy_decision", "expiry",
+])
+def test_canonical_plan_hash_input_covers_every_added_field_independently(varied_field):
+    """The end-to-end test above only drives `policy_decision` through a
+    real `create_action_plan` call — it holds `evidence_citations`,
+    `rule_outcomes`, `risk_classification`, and `expiry` identical between
+    its two plans by construction, so it cannot prove any of those four are
+    actually part of the hash input. This test isolates `_canonical_hash`
+    itself (the exact function `create_action_plan` calls to compute the
+    persisted `plan_hash`) and proves each of the five newly-added fields,
+    varied one at a time with every other field held byte-identical,
+    changes the resulting hash — closing the coverage gap the end-to-end
+    test leaves for the other four."""
+    from app.services.runtime.service import _canonical_hash
+
+    base_fields = {
+        "semantic_snapshot_id": "snap-1", "ontology_release_id": "rel-1",
+        "agent_id": "agent-1", "user_id": "user-1", "action_id": "action-1",
+        "managed_action_binding_id": None, "binding_version": None,
+        "parameters": {"status": "approved"}, "target_key": [["id", "row-1"]],
+        "before_image_hash": "b" * 64, "version_hash": "v" * 64,
+        "precondition_hashes": ["h1"], "idempotency_key": "idem-1",
+        "evidence_citations": [{"source_id": "s1", "content_hash": "c" * 64}],
+        "rule_outcomes": [{"rule_id": "r1", "result": "pass"}],
+        "risk_classification": "single_instance_write",
+        "policy_decision": {"allowed": True, "reason_code": "ALLOW"},
+        "expiry": "2026-01-01T00:00:00+00:00",
+    }
+    varied_value_by_field = {
+        "evidence_citations": [{"source_id": "s2", "content_hash": "d" * 64}],
+        "rule_outcomes": [{"rule_id": "r2", "result": "fail"}],
+        "risk_classification": "unscoped_proposal",
+        "policy_decision": {"allowed": True, "reason_code": "ALLOW", "requires_hitl": True},
+        "expiry": "2026-01-01T00:05:00+00:00",
+    }
+
+    baseline_hash = _canonical_hash(base_fields)
+    varied_fields = dict(base_fields)
+    varied_fields[varied_field] = varied_value_by_field[varied_field]
+    varied_hash = _canonical_hash(varied_fields)
+
+    assert varied_hash != baseline_hash, (
+        f"changing only {varied_field!r} must change the persisted plan_hash"
+    )
+
+
+def test_create_action_plan_passes_every_added_field_to_the_hash_input(
+    db, governed_snapshot, runtime_context, monkeypatch,
+):
+    """The previous two tests prove `_canonical_hash` is sensitive to each
+    added field in isolation, and that the real call site wires at least
+    `policy_decision` through end-to-end — neither proves `create_action_plan`
+    itself still passes `evidence_citations`/`rule_outcomes`/
+    `risk_classification`/`expiry` into the hash input dict (a future edit
+    could silently drop one of these from that dict without either other
+    test noticing). Captures the real dict `create_action_plan` builds for
+    exactly one real call and asserts all five keys are present."""
+    from app.services.runtime import service as service_module
+
+    captured: dict = {}
+    real_canonical_hash = service_module._canonical_hash
+
+    def _capturing_hash(value):
+        if isinstance(value, dict) and "idempotency_key" in value:
+            captured.update(value)
+        return real_canonical_hash(value)
+
+    monkeypatch.setattr(service_module, "_canonical_hash", _capturing_hash)
+
+    RuntimeService().create_action_plan(valid_plan_request(), runtime_context, db)
+
+    for field in ("evidence_citations", "rule_outcomes", "risk_classification", "policy_decision", "expiry"):
+        assert field in captured, f"create_action_plan's plan_hash input dict is missing {field!r}"
+
+
 def test_create_action_plan_rejects_ineligible_action(db, governed_snapshot, runtime_context):
     db.query(Action).filter(Action.id == ACTION_ID).one().enabled = False
     db.commit()
