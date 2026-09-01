@@ -439,7 +439,35 @@ def _release_source_lease(db: Session, run: RefreshRun, *, now: datetime) -> Non
 
 
 def _dead_letter_run(db: Session, *, run_id: str, reason: str, now: datetime) -> RefreshRun:
-    run = db.execute(select(RefreshRun).where(RefreshRun.id == run_id).with_for_update()).scalar_one()
+    # populate_existing=True: same fix as contract.py's _lock_run (see that
+    # function's comment) — without it, a RefreshRun already in this
+    # session's identity map is returned as-is, ignoring the row FOR UPDATE
+    # just locked and re-read. Concretely: an operator's cancellation
+    # committed by another session between that load and this re-fetch would
+    # be silently discarded.
+    run = db.execute(
+        select(RefreshRun).where(RefreshRun.id == run_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).scalar_one()
+    if run.status == "cancel_requested":
+        # An operator's committed cancellation must win over a late
+        # retry-exhaustion failure: finalize the same cancel_requested ->
+        # cancelled transition this module's own cancellation branch uses
+        # (contract.py's finalize_refresh_cancellation) instead of
+        # overwriting it with dead_lettered and creating a
+        # RefreshDeadLetter row an operator could replay, which would make a
+        # cancelled run resurrectable.
+        try:
+            cancelled = finalize_refresh_cancellation(
+                db, run_id=run.id, lease_owner=run.lease_owner, fencing_token=run.fencing_token, now=now,
+            )
+        except RefreshError:
+            cancelled = db.get(RefreshRun, run.id)
+        if cancelled.retry_reason != reason:
+            cancelled.retry_reason = reason
+            db.commit()
+            db.refresh(cancelled)
+        return cancelled
     if run.status in {"succeeded", "failed", "dead_lettered", "cancelled"}:
         db.commit()
         return run

@@ -19,7 +19,7 @@ from app.models.v2.pipeline import PipelineRun, PipelineRunInput
 from app.models.v2.refresh import RefreshDeadLetter, RefreshInboxEvent, RefreshRun, RefreshSourceState
 from app.schemas.refresh import ChangeEnvelope, ConfigurationDriftError, RefreshLeaseError
 from app.services.v2.incremental import event_ingest
-from app.services.v2.incremental.contract import update_source_configuration
+from app.services.v2.incremental.contract import request_refresh_cancellation, update_source_configuration
 from app.services.v2.incremental.event_adapters import (
     EventIngressError,
     ManagedOutboxAdapter,
@@ -488,6 +488,34 @@ def test_broker_publish_failures_exhaust_delivery_budget_into_replayable_dlq(db)
     assert replay.id != receipt.run_id
     assert db.query(RefreshRun).filter(RefreshRun.idempotency_key == f"replay:event:{dead_letter.id}").count() == 1
     assert db.query(RefreshInboxEvent).one().state == "received"
+
+
+def test_dead_letter_event_yields_to_a_committed_cancellation(db):
+    """An operator's committed `cancel_requested` must win over a late
+    retry-exhaustion failure that reaches `_dead_letter_event` afterward
+    (e.g. a connector call that was already in flight when the cancellation
+    landed, then raised a genuine failure post-hoc). Before the fix, the old
+    guard set `{"succeeded", "failed", "dead_lettered", "cancelled"}` did not
+    include `cancel_requested`, so this call would overwrite it with
+    `dead_lettered` and create a `RefreshDeadLetter` row an operator could
+    replay — resurrecting a run the operator explicitly cancelled."""
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(event_id="evt-cancel-race"), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert receipt.run_id is not None
+    assert db.get(RefreshRun, receipt.run_id).status == "running"
+
+    cancelled = request_refresh_cancellation(
+        db, run_id=receipt.run_id, requested_by="operator-001", reason="stop", now=FIXED_NOW,
+    )
+    assert cancelled.status == "cancel_requested"
+
+    result = service._dead_letter_event(db, run_id=receipt.run_id, reason="RETRY_EXHAUSTED", now=FIXED_NOW)
+
+    assert result.status == "cancelled"
+    assert result.retry_reason == "RETRY_EXHAUSTED"
+    assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.run_id == receipt.run_id).count() == 0
 
 
 def test_dlq_replay_recovers_a_run_persisted_before_crash(db, monkeypatch):

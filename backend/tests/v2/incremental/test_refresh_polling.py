@@ -619,6 +619,33 @@ def test_dlq_replay_does_not_mutate_failed_run(db):
     assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.run_id == failed.run_id).count() == 1
 
 
+def test_dead_letter_run_yields_to_a_committed_cancellation(db):
+    """An operator's committed `cancel_requested` must win over a late
+    retry-exhaustion failure that reaches `_dead_letter_run` afterward (e.g.
+    a connector call that was already in flight when the cancellation
+    landed, then raised a genuine failure post-hoc). Before the fix, the old
+    guard set `{"succeeded", "failed", "dead_lettered", "cancelled"}` did not
+    include `cancel_requested`, so this call would overwrite it with
+    `dead_lettered` and create a `RefreshDeadLetter` row an operator could
+    replay — resurrecting a run the operator explicitly cancelled."""
+    run = claim_refresh_run(
+        db, source_id="source-001", resource="orders", policy=RefreshPolicy.MICRO_BATCH,
+        idempotency_key="poll:source-001:orders", lease_owner="worker-001", now=NOW,
+    )
+    assert run.status == "running"
+
+    cancelled = request_refresh_cancellation(
+        db, run_id=run.id, requested_by="operator-001", reason="stop", now=NOW,
+    )
+    assert cancelled.status == "cancel_requested"
+
+    result = polling._dead_letter_run(db, run_id=run.id, reason="RETRY_EXHAUSTED", now=NOW)
+
+    assert result.status == "cancelled"
+    assert result.retry_reason == "RETRY_EXHAUSTED"
+    assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.run_id == run.id).count() == 0
+
+
 @pytest.mark.parametrize(
     "case_id", ["cancel-before-pull", "cancel-inflight-page", "cancel-after-tentative-materialization"],
 )
