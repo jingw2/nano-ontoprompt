@@ -23,6 +23,7 @@ from app.services.v2.incremental.contract import claim_refresh_run, request_refr
 from app.services.v2.incremental.operations import trigger_refresh
 from app.services.v2.incremental.polling import DeltaPage, poll_source, replay_refresh
 from app.services.v2.scheduler.schedule_service import ScheduleRequest, upsert_refresh_schedule
+from tests.conftest import TestSession
 
 
 NOW = datetime(2026, 8, 26, 0, 0, tzinfo=timezone.utc)
@@ -644,6 +645,49 @@ def test_dead_letter_run_yields_to_a_committed_cancellation(db):
     assert result.status == "cancelled"
     assert result.retry_reason == "RETRY_EXHAUSTED"
     assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.run_id == run.id).count() == 0
+
+
+def test_dead_letter_run_populate_existing_prevents_a_stale_two_session_read(db):
+    """Genuine two-session repro of the stale-identity-map bug
+    `execution_options={"populate_existing": True}` exists to close on
+    `_dead_letter_run`'s FOR UPDATE re-fetch. The single-session test above
+    cannot prove this fix does anything: SQLAlchemy's default
+    `expire_on_commit=True` already invalidates a session's own cached
+    attributes on its own commit, so a same-session re-select after a
+    same-session commit reloads fresh values whether or not
+    `populate_existing` is set. This uses two genuinely separate `Session`
+    objects sharing the same underlying database -- what a real second
+    worker process committing a cancellation while this worker holds the
+    run in memory actually looks like."""
+    run = claim_refresh_run(
+        db, source_id="source-001", resource="orders", policy=RefreshPolicy.MICRO_BATCH,
+        idempotency_key="poll:source-001:orders-two-session", lease_owner="worker-001", now=NOW,
+    )
+    assert run.status == "running"
+    db.commit()
+
+    session_a = TestSession()
+    session_b = TestSession()
+    try:
+        # Session A loads the run into its OWN identity map and never
+        # commits/rolls back before the re-fetch under test -- so nothing
+        # would expire its cached copy on its own.
+        loaded = session_a.get(RefreshRun, run.id)
+        assert loaded.status == "running"
+
+        # Session B -- a genuinely different connection -- commits an
+        # operator's cancellation. Session A has no way to know.
+        request_refresh_cancellation(
+            session_b, run_id=run.id, requested_by="operator-001", reason="stop", now=NOW,
+        )
+        session_b.close()
+
+        result = polling._dead_letter_run(session_a, run_id=run.id, reason="RETRY_EXHAUSTED", now=NOW)
+
+        assert result.status == "cancelled"
+        assert result.retry_reason == "RETRY_EXHAUSTED"
+    finally:
+        session_a.close()
 
 
 @pytest.mark.parametrize(

@@ -30,6 +30,7 @@ from app.services.v2.incremental.event_ingest import (
     replay_dead_letter,
 )
 from app.tasks.topology import build_refresh_dispatch_message
+from tests.conftest import TestSession
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -413,6 +414,53 @@ def test_dispatch_pending_yields_to_a_committed_cancellation(db):
     assert db.get(RefreshRun, receipt.run_id).status == "cancelled"
 
 
+def test_dispatch_pending_populate_existing_prevents_a_stale_two_session_read(db):
+    """Genuine two-session repro of the stale-identity-map bug
+    `execution_options={"populate_existing": True}` exists to close on
+    `dispatch_pending`'s FOR UPDATE re-fetch. The single-session test above
+    cannot prove this fix does anything: SQLAlchemy's default
+    `expire_on_commit=True` already invalidates a session's own cached
+    attributes on its own commit, so a same-session re-select after a
+    same-session commit reloads fresh values whether or not
+    `populate_existing` is set. This uses two genuinely separate `Session`
+    objects sharing the same underlying database -- what `drain_pending`
+    loading a run via `db.get(...)` and then a real second worker
+    committing a cancellation in between actually looks like."""
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(event_id="evt-two-session-dispatch"), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert receipt.run_id is not None
+    db.commit()
+
+    session_a = TestSession()
+    session_b = TestSession()
+    try:
+        # Session A loads the run into its OWN identity map, mirroring
+        # drain_pending's `db.get(RefreshRun, row.run_id)` with no
+        # intervening commit/rollback before dispatch_pending is called.
+        loaded = session_a.get(RefreshRun, receipt.run_id)
+        assert loaded.status == "running"
+
+        # Session B -- a genuinely different session/connection -- commits
+        # an operator's cancellation. Session A's identity map has no idea
+        # this happened.
+        request_refresh_cancellation(
+            session_b, run_id=receipt.run_id, requested_by="operator-001", reason="stop", now=FIXED_NOW,
+        )
+        session_b.close()
+
+        dispatched: list[str] = []
+        result = service.dispatch_pending(
+            session_a, run_id=receipt.run_id, dispatch=lambda run_id: dispatched.append(run_id), now=FIXED_NOW,
+        )
+
+        assert result.status == "cancelled"
+        assert dispatched == []
+    finally:
+        session_a.close()
+
+
 def test_broker_failure_is_reconciled_from_the_durable_inbox(db):
     _source(db)
     service = EventIngestService()
@@ -575,6 +623,48 @@ def test_dead_letter_event_yields_to_a_committed_cancellation(db):
     assert result.status == "cancelled"
     assert result.retry_reason == "RETRY_EXHAUSTED"
     assert db.query(RefreshDeadLetter).filter(RefreshDeadLetter.run_id == receipt.run_id).count() == 0
+
+
+def test_dead_letter_event_populate_existing_prevents_a_stale_two_session_read(db):
+    """Genuine two-session repro of the stale-identity-map bug
+    `execution_options={"populate_existing": True}` exists to close on
+    `_dead_letter_event`'s FOR UPDATE re-fetch. The single-session test
+    above cannot prove this fix does anything: SQLAlchemy's default
+    `expire_on_commit=True` already invalidates a session's own cached
+    attributes on its own commit, so a same-session re-select after a
+    same-session commit reloads fresh values whether or not
+    `populate_existing` is set. This uses two genuinely separate `Session`
+    objects sharing the same underlying database -- exactly what a real
+    second worker process committing a cancellation while this worker
+    holds the run in memory actually looks like."""
+    _source(db)
+    service = EventIngestService()
+    envelope = ManagedOutboxAdapter.normalize(_record(event_id="evt-two-session-dead-letter"), source_id="source-001", received_at=FIXED_NOW)
+    receipt = service.accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert receipt.run_id is not None
+    db.commit()
+
+    session_a = TestSession()
+    session_b = TestSession()
+    try:
+        # Session A loads the run into its OWN identity map and never
+        # commits/rolls back before the re-fetch under test.
+        loaded = session_a.get(RefreshRun, receipt.run_id)
+        assert loaded.status == "running"
+
+        # Session B -- a genuinely different connection -- commits an
+        # operator's cancellation. Session A has no way to know.
+        request_refresh_cancellation(
+            session_b, run_id=receipt.run_id, requested_by="operator-001", reason="stop", now=FIXED_NOW,
+        )
+        session_b.close()
+
+        result = service._dead_letter_event(session_a, run_id=receipt.run_id, reason="RETRY_EXHAUSTED", now=FIXED_NOW)
+
+        assert result.status == "cancelled"
+        assert result.retry_reason == "RETRY_EXHAUSTED"
+    finally:
+        session_a.close()
 
 
 def test_dlq_replay_recovers_a_run_persisted_before_crash(db, monkeypatch):
