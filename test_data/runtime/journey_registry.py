@@ -19,10 +19,24 @@ closest existing, already-passing pytest node that proves the same generic
 governed-runtime property this codebase's Phase 2/3 milestones already built
 (exact-plan HITL, stale-snapshot denial, MCP typed-failure surfacing, and so
 on) -- the same "reuse the closest real test, disclose the mapping" approach
-``registry.py`` already uses throughout its own ``CASE_REGISTRY``. Only
-``normal-pipeline-release`` is ``execution_mode: "real_model_browser"`` and
-points at a later task's Playwright title; nothing here runs it, and this
-module does not add a second runner.
+``registry.py`` already uses throughout its own ``CASE_REGISTRY``. Eight of
+those fourteen fully prove their case's claimed assertion; the other six are
+marked ``target_status: "provisional"`` with a ``proves`` string describing
+the narrower property their current target actually proves, because no
+existing test proves the full claim yet (real journey-specific coverage is
+Task 2/3's job). Only ``normal-pipeline-release`` is
+``execution_mode: "real_model_browser"`` and points at a later task's
+Playwright title; nothing here runs it, and this module does not add a
+second runner.
+
+All 42 deterministic cases (14 per journey) are also merged into the shared
+``test_data/runtime/manifest.json`` under a globally-unique
+``f"{journey-with-hyphens}-{case_id}"`` id (see
+``registry.JOURNEY_DETERMINISTIC_TARGETS``/``journey_case_id``), which is
+what the existing, unmodified ``run_registered_cases.py`` actually reads and
+executes -- this module's own ``DETERMINISTIC_CASE_TARGETS`` is derived from
+that same shared definition (``registry.JOURNEY_DETERMINISTIC_TARGET_DEFS``),
+not a second, disconnected copy.
 """
 
 from __future__ import annotations
@@ -120,73 +134,27 @@ def _pytest_target(path: str, selector: str) -> JourneyTestTarget:
 # ---------------------------------------------------------------------------
 # Deterministic case -> closest existing, already-passing pytest node.
 #
-# None of these tests were written for this plan; every one already exists
-# and already passes as part of the Phase 2/3 corpus this plan's Prerequisites
-# section requires. Business-journey-specific coverage of the same
-# properties (e.g. a real duplicate-invoice rule, a real DeepSeek-client
-# timeout/429 retry) is the job of Task 2/3 of this plan, not Task 1 -- this
-# corpus registers the case and asserts the underlying governed-runtime
-# invariant is proven today, not that a journey-specific rule engine already
-# exists.
+# The single source of truth for these mappings is
+# registry.JOURNEY_DETERMINISTIC_TARGET_DEFS (registry.py is the foundational,
+# import-free module here; this module imports it, not the reverse, to avoid
+# a cycle). That module is also what generate_runtime_fixtures.py merges into
+# the shared manifest.json as f"{journey}-{case_id}" entries, so the exact
+# same target -- and the same `target_status`/`proves` honesty markers for
+# the 6 cases where no existing test proves the full claimed property yet --
+# is what actually gets executed by the unmodified run_registered_cases.py
+# AND what a per-journey case_matrix.json records. See that dict's own
+# comments for the full per-case mapping rationale/disclosure.
 # ---------------------------------------------------------------------------
-_RUNTIME = "backend/tests/runtime"
-_AGENT = "backend/tests/agent"
+
+
+def _split_node(node: str) -> tuple[str, str]:
+    path, _, selector = node.partition("::")
+    return path, selector
+
 
 DETERMINISTIC_CASE_TARGETS: dict[str, JourneyTestTarget] = {
-    # No-match investigation stays ALLOW with an explicit empty result.
-    "edge-empty-result": _pytest_target(
-        f"{_RUNTIME}/test_runtime_api.py", "test_investigate_api_returns_empty_allow_for_no_match"
-    ),
-    # Real dedup proof (lineage IDs, not journey entities): the same
-    # sorted/deduplicated-id contract a duplicate-invoice/application rule
-    # depends on.
-    "edge-duplicate-or-missing": _pytest_target(
-        f"{_RUNTIME}/test_snapshot_materialization.py",
-        "test_collect_lineage_returns_sorted_deduplicated_ids_and_safe_summaries",
-    ),
-    "security-no-grant": _pytest_target(
-        f"{_RUNTIME}/test_runtime_credentials.py", "test_invalid_delegation_is_structured_denial[missing]"
-    ),
-    "security-stale-release": _pytest_target(
-        f"{_RUNTIME}/test_snapshot_freshness.py",
-        "test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]",
-    ),
-    # Untrusted document content is sanitized before it can act -- the same
-    # "untrusted input cannot change behavior" property prompt injection
-    # requires.
-    "security-prompt-injection": _pytest_target(f"{_AGENT}/test_untrusted_artifact.py", "test_strips_script_tags"),
-    # Closest real unit-level timeout test: an operation timeout is mapped
-    # to a typed, traceable failure with no silent retry loop. The real
-    # DeepSeek-client timeout/backoff path is Task 2's client, not this
-    # fixture corpus.
-    "resilience-timeout-retry": _pytest_target(
-        f"{_AGENT}/test_playwright_adapter.py", "test_browse_page_evaluate_timeout_maps_to_playwright_timeout"
-    ),
-    # Retry-safety invariant a 429 retry also depends on: retrying never
-    # calls the writer twice.
-    "resilience-429-retry": _pytest_target(
-        f"{_RUNTIME}/test_execution_service.py", "test_idempotent_retry_never_calls_the_writer_twice"
-    ),
-    "resilience-provider-error": _pytest_target(
-        f"{_AGENT}/test_mcp_client.py", "test_call_tool_surfaces_protocol_error"
-    ),
-    # A raised transport exception from the MCP client's underlying
-    # transport is wrapped into a typed, traceable MCPClientError -- the
-    # same code path a real socket timeout takes.
-    "resilience-mcp-timeout": _pytest_target(f"{_AGENT}/test_mcp_client.py", "test_call_tool_wraps_ssrf_block"),
-    "resilience-sse-reconnect": _pytest_target(f"{_AGENT}/test_event_stream.py", "test_stream_gap_detection"),
-    "writeback-automatic": _pytest_target(
-        f"{_RUNTIME}/test_execution_service.py", "test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
-    ),
-    "writeback-hitl-approved": _pytest_target(
-        f"{_RUNTIME}/test_risk_policy.py", "test_high_risk_plan_requires_exact_hash_hitl"
-    ),
-    "writeback-hitl-rejected": _pytest_target(
-        f"{_RUNTIME}/test_risk_policy.py", "test_approve_exact_plan_rejects_wrong_hash"
-    ),
-    "writeback-hitl-expired": _pytest_target(
-        f"{_RUNTIME}/test_risk_policy.py", "test_approve_exact_plan_rejects_expired_plan"
-    ),
+    case_id: _pytest_target(*_split_node(target_def.node))
+    for case_id, target_def in _registry.JOURNEY_DETERMINISTIC_TARGET_DEFS.items()
 }
 
 
@@ -299,6 +267,32 @@ def assert_journey_case(case: Mapping[str, object]) -> None:
             assert target == expected_target.to_dict(), (
                 f"case {case_id!r} target {target!r} does not match the registered target "
                 f"{expected_target.to_dict()!r}"
+            )
+
+        # Every deterministic case is also merged into the shared
+        # test_data/runtime/manifest.json under this qualified id, so it is
+        # actually executed by the unmodified run_registered_cases.py --
+        # not just registered in this journey-local namespace.
+        journey_id = str(case["journey_id"])
+        shared_case_id = _registry.journey_case_id(journey_id, case_id)
+        assert case.get("shared_case_id") == shared_case_id, (
+            f"case {case_id!r} must record shared_case_id={shared_case_id!r} "
+            f"(the id it is merged into the shared manifest.json under)"
+        )
+        assert shared_case_id in _registry.CASE_REGISTRY, (
+            f"case {case_id!r} is not merged into registry.CASE_REGISTRY as {shared_case_id!r}"
+        )
+
+        target_def = _registry.JOURNEY_DETERMINISTIC_TARGET_DEFS[case_id]
+        if target_def.target_status is not None:
+            assert case.get("target_status") == "provisional", (
+                f"case {case_id!r} has no existing test proving its full claim and must be "
+                f"marked target_status: provisional"
+            )
+            assert case.get("proves"), f"case {case_id!r} is provisional but has no proves text"
+        else:
+            assert "target_status" not in case and "proves" not in case, (
+                f"case {case_id!r} has a fully-proven target and must not carry target_status/proves"
             )
 
 

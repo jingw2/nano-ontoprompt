@@ -273,9 +273,15 @@ def _journey_cases(seed: int) -> list[dict]:
 # asserts `journey-supply-chain` is real_model_browser and excluded from the
 # deterministic runner) and are left untouched. The functions below build the
 # real, versioned, 15-case-per-journey corpus that `journey_registry.py`
-# reads from test_data/runtime/<journey_id>/*.json -- a separate namespace
-# from the generic manifest.json cases above, so case IDs like
-# "edge-empty-result" can repeat once per journey without colliding.
+# reads from test_data/runtime/<journey_id>/*.json. Each journey's own
+# case_matrix.json keeps the bare case_id (so "edge-empty-result" can repeat
+# once per journey without colliding there); its 14 deterministic cases are
+# ALSO merged into this same generic manifest.json's `cases` array below
+# (via `_journey_deterministic_cases_merged`) under a globally-unique
+# f"{journey}-{case_id}" id, so the existing, unmodified
+# run_registered_cases.py -- which only ever reads this shared manifest.json,
+# never journey_registry.py's own namespace -- actually discovers and
+# executes all 42 of them.
 # ---------------------------------------------------------------------------
 
 # (kind, media_type, repo-relative path, fixture_id) per journey. The image
@@ -566,28 +572,35 @@ def build_journey_case_matrix(
             fixture_hashes["target_before_hash"] = outcome["target_before_hash"]
             fixture_hashes["target_after_hash"] = outcome["target_after_hash"]
 
-        if case_id == journey_registry.NORMAL_CASE_ID:
-            execution_mode = "real_model_browser"
-            target = journey_registry.browser_target(journey_id).to_dict()
-        else:
-            execution_mode = "deterministic"
-            target = journey_registry.DETERMINISTIC_CASE_TARGETS[case_id].to_dict()
+        case_doc: dict[str, Any] = {
+            "case_id": case_id,
+            "journey_id": journey_id,
+            "coverage": [f"business_journey.{journey_id}.{case_id.replace('-', '_')}"],
+            "expected": {"assertion": JOURNEY_CASE_ASSERTIONS[case_id]},
+            "layers": ["business_journey"],
+            "fixture_manifest_sha256": journey_hash,
+            "risk_class": risk_class,
+            "fixture_hashes": fixture_hashes,
+            "skip_allowed": False,
+        }
 
-        cases.append(
-            {
-                "case_id": case_id,
-                "journey_id": journey_id,
-                "coverage": [f"business_journey.{journey_id}.{case_id.replace('-', '_')}"],
-                "expected": {"assertion": JOURNEY_CASE_ASSERTIONS[case_id]},
-                "layers": ["business_journey"],
-                "fixture_manifest_sha256": journey_hash,
-                "risk_class": risk_class,
-                "fixture_hashes": fixture_hashes,
-                "execution_mode": execution_mode,
-                "skip_allowed": False,
-                "test_targets": [target],
-            }
-        )
+        if case_id == journey_registry.NORMAL_CASE_ID:
+            case_doc["execution_mode"] = "real_model_browser"
+            case_doc["test_targets"] = [journey_registry.browser_target(journey_id).to_dict()]
+        else:
+            case_doc["execution_mode"] = "deterministic"
+            case_doc["test_targets"] = [journey_registry.DETERMINISTIC_CASE_TARGETS[case_id].to_dict()]
+            # This is also the shared, globally-unique case_id the same case
+            # is merged into test_data/runtime/manifest.json under (see
+            # registry.JOURNEY_DETERMINISTIC_TARGETS) -- the id actually
+            # executed by run_registered_cases.py.
+            case_doc["shared_case_id"] = registry.journey_case_id(journey_id, case_id)
+            target_def = registry.JOURNEY_DETERMINISTIC_TARGET_DEFS[case_id]
+            if target_def.target_status is not None:
+                case_doc["target_status"] = target_def.target_status
+                case_doc["proves"] = target_def.proves
+
+        cases.append(case_doc)
     return {"cases": cases}
 
 
@@ -642,6 +655,40 @@ def build_all_journey_corpora(seed: int) -> dict[str, dict]:
     return files
 
 
+def _journey_deterministic_cases_merged() -> list[dict]:
+    """Merge each journey's 14 deterministic cases into this shared
+    manifest.json's own case namespace as f"{journey}-{case_id}", so the
+    existing, unmodified run_registered_cases.py naturally discovers and
+    executes all 42 of them -- Task 1 does not add a second runner. This is
+    the same target (and the same target_status/proves disclosure for the 6
+    cases with no fully-proving existing test) each journey's own
+    case_matrix.json records under the bare case_id; see
+    registry.JOURNEY_DETERMINISTIC_TARGET_DEFS for the full mapping.
+    """
+
+    cases = []
+    i = 0
+    for journey_id in journey_registry.JOURNEY_IDS:
+        for case_id, target_def in registry.JOURNEY_DETERMINISTIC_TARGET_DEFS.items():
+            qualified = registry.journey_case_id(journey_id, case_id)
+            extra: dict[str, Any] = {"journey_id": journey_id, "source_case_id": case_id}
+            if target_def.target_status is not None:
+                extra["target_status"] = target_def.target_status
+                extra["proves"] = target_def.proves
+            cases.append(
+                _case(
+                    qualified,
+                    ["business_journey_deterministic"],
+                    {"assertion": JOURNEY_CASE_ASSERTIONS[case_id]},
+                    [f"business_journey.{journey_id}.{case_id.replace('-', '_')}"],
+                    i,
+                    **extra,
+                )
+            )
+            i += 1
+    return cases
+
+
 def build_case_defs(seed: int) -> list[dict]:
     cases = (
         _snapshot_cases()
@@ -652,6 +699,7 @@ def build_case_defs(seed: int) -> list[dict]:
         + _refresh_cases()
         + _database_cases()
         + _journey_cases(seed)
+        + _journey_deterministic_cases_merged()
     )
     seen: set[str] = set()
     for case in cases:
@@ -1015,19 +1063,30 @@ governed dialogue with a normal and a high-risk outcome), `governance.json`
 (the `automatic`/`approved`/`rejected`/`expired` outcomes and their three
 `plan_instances`), `case_matrix.json` (the 15 exact cases from the plan's
 case matrix table), and `reproducibility.json` (the seed and a canonical
-content hash). `journey_registry.py` -- a separate module from `registry.py`
--- is the authoritative loader/validator (`load_journey_manifest`,
+content hash). `journey_registry.py` -- a module that imports from
+`registry.py` (never the reverse, to avoid an import cycle) -- is the
+authoritative loader/validator (`load_journey_manifest`,
 `validate_journey_manifest`, `journey_cases`, `assert_journey_case`) for this
-corpus; case IDs like `edge-empty-result` repeat once per journey by design,
-so they live in each journey's own `case_matrix.json` rather than the shared
-`manifest.json` cases list. Only each journey's `normal-pipeline-release`
-case is `execution_mode: "real_model_browser"`; the other 14 are
-deterministic and reuse the closest already-passing pytest node that proves
-the same governed-runtime property (see `journey_registry.py`'s
-`DETERMINISTIC_CASE_TARGETS` for the full, disclosed mapping). The rendered
-PNGs are produced once with this repository's own PyMuPDF-based PDF-to-image
-renderer (`app/services/v2/pipeline/steps/document_to_md.py`), not
-regenerated by this script, and are hashed like any other static input.
+corpus; case IDs like `edge-empty-result` repeat once per journey in each
+journey's own `case_matrix.json` by design. Only each journey's
+`normal-pipeline-release` case is `execution_mode: "real_model_browser"`;
+the other 14 are deterministic and reuse the closest already-passing pytest
+node that proves the same governed-runtime property (see `registry.py`'s
+`JOURNEY_DETERMINISTIC_TARGET_DEFS` for the full, disclosed mapping -- eight
+fully prove their case's claim, and six are marked
+`target_status: "provisional"` with a `proves` string naming the narrower
+property their target actually proves, pending real journey-specific
+coverage from Task 2/3). Every one of these 42 deterministic cases (14 x 3
+journeys) is ALSO merged into this shared `manifest.json`'s own `cases`
+array under the globally-unique id ``"<journey-with-hyphens>-<case_id>"``
+(e.g. `supply-chain-edge-empty-result`) -- see
+`registry.JOURNEY_DETERMINISTIC_TARGETS`/`journey_case_id` -- so the
+existing, unmodified `run_registered_cases.py` (which only ever reads this
+manifest.json) actually discovers and executes them; Task 1 does not add a
+second runner. The rendered PNGs are produced once with this repository's
+own PyMuPDF-based PDF-to-image renderer
+(`app/services/v2/pipeline/steps/document_to_md.py`), not regenerated by
+this script, and are hashed like any other static input.
 """
 
 

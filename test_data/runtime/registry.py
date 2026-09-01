@@ -234,6 +234,176 @@ JOURNEY_BROWSER_TARGETS = {
     "journey-credit": _playwright(_JOURNEY_SPEC, "credit journey completes the governed browser loop"),
 }
 
+# --- Journey deterministic cases (merged shared-registry namespace) ---------
+#
+# Each of the three journeys' 14 non-normal cases (see journey_registry.py's
+# CASE_IDS) is namespaced here as f"{journey-with-hyphens}-{case_id}" -- e.g.
+# "supply-chain-edge-empty-result" -- and merged into CASE_REGISTRY/
+# CASE_MATRIX below so the existing, unmodified run_registered_cases.py
+# naturally discovers and executes all 42 of them from the shared
+# manifest.json, exactly like every other case in this file. This is the
+# single source of truth for what each journey case's pytest target is;
+# journey_registry.py (which this module does NOT import, to avoid a import
+# cycle -- journey_registry.py imports this module) re-derives its own
+# per-journey DETERMINISTIC_CASE_TARGETS from JOURNEY_DETERMINISTIC_TARGET_DEFS
+# below, and generate_runtime_fixtures.py stamps the same defs into both the
+# shared manifest.json (qualified case_id) and each journey's own
+# case_matrix.json (bare case_id).
+#
+# Eight of these reuse the same real, already-passing test already
+# registered above under a different case_id (identity/snapshot/execution/
+# risk-policy/mcp-client), because the governed-runtime property those cases
+# claim is generic, not journey-specific -- reusing them is intentional, not
+# a copy-paste accident. The other six are marked `target_status:
+# "provisional"` with a `proves` string describing the narrower property
+# their current target actually proves, because no existing test (in this
+# codebase, as of this plan) proves the case's full claimed assertion --
+# they are TODOs for Task 2/3 to replace with real journey-specific
+# coverage, not silent overclaims.
+JOURNEY_DETERMINISTIC_CASE_IDS = (
+    "edge-empty-result",
+    "edge-duplicate-or-missing",
+    "security-no-grant",
+    "security-stale-release",
+    "security-prompt-injection",
+    "resilience-timeout-retry",
+    "resilience-429-retry",
+    "resilience-provider-error",
+    "resilience-mcp-timeout",
+    "resilience-sse-reconnect",
+    "writeback-automatic",
+    "writeback-hitl-approved",
+    "writeback-hitl-rejected",
+    "writeback-hitl-expired",
+)
+
+_QUALITY_TEST_FILE = "backend/tests/v2/curated/test_quality.py"
+_TOOL_GATEWAY_EXTERNAL_TEST_FILE = "backend/tests/agent/test_tool_gateway_external.py"
+_MCP_CLIENT_TEST_FILE = "backend/tests/agent/test_mcp_client.py"
+_EVENT_STREAM_TEST_FILE = "backend/tests/agent/test_event_stream.py"
+
+
+@dataclass(frozen=True)
+class JourneyDeterministicTargetDef:
+    """One journey case's real pytest node, plus an optional honesty marker.
+
+    ``node`` is a full ``path.py::test_name[param]`` pytest node id.
+    ``target_status``/``proves`` are both ``None`` when the target fully
+    proves the case's claimed assertion; otherwise ``target_status`` is
+    ``"provisional"`` and ``proves`` names the narrower property the target
+    actually proves today.
+    """
+
+    node: str
+    target_status: str | None = None
+    proves: str | None = None
+
+
+JOURNEY_DETERMINISTIC_TARGET_DEFS: dict[str, JourneyDeterministicTargetDef] = {
+    "edge-empty-result": JourneyDeterministicTargetDef(
+        f"{_RUNTIME_API_TEST_FILE}::test_investigate_api_returns_empty_allow_for_no_match"
+    ),
+    "edge-duplicate-or-missing": JourneyDeterministicTargetDef(
+        f"{_QUALITY_TEST_FILE}::test_quality_detects_duplicates",
+        target_status="provisional",
+        proves=(
+            "Tabular duplicate-row detection via the generic Curated QualityService "
+            "(duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also "
+            "contains a null/missing cell). Does not cover journey-specific entities "
+            "(duplicate invoices/applications) or, since exactly one target is allowed, the "
+            "missing-policy-field half of this case's claim (proven separately by the sibling "
+            "test_quality_detects_nulls, not registered here)."
+        ),
+    ),
+    "security-no-grant": JourneyDeterministicTargetDef(
+        f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[missing]"
+    ),
+    "security-stale-release": JourneyDeterministicTargetDef(
+        f"{_SNAPSHOT_FRESHNESS_TEST_FILE}::test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"
+    ),
+    "security-prompt-injection": JourneyDeterministicTargetDef(
+        f"{_TOOL_GATEWAY_EXTERNAL_TEST_FILE}::test_gateway_sanitizes_title_and_url_at_payload_boundary",
+        target_status="provisional",
+        proves=(
+            "Malicious upstream title/url content returned by an external tool call is "
+            "sanitized at the tool-gateway payload boundary before it can reach model "
+            "context. Does not prove policy immutability or unapproved-action prevention "
+            "against injected instructions in a document body -- that invariant instead comes "
+            "from the exact-plan-hash HITL system exercised by the writeback-* cases, since no "
+            "action this codebase can execute is ever driven by free-form model/document text."
+        ),
+    ),
+    "resilience-timeout-retry": JourneyDeterministicTargetDef(
+        f"{_POLLING_TEST_FILE}::test_failed_retry_records_bounded_backoff_deadline",
+        target_status="provisional",
+        proves=(
+            "A failed source pull schedules exactly one bounded retry with a backoff "
+            "deadline -- not an unbounded retry loop. This is the generic refresh-source "
+            "connector's retry-scheduling test, not the real DeepSeek HTTP-client "
+            "timeout/backoff path Task 2 adds; no HTTP timeout is involved."
+        ),
+    ),
+    "resilience-429-retry": JourneyDeterministicTargetDef(
+        f"{_EXECUTION_TEST_FILE}::test_idempotent_retry_never_calls_the_writer_twice",
+        target_status="provisional",
+        proves=(
+            "Retrying the same governed write never calls the writer twice "
+            "(retry-safety/idempotency). No HTTP status code is involved; nowhere in this "
+            "codebase handles an HTTP 429 today, so this does not prove 429-specific retry "
+            "behavior."
+        ),
+    ),
+    "resilience-provider-error": JourneyDeterministicTargetDef(
+        f"{_MCP_CLIENT_TEST_FILE}::test_call_tool_surfaces_protocol_error"
+    ),
+    "resilience-mcp-timeout": JourneyDeterministicTargetDef(
+        f"{_MCP_CLIENT_TEST_FILE}::test_call_tool_wraps_ssrf_block",
+        target_status="provisional",
+        proves=(
+            "A raised transport-layer exception from the MCP client's underlying safe_post "
+            "call is wrapped into a typed, traceable MCPClientError -- proven only for the "
+            "SSRF-block exception path. _rpc_call does not catch a generic transport timeout "
+            "today, so this does not prove timeout-specific handling, and it does not prove "
+            "no-duplicate-write."
+        ),
+    ),
+    "resilience-sse-reconnect": JourneyDeterministicTargetDef(
+        f"{_EVENT_STREAM_TEST_FILE}::test_events_persisted_before_notify_no_gap",
+        target_status="provisional",
+        proves=(
+            "Replaying persisted turn events from an after_seq cursor returns exactly the "
+            "persisted sequence with no gap or duplicate -- the same cursor-resume mechanism "
+            "a browser SSE reconnect depends on. Does not by itself prove one-turn/"
+            "one-tool-round preservation across a real reconnect."
+        ),
+    ),
+    "writeback-automatic": JourneyDeterministicTargetDef(
+        f"{_EXECUTION_TEST_FILE}::test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
+    ),
+    "writeback-hitl-approved": JourneyDeterministicTargetDef(
+        f"{_RISK_POLICY_TEST_FILE}::test_high_risk_plan_requires_exact_hash_hitl"
+    ),
+    "writeback-hitl-rejected": JourneyDeterministicTargetDef(
+        f"{_RISK_POLICY_TEST_FILE}::test_approve_exact_plan_rejects_wrong_hash"
+    ),
+    "writeback-hitl-expired": JourneyDeterministicTargetDef(
+        f"{_RISK_POLICY_TEST_FILE}::test_approve_exact_plan_rejects_expired_plan"
+    ),
+}
+
+
+def journey_case_id(journey_id: str, case_id: str) -> str:
+    """The globally-unique, shared-registry case_id for one journey's case."""
+
+    return f"{journey_id.replace('_', '-')}-{case_id}"
+
+
+JOURNEY_DETERMINISTIC_TARGETS: dict[str, TestTarget] = {
+    journey_case_id(journey_id, case_id): _pytest(target_def.node)
+    for journey_id in sorted(JOURNEY_IDS)
+    for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items()
+}
+
 CASE_REGISTRY: dict[str, TestTarget] = {
     **_SNAPSHOT_TARGETS,
     **_IDENTITY_TARGETS,
@@ -243,6 +413,7 @@ CASE_REGISTRY: dict[str, TestTarget] = {
     **_REFRESH_TARGETS,
     **_DATABASE_TARGETS,
     **JOURNEY_BROWSER_TARGETS,
+    **JOURNEY_DETERMINISTIC_TARGETS,
 }
 
 
@@ -343,3 +514,13 @@ def assert_case_registry(case: Mapping[str, object]) -> None:
         assert case["skip_allowed"] is False
         assert case["fixture_manifest_sha256"]
         assert case["risk_class"] in RISK_CLASSES
+
+    if "business_journey_deterministic" in layers:
+        assert case["journey_id"] in JOURNEY_IDS
+        assert case.get("source_case_id") in JOURNEY_DETERMINISTIC_CASE_IDS
+        target_def = JOURNEY_DETERMINISTIC_TARGET_DEFS[case["source_case_id"]]
+        if target_def.target_status is not None:
+            assert case.get("target_status") == "provisional"
+            assert case.get("proves"), f"case {case_id!r} is provisional but has no proves text"
+        else:
+            assert "target_status" not in case and "proves" not in case

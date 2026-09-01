@@ -5,15 +5,18 @@ Run with: python -m pytest test_data/runtime/test_journey_manifest.py -q
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from journey_registry import (  # noqa: E402
     CASE_IDS,
+    DETERMINISTIC_CASE_TARGETS,
     JOURNEY_IDS,
     NORMAL_CASE_ID,
     assert_journey_case,
@@ -21,6 +24,7 @@ from journey_registry import (  # noqa: E402
     load_journey_manifest,
     validate_journey_manifest,
 )
+from registry import CASE_REGISTRY, JOURNEY_DETERMINISTIC_TARGET_DEFS, journey_case_id  # noqa: E402
 
 ROOT = Path("test_data/runtime")
 
@@ -223,3 +227,67 @@ def test_inputs_never_carry_raw_bytes_only_paths_and_hashes():
             for value in entry.values():
                 if isinstance(value, str):
                     assert len(value) < 300, "input entries must reference, not embed, source content"
+
+
+# --- Finding 2 fix: every deterministic journey case is reachable from the
+# shared registry the real gate's run_registered_cases.py actually reads
+# from, not just from this journey-local namespace. -------------------------
+
+
+def test_every_deterministic_journey_case_is_merged_into_the_shared_registry():
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            if case["case_id"] == NORMAL_CASE_ID:
+                continue
+            shared_id = journey_case_id(journey_id, case["case_id"])
+            assert case["shared_case_id"] == shared_id
+            assert shared_id in CASE_REGISTRY, (
+                f"{shared_id} is not registered in registry.CASE_REGISTRY -- "
+                "it would never be discovered by run_registered_cases.py"
+            )
+            # Same test target on both sides of the merge.
+            target = case["test_targets"][0]
+            assert CASE_REGISTRY[shared_id].path == f"{target['path']}::{target['selector']}"
+
+
+def test_provisional_cases_are_exactly_the_six_the_review_flagged():
+    expected_provisional = {
+        "edge-duplicate-or-missing",
+        "security-prompt-injection",
+        "resilience-timeout-retry",
+        "resilience-429-retry",
+        "resilience-mcp-timeout",
+        "resilience-sse-reconnect",
+    }
+    actual_provisional = {
+        case_id for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items()
+        if target_def.target_status is not None
+    }
+    assert actual_provisional == expected_provisional
+    for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items():
+        if case_id in expected_provisional:
+            assert target_def.target_status == "provisional"
+            assert target_def.proves
+        else:
+            assert target_def.target_status is None
+            assert target_def.proves is None
+
+
+def test_all_deterministic_journey_targets_collect():
+    """Cheap contract check (pytest --collect-only, no execution): every
+    DETERMINISTIC_CASE_TARGETS node actually resolves in this repository's
+    test tree, not just a well-shaped path/selector string. A typo'd or
+    renamed test node would otherwise pass assert_journey_case's shape-only
+    check silently forever.
+    """
+
+    node_ids = sorted(
+        {f"{target.path}::{target.selector}".removeprefix("backend/") for target in DETERMINISTIC_CASE_TARGETS.values()}
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *node_ids],
+        cwd=REPO_ROOT / "backend",
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
