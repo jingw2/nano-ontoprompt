@@ -318,6 +318,42 @@ def test_event_accept_uses_the_connection_cursor_contract_when_provisioning_stat
     assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-opaque").count() == 0
 
 
+def test_event_accept_rejects_mismatched_contract_when_connection_config_is_encrypted(db):
+    """`Connection.config` is normally encrypted (see
+    `test_webhook_route_decrypts_managed_connection_config_for_secret_ref`'s
+    docstring for the exact real shape `POST /api/v2/connections` persists),
+    and the dedicated `Connection.cursor_contract` column stays NULL until an
+    operator explicitly calls `PUT .../refresh-configuration`. A raw
+    `dict(connection.config or {})` read in `accept()` would see only
+    `{"_encrypted": ...}` and silently fall back to trusting whatever cursor
+    contract/schema hash the FIRST incoming event envelope itself claims,
+    letting that envelope define the durable `RefreshSourceState` instead of
+    the operator's real configuration. This mirrors
+    `test_event_ingest_rejects_schema_drift`'s plaintext-config coverage but
+    against the real encrypted shape."""
+    from app.services import encryption_service
+
+    db.add(Connection(
+        id="source-001", name="orders-source", kind="rest", status="active",
+        config={"_encrypted": encryption_service.encrypt(json.dumps({
+            "cursor_contract": "watermark_primary_key", "schema_hash": "the-real-schema",
+        }))},
+    ))
+    db.commit()
+
+    record = _record(event_id="evt-first")
+    record.pop("watermark")
+    record.pop("primary_key")
+    record["source_cursor"] = "opaque-001"
+    record["schema_hash"] = "a-different-schema"
+    envelope = ManagedOutboxAdapter.normalize(record, source_id="source-001", received_at=FIXED_NOW)
+
+    with pytest.raises(EventIngressError) as exc:
+        EventIngestService().accept(db, envelope, lease_owner="event-worker-001", now=FIXED_NOW)
+    assert exc.value.reason_code == "SCHEMA_DRIFT"
+    assert db.query(RefreshSourceState).filter(RefreshSourceState.source_id == "source-001").count() == 0
+
+
 def test_broker_failure_is_reconciled_from_the_durable_inbox(db):
     _source(db)
     service = EventIngestService()

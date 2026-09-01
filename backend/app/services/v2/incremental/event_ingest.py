@@ -242,7 +242,22 @@ class EventIngestService:
             return _fold_into_existing_inbox_row(db, row, event_hash=event_hash)
 
         connection = db.get(Connection, envelope.source_id)
-        connection_config = dict(connection.config or {}) if connection is not None else {}
+        if connection is not None:
+            # Local import: operations.py imports EventIngestService from this
+            # module at module scope, so a module-level import here would be
+            # circular. `_connection_configuration` is the same decrypt-or-
+            # plaintext helper refresh_events.py and polling.py already use —
+            # a raw `dict(connection.config or {})` read would see only
+            # `{"_encrypted": ...}` for a connection created via the encrypted
+            # POST /api/v2/connections path, silently defaulting the
+            # configured cursor contract/schema hash to whatever the incoming
+            # event envelope itself claims instead of the operator's real
+            # configuration.
+            from app.services.v2.incremental.operations import _connection_configuration
+
+            connection_config = _connection_configuration(connection)
+        else:
+            connection_config = {}
         configured_contract = (
             getattr(connection, "cursor_contract", None)
             or connection_config.get("cursor_contract")
