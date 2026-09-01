@@ -306,6 +306,46 @@ def test_fresh_snapshot_exposes_cursor_lag_and_lineage(db):
     assert view.pipeline_run_ids == ["pipeline-run-001"]
 
 
+def test_unrelated_refresh_run_cannot_stamp_freshness_onto_unconnected_dataset_versions(db):
+    """`materialize_refresh_snapshot` must not let an unrelated, successful,
+    cursor-bearing `RefreshRun` stamp its freshness/cursor onto dataset
+    versions it never produced -- it must degrade to the same "unknown"
+    freshness shape the function already uses for missing/unsuccessful/
+    cursor-less runs, rather than trusting the two independent
+    `refresh_run_id`/`dataset_version_ids` parameters as related on faith."""
+    release = _ensure_release(db)
+    dataset_version_id = "dv-refresh-success-001"
+    # Governs dataset_version_id via the real, related "refresh-success-001".
+    materialize_refresh_fixture(db, refresh_run_id="refresh-success-001")
+
+    # A real, successful, cursor-bearing RefreshRun for a completely
+    # different source/pipeline -- never associated with dataset_version_id
+    # via DatasetVersion.refresh_run_id or via PipelineRunInput lineage.
+    unrelated = RefreshRun(
+        id="refresh-unrelated-001", source_id="source-unrelated-001", resource="invoices",
+        policy="batch", config_version=1, cursor_contract="watermark_primary_key",
+        status="succeeded", dispatch_state="dispatched",
+        idempotency_key="idem-refresh-unrelated-001",
+        cursor_after_json={
+            "watermark": None, "primary_key": "999", "opaque_value": None,
+            "observed_at": FIXED_NOW.isoformat(),
+        },
+        fencing_token=1, lag_seconds=5, pipeline_run_id="pr-unrelated-001",
+    )
+    db.add(unrelated)
+    db.commit()
+
+    snapshot = materialize_refresh_snapshot(
+        db, refresh_run_id=unrelated.id, ontology_release_id=release.id,
+        dataset_version_ids=[dataset_version_id], created_by=USER_ID,
+    )
+
+    assert snapshot.freshness_state == "unknown"
+    assert snapshot.freshness_lag_seconds is None
+    assert snapshot.source_cursor is None
+    assert snapshot.lineage_summary == {}
+
+
 def test_get_last_successful_refresh_run_reads_the_durable_source_state_pointer(db):
     """`get_last_successful_refresh_run` must read the authoritative
     `RefreshSourceState.last_successful_run_id` pointer `record_refresh_outcome`

@@ -258,6 +258,45 @@ def materialize_snapshot(
     return snapshot
 
 
+def _refresh_run_relates_to_dataset_versions(
+    db: Session, *, run: Any, dataset_version_ids: Sequence[str],
+) -> bool:
+    """Confirm `run` actually produced at least one of the requested dataset
+    versions before it is ever allowed to stamp its freshness/cursor onto
+    them — an unrelated, ungoverned refresh must never be recorded as
+    silently fresh (see this module's docstring).
+
+    Relatedness holds either directly (`DatasetVersion.refresh_run_id`
+    points at this run) or via the pipeline run this refresh recorded
+    (`RefreshRun.pipeline_run_id` appears in the requested versions' own
+    `PipelineRunInput` lineage) — the same two provenance links
+    `lineage.collect_lineage` and `record_refresh_outcome` already rely on.
+    """
+    from app.models.v2.dataset import DatasetVersion
+    from app.models.v2.pipeline import PipelineRunInput
+
+    ids = list(dataset_version_ids)
+    if not ids:
+        return False
+    direct = db.execute(
+        select(DatasetVersion.id).where(
+            DatasetVersion.id.in_(ids),
+            DatasetVersion.refresh_run_id == run.id,
+        ).limit(1)
+    ).scalar_one_or_none()
+    if direct is not None:
+        return True
+    if not run.pipeline_run_id:
+        return False
+    via_pipeline_run = db.execute(
+        select(PipelineRunInput.id).where(
+            PipelineRunInput.dataset_version_id.in_(ids),
+            PipelineRunInput.pipeline_run_id == run.pipeline_run_id,
+        ).limit(1)
+    ).scalar_one_or_none()
+    return via_pipeline_run is not None
+
+
 def materialize_refresh_snapshot(
     db: Session,
     *,
@@ -272,16 +311,22 @@ def materialize_refresh_snapshot(
     Calls the same governed `materialize_snapshot` path Task 11/12 already
     validate lineage through; this function's only added responsibility is
     resolving `refresh_run_id` to a frozen cursor/lag/lineage shape. A run
-    that cannot be resolved to a successful, cursor-bearing outcome yields
-    the safe "unknown" freshness shape rather than guessing — an unknown or
-    ungoverned refresh must never be recorded as silently fresh. This always
-    inserts a new `SemanticSnapshot` row; it never updates or reuses one.
+    that cannot be resolved to a successful, cursor-bearing outcome, OR that
+    has no actual lineage relationship to the requested
+    `dataset_version_ids` (see `_refresh_run_relates_to_dataset_versions`),
+    yields the safe "unknown" freshness shape rather than guessing — an
+    unknown or ungoverned refresh must never be recorded as silently fresh.
+    This always inserts a new `SemanticSnapshot` row; it never updates or
+    reuses one.
     """
     from app.models.v2.refresh import RefreshRun
 
     run = db.execute(select(RefreshRun).where(RefreshRun.id == refresh_run_id)).scalar_one_or_none()
     cursor_after = run.cursor_after_json if run is not None else None
-    if run is None or run.status != "succeeded" or not cursor_after or not cursor_after.get("observed_at"):
+    related = run is not None and _refresh_run_relates_to_dataset_versions(
+        db, run=run, dataset_version_ids=dataset_version_ids,
+    )
+    if run is None or not related or run.status != "succeeded" or not cursor_after or not cursor_after.get("observed_at"):
         freshness_state, freshness_lag_seconds, source_cursor, lineage_summary = "unknown", None, None, {}
     else:
         freshness_state = "fresh"
