@@ -298,12 +298,15 @@ def trigger_refresh(
     # request may still occupy it: (source_id, resource, config_version,
     # idempotency_key) is DB-unique, so inserting a new run under the exact
     # same base key would violate that constraint. Suffix a deterministic
-    # generation counter — derived from how many runs already used this base
-    # key — so the new attempt still gets a stable key (true idempotency for
-    # concurrent duplicates of *this* request while it is active) without
-    # colliding with the prior, now-terminal, run.
-    prior_attempts = db.execute(
-        select(func.count()).select_from(RefreshRun).where(
+    # generation counter so the new attempt still gets a stable key (true
+    # idempotency for concurrent duplicates of *this* request while it is
+    # active) without colliding with the prior, now-terminal, run. This is
+    # derived from the MAX numeric suffix currently in use (not a COUNT of
+    # matching rows) so it stays collision-free even if some RefreshRun rows
+    # for this key were ever purged/deleted — a count would re-mint an
+    # already-used #N key in that case and hit the unique constraint.
+    existing_keys = db.execute(
+        select(RefreshRun.idempotency_key).where(
             RefreshRun.source_id == source_id,
             RefreshRun.resource == resource,
             RefreshRun.config_version == state.config_version,
@@ -312,8 +315,16 @@ def trigger_refresh(
                 RefreshRun.idempotency_key.like(f"{base_key}#%"),
             ),
         )
-    ).scalar_one()
-    idempotency_key = base_key if prior_attempts == 0 else f"{base_key}#{prior_attempts}"
+    ).scalars().all()
+    if not existing_keys:
+        idempotency_key = base_key
+    else:
+        max_suffix = 0
+        for key in existing_keys:
+            suffix = key[len(base_key) + 1:]
+            if key != base_key and suffix.isdigit():
+                max_suffix = max(max_suffix, int(suffix))
+        idempotency_key = f"{base_key}#{max_suffix + 1}"
 
     run = RefreshRun(
         id=str(uuid.uuid4()), source_id=source_id, resource=resource,

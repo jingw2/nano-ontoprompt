@@ -549,6 +549,60 @@ def test_manual_trigger_reuses_active_run_but_creates_new_one_after_terminal(db)
     assert duplicate_of_second.id == second.id
 
 
+def test_manual_trigger_generation_suffix_survives_a_purged_base_run(db):
+    """The generation suffix appended to a re-triggered idempotency key
+    (`base_key#N`) must be derived from the MAX numeric suffix currently in
+    use, not a COUNT of matching rows — a COUNT silently re-mints an
+    already-used `#N` key (and hits the unique constraint) if any prior
+    generation's row is ever deleted/purged. Seeds a base run plus `#1`/`#2`
+    suffixed runs, deletes the base row to simulate a purge, then triggers
+    once more and confirms the new run gets `#3`, not a colliding `#1`."""
+    source = Connection(
+        id="source-001", name="orders-source", kind="rest", status="active",
+        config={"cursor_contract": "watermark_primary_key"},
+        refresh_policy="micro_batch", cursor_contract="watermark_primary_key",
+    )
+    db.add(source)
+    db.commit()
+
+    base = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert base.idempotency_key == "manual:source-001:orders:micro_batch"
+    base.status = "succeeded"
+    base.terminal_at = NOW
+    db.commit()
+
+    gen1 = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert gen1.idempotency_key == "manual:source-001:orders:micro_batch#1"
+    gen1.status = "succeeded"
+    gen1.terminal_at = NOW
+    db.commit()
+
+    gen2 = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert gen2.idempotency_key == "manual:source-001:orders:micro_batch#2"
+    gen2.status = "succeeded"
+    gen2.terminal_at = NOW
+    db.commit()
+
+    # Simulate a purge of the base (generation 0) run.
+    db.delete(db.get(RefreshRun, base.id))
+    db.commit()
+
+    gen3 = trigger_refresh(
+        db, source_id="source-001", resource="orders", mode=RefreshPolicy.MICRO_BATCH,
+        backfill_from=None, backfill_to=None, operator_id="operator-001", now=NOW,
+    )
+    assert gen3.idempotency_key == "manual:source-001:orders:micro_batch#3"
+
+
 def test_dlq_replay_does_not_mutate_failed_run(db):
     connector = _SourceConnector(error=RuntimeError("source unavailable"))
     _polling_source(db, connector=connector)

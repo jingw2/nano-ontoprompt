@@ -446,6 +446,16 @@ def test_plan_hash_changes_when_only_freshness_driven_policy_decision_differs(
     `risk_classification` constant too; `before_image_hash`/`version_hash`/
     `precondition_hashes` never depend on freshness) — before this fix, both
     plans hashed identically despite genuinely different policy state.
+
+    `create_action_plan` also folds `expiry` (`datetime.now(timezone.utc) +
+    TTL`) into the hash, and that is wall-clock-dependent — two real calls a
+    moment apart get different `expiry` values regardless of policy state.
+    Left unpinned, that alone would make `stale_plan.plan_hash !=
+    fresh_plan.plan_hash` trivially true even if `policy_decision` (this
+    test's actual target) were dropped from the hash entirely, so this test
+    freezes `datetime.now` (via `service_module.datetime`, the name
+    `create_action_plan` calls through) to an identical instant across both
+    calls, isolating `policy_decision` as the only remaining variable.
     """
     from app.services.runtime import service as service_module
     from app.services.runtime.policy import FreshnessView
@@ -454,6 +464,15 @@ def test_plan_hash_changes_when_only_freshness_driven_policy_decision_differs(
     stale_view = FreshnessView(state="stale", lag_seconds=7200, cursor=None, sla_status="breached")
     views = iter([fresh_view, stale_view])
     monkeypatch.setattr(service_module, "compute_snapshot_freshness", lambda *a, **k: next(views))
+
+    frozen_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now
+
+    monkeypatch.setattr(service_module, "datetime", _FrozenDatetime)
 
     request = valid_plan_request()
     fresh_plan = RuntimeService().create_action_plan(request, runtime_context, db)
@@ -472,6 +491,9 @@ def test_plan_hash_changes_when_only_freshness_driven_policy_decision_differs(
     assert stale_plan.precondition_hashes == fresh_plan.precondition_hashes
     assert stale_plan.risk_classification == fresh_plan.risk_classification
     assert stale_plan.idempotency_key == fresh_plan.idempotency_key
+    # expiry is frozen identically across both calls (see docstring), so it
+    # cannot be the reason the hashes below differ.
+    assert stale_plan.expiry == fresh_plan.expiry
 
     assert stale_plan.plan_hash != fresh_plan.plan_hash
 

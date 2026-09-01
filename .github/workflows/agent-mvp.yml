@@ -165,15 +165,29 @@ jobs:
               -Q refresh.schedule,refresh.poll,refresh.event,refresh.replay,artifact.extraction,agent.interactive,housekeeping \
               --prefetch-multiplier=1 || code=$?
           test "${code:-0}" -eq 124 || test "${code:-0}" -eq 0
+      - name: Start runtime Postgres/MySQL fixtures
+        # Ungated (not restricted to matrix.python-version == '3.12'):
+        # "Backend core suites" below is a plain `pytest -q` over all of
+        # backend/tests/ that runs on BOTH matrix legs, and it collects and
+        # RUNS tests/runtime/test_acceptance_matrix.py::test_registry_runner_executes_every_deterministic_case_once,
+        # which dispatches the dual-dialect deterministic cases as pytest
+        # subprocesses needing a live Postgres/MySQL fixture on 3.11 too, not
+        # just 3.12. Started once here for the whole job and torn down once
+        # at the very end (see "Stop runtime Postgres/MySQL fixtures" below).
+        run: docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
       - name: Backend core suites
+        env:
+          # See "Start runtime Postgres/MySQL fixtures" above: this plain
+          # `pytest -q` collects test_acceptance_matrix.py's registry-runner
+          # test, whose subprocess dialect cases skip (folded into a failure
+          # by run_registered_cases.assert_deterministic_report) without these.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
         run: |
           cd backend
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
             TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
             python -m pytest -q
-      - name: Start runtime Postgres/MySQL fixtures
-        if: matrix.python-version == '3.12'
-        run: docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
       - name: Runtime release registry and acceptance gate
         if: matrix.python-version == '3.12'
         env:
@@ -195,11 +209,15 @@ jobs:
           python -m tests.runtime.run_registered_cases \
             --manifest ../test_data/runtime/manifest.json \
             --report ../artifacts/runtime/deterministic-cases.json
-      - name: Stop runtime Postgres/MySQL fixtures
-        if: always() && matrix.python-version == '3.12'
-        run: docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans
       - name: Refresh, queue, and Runtime integration gate
         if: matrix.python-version == '3.12'
+        env:
+          # `tests/runtime -q` re-collects test_acceptance_matrix.py's
+          # registry-runner test (see above). The fixtures started at job
+          # start are still up here — they're now torn down once, at job
+          # end, not right after the registry gate step.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
         run: |
           cd backend
           TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
@@ -237,3 +255,6 @@ jobs:
             bash ../scripts/run_agent_e2e.sh
       - name: Plan contract check
         run: cd backend && python scripts/ci/check_agent_plan_contract.py
+      - name: Stop runtime Postgres/MySQL fixtures
+        if: always()
+        run: docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans

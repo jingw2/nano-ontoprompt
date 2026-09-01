@@ -753,6 +753,12 @@ def main(argv: list[str] | None = None) -> int:
                 errors.append(f"manifest.json has cases a fresh generation does not produce: {extra}")
             if drifted:
                 errors.append(f"case content (e.g. 'expected') differs from a fresh generation: {drifted}")
+            if not missing and not extra and not drifted:
+                # Same set of case_ids with identical content each, but
+                # fresh["cases"] != existing["cases"] still triggered this
+                # block — the only remaining possibility is a pure ordering
+                # difference, which none of the checks above catch.
+                errors.append("case ordering differs from the checked-in manifest")
         if errors:
             for error in errors:
                 print(f"runtime fixture generation is not reproducible: {error}", file=sys.stderr)
