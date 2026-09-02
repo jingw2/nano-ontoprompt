@@ -128,6 +128,16 @@ def test_endpoint_allow_deny_inventory_no_bypass():
         ("POST", "/api/v2/runtime/action-plans/{plan_id}/approve"),
         ("POST", "/api/v2/runtime/action-plans/{plan_id}/execute"),
         ("POST", "/api/v2/runtime/executions/{execution_id}/rollback-plans"),
+        # Task 3 (business-journey acceptance): `create_action_plan_from_turn`/
+        # `decide_action_plan_from_turn` (app/routers/v2/runtime.py) are Runtime
+        # UI endpoints driven by the signed-in user's own session
+        # (`get_current_user`), not a delegated Agent credential — the same
+        # family as the `/api/v1/agent-approvals/.../approve` routes above.
+        # `app.services.runtime.turn_plans` checks the caller is the OWNER of
+        # the turn's session (existence-hiding 404 otherwise) in the service
+        # body, not via an editor/admin dependency.
+        ("POST", "/api/v2/runtime/action-plans/from-turn"),
+        ("POST", "/api/v2/runtime/action-plans/from-turn/{plan_id}/decide"),
         # `issue_browser_delegation` (app/routers/v2/runtime.py) checks
         # `role_allows(current_user.role, "editor")` in the route body before
         # it will mint a WRITE_SCOPE-capable credential — an in-handler

@@ -1867,6 +1867,60 @@
         "title": "ExtractionRequest",
         "type": "object"
       },
+      "GovernedPlanDecisionRequestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "plan_hash": {
+            "title": "Plan Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "plan_hash"
+        ],
+        "title": "GovernedPlanDecisionRequestBody",
+        "type": "object"
+      },
+      "GovernedPlanFromTurnRequestBody": {
+        "additionalProperties": false,
+        "description": "Extra fields are rejected — the caller can only ever assert what a\nproposal actually needs (turn/branch/target/idempotency/digest), never\nan identity or a decision.",
+        "properties": {
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "payload_digest": {
+            "title": "Payload Digest",
+            "type": "string"
+          },
+          "target_fixture_id": {
+            "title": "Target Fixture Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "branch",
+          "target_fixture_id",
+          "idempotency_key",
+          "payload_digest"
+        ],
+        "title": "GovernedPlanFromTurnRequestBody",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -18341,6 +18395,159 @@
           }
         ],
         "summary": "Create Action Plan",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/from-turn": {
+      "post": {
+        "operationId": "create_action_plan_from_turn_api_v2_runtime_action_plans_from_turn_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernedPlanFromTurnRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Action Plan From Turn Api V2 Runtime Action Plans From Turn Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Action Plan From Turn",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/from-turn/{plan_id}": {
+      "get": {
+        "operationId": "get_action_plan_from_turn_api_v2_runtime_action_plans_from_turn__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Action Plan From Turn Api V2 Runtime Action Plans From Turn  Plan Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Action Plan From Turn",
+        "tags": [
+          "v2-runtime"
+        ]
+      }
+    },
+    "/api/v2/runtime/action-plans/from-turn/{plan_id}/decide": {
+      "post": {
+        "operationId": "decide_action_plan_from_turn_api_v2_runtime_action_plans_from_turn__plan_id__decide_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernedPlanDecisionRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Decide Action Plan From Turn Api V2 Runtime Action Plans From Turn  Plan Id  Decide Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Action Plan From Turn",
         "tags": [
           "v2-runtime"
         ]

@@ -174,6 +174,7 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "governance_audit_chain_heads",
         "governance_audit_logs",
         "governance_audit_outbox",
+        "governed_turn_plans",
         "logic_rules",
         "managed_action_bindings",
         "mcp_connection_schemas",
