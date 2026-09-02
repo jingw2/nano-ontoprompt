@@ -17,6 +17,7 @@ import uuid
 
 from sqlalchemy import text
 
+from app.config import settings
 from app.tasks.celery_app import celery_app
 
 
@@ -33,7 +34,20 @@ def _resolve_business_journey(model_config_options) -> dict | None:
     journey model configuration is ever minted). `options` round-trips as a
     dict on PostgreSQL but can arrive as a JSON string on the SQLite unit
     harness — decode defensively, matching the same duality this codebase
-    already normalizes for `EntityInstance.row_data` elsewhere."""
+    already normalizes for `EntityInstance.row_data` elsewhere.
+
+    GATED unconditionally behind `settings.business_journey_acceptance_
+    enabled` (default `False`): `model_config_versions.options` is an
+    editor-writable, unvalidated JSON blob, and every value this function
+    checks for (provider/model/origin constants) is public knowledge — an
+    untrusted editor could otherwise tag their OWN model config and opt
+    their OWN Agent's turns into this privileged mode (server
+    `DEEPSEEK_API_KEY` credential instead of the config's own; a real,
+    no-approval-gate `entity_instances` mutation via `execute_automatic_
+    low_risk_action`). Real deployments never set this flag; `app.config`
+    additionally refuses to start with it set under `ENVIRONMENT=production`."""
+    if not settings.business_journey_acceptance_enabled:
+        return None
     if isinstance(model_config_options, (str, bytes, bytearray)):
         try:
             model_config_options = json.loads(model_config_options) if model_config_options else {}

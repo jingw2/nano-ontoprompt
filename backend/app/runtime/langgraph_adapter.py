@@ -85,15 +85,17 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
     runtime persists the citations as observable events
     (P2B-TOOLS runtime filtering + grounded-citation surface).
 
-    `business_journey` (Task 3, business-journey acceptance) — when given,
+    `business_journey` (Task 3/4, business-journey acceptance) — when given,
     `{"run_id", "journey_id"}` at minimum — routes the Turn through
     `LangGraphRuntime`'s dedicated `DeepSeekVisionCaller` two-completion
     protocol (`LangGraphRuntime._run_business_journey_turn`) instead of the
-    generic provider-agnostic tool-calling loop. No production caller of
-    this function passes it yet (there is no browser/dispatch-side plumbing
-    carrying a business-journey run/journey id today) — it exists so that
-    plumbing has a ready-made, already-tested hook to populate once it
-    exists, rather than requiring a second context-assembly path."""
+    generic provider-agnostic tool-calling loop. The real production caller
+    is `app.tasks.agent_turn.agent_turn_execute`, which resolves it from
+    the turn's pinned model configuration
+    (`agent_turn._resolve_business_journey`) — itself gated behind
+    `settings.business_journey_acceptance_enabled` (default `False`), so a
+    real deployment never routes a turn through this protocol regardless of
+    what a caller passes here."""
     extra: dict[str, Any] = {}
     if business_journey:
         extra["business_journey"] = dict(business_journey)

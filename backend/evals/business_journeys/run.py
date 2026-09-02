@@ -69,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.phase == "verify" and args.model_id is not None:
         parser.error("--model-id is only accepted with --phase prepare")
+    if not args.run_id.strip():
+        # An empty run_id fails closed here rather than silently: it would
+        # otherwise reach `app.tasks.agent_turn._resolve_business_journey`'s
+        # `if not run_id` truthiness check, taking the turn quietly down the
+        # generic (non-journey) path with no error raised anywhere.
+        parser.error("--run-id must not be empty")
 
     try:
         if args.phase == "prepare":
