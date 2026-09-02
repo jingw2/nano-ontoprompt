@@ -275,6 +275,23 @@ def _semantic_minimum(manifest: Any) -> JourneySemanticMinimum:
     )
 
 
+def get_journey_low_risk_action(journey_id: str) -> str:
+    """The single low-risk action name a business-journey turn's browser
+    completion must produce and `execute_automatic_low_risk_action`'s caller
+    must validate against, read from the SAME manifest `verify_journey`
+    cross-checks it against — never re-derived or hardcoded a second time.
+    `app.runtime.langgraph_runtime` calls this (a real, if unusual,
+    production-code-reaching-into-`evals` dependency, matching the
+    established precedent of importing `evals.business_journeys.contracts`/
+    `deepseek_vision` there already) to both constrain the final
+    completion's response schema and validate the model's returned action
+    before ever executing it."""
+    if journey_id not in JOURNEY_IDS:
+        raise JourneyAcceptanceError(f"JOURNEY_UNKNOWN: {journey_id!r}")
+    manifest = load_journey_manifest(journey_id, _RUNTIME_DATA_DIR)
+    return str(manifest.semantic_minima.get("low_risk_action") or "")
+
+
 def prepare_journey(
     journey_id: str,
     *,
@@ -688,6 +705,7 @@ __all__ = [
     "JourneyPreparation",
     "JourneyPreparationBudget",
     "JourneyVerification",
+    "get_journey_low_risk_action",
     "prepare_all_journeys",
     "prepare_journey",
     "read_browser_evidence",

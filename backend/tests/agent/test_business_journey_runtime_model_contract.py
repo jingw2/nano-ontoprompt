@@ -41,6 +41,12 @@ from evals.business_journeys.deepseek_client import DeepSeekVisionClient
 
 RUN_ID = "journey-model-contract"
 JOURNEY_ID = "supply_chain"
+# The real, checked-in fixture's own `low_risk_action` for JOURNEY_ID
+# (test_data/runtime/supply_chain/semantic_minima.json) — `_prepare` now
+# resolves this SAME value for every business-journey turn (second review
+# round), so any test that supplies `automatic_action` must use this exact
+# string or the schema/server-side validation rejects it.
+JOURNEY_LOW_RISK_ACTION = "risk_label"
 
 
 @pytest.fixture(autouse=True)
@@ -436,18 +442,12 @@ def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creatio
     assert plan.status == "pending"
 
 
-def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_real_receipt(
-    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
-):
-    """Closes Critical Finding #3: the turn's one low-risk action must run
-    automatically (no approval gate) with a REAL receipt — not the event
-    payload shape only the test fake previously supplied. This runs the real
-    `LangGraphRuntime.start_turn`, whose final completion names the fixture
-    row to act on, and then reads back — independently of the runtime — the
-    real `EntityInstance.row_data` mutation and the real
-    `governance_audit_logs` row the automatic action must have written."""
+def _seed_automatic_action_fixture(db):
+    """Real user/ontology/release/instance/agent/session/turn rows an
+    automatic-action test needs — shared by the accept and reject paths."""
     user = User(
-        id=str(uuid.uuid4()), username="tp-auto-user", email="tp-auto@example.invalid",
+        id=str(uuid.uuid4()), username=f"tp-auto-{uuid.uuid4().hex[:8]}",
+        email=f"tp-auto-{uuid.uuid4().hex[:8]}@example.invalid",
         password_hash="x", role="editor", security_domain_id="00000000-0000-0000-0000-000000000001",
     )
     db.add(user)
@@ -481,7 +481,6 @@ def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_rea
     )
     db.add(instance)
     db.commit()
-    original_revision = instance.revision
 
     agent_id = str(uuid.uuid4())
     agent_version_id = str(uuid.uuid4())
@@ -504,20 +503,40 @@ def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_rea
         "VALUES (:id, :sid, 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ), {"id": turn_id, "sid": session_id})
     db.commit()
+    return SimpleNamespace(
+        user=user, project=project, entity=entity, release_id=release_id, instance=instance,
+        agent_id=agent_id, agent_version_id=agent_version_id, session_id=session_id, turn_id=turn_id,
+    )
+
+
+def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_real_receipt(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Closes Critical Finding #3: the turn's one low-risk action must run
+    automatically (no approval gate) with a REAL receipt — not the event
+    payload shape only the test fake previously supplied. This runs the real
+    `LangGraphRuntime.start_turn`, whose final completion names the fixture
+    row to act on, and then reads back — independently of the runtime — the
+    real `EntityInstance.row_data` mutation and the real
+    `governance_audit_logs` row the automatic action must have written."""
+    seed = _seed_automatic_action_fixture(db)
+    instance = seed.instance
+    original_revision = instance.revision
 
     deepseek_transport.queue.append({"tool_call": None, "answer": None})
     deepseek_transport.queue.append({
         "answer": "Supplier MAT001 flagged for review.",
         "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
-        "automatic_action": {"target_fixture_id": instance.id, "action": "flag_reviewed"},
+        "automatic_action": {"target_fixture_id": instance.id, "action": JOURNEY_LOW_RISK_ACTION},
     })
 
     context = TurnRuntimeContext(
-        turn_id=turn_id, session_id=session_id, agent_id=agent_id, agent_version_id=agent_version_id,
-        release_id=release_id, model_config_version_id=pinned_model_config_version_id, model_name=MODEL_ID,
+        turn_id=seed.turn_id, session_id=seed.session_id, agent_id=seed.agent_id,
+        agent_version_id=seed.agent_version_id, release_id=seed.release_id,
+        model_config_version_id=pinned_model_config_version_id, model_name=MODEL_ID,
         user_message="Flag MAT001 for review.",
         extra={
-            "user_id": user.id,
+            "user_id": seed.user.id,
             "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
         },
     )
@@ -529,12 +548,12 @@ def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_rea
     sandbox_receipt_id = final_event.payload["sandbox_receipt_id"]
     audit_event_id = final_event.payload["audit_event_id"]
     assert receipt_id and sandbox_receipt_id and audit_event_id
-    assert final_event.payload["automatic_action"] == "flag_reviewed"
+    assert final_event.payload["automatic_action"] == JOURNEY_LOW_RISK_ACTION
     assert any(e.event_type == "turn_succeeded" for e in events)
 
     # Read back the real mutation, independently of the runtime.
     db.expire(instance)
-    assert instance.row_data.get("_automatic_action_applied") == "flag_reviewed"
+    assert instance.row_data.get("_automatic_action_applied") == JOURNEY_LOW_RISK_ACTION
     assert instance.revision == original_revision + 1
 
     # Read back the real audit event, independently of the runtime.
@@ -543,4 +562,54 @@ def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_rea
     ), {"id": audit_event_id}).mappings().one()
     assert audit_row["operation"] == "runtime.automatic_action.execute"
     assert audit_row["decision"] == "automatic"
-    assert audit_row["actor_user_id"] == user.id
+    assert audit_row["actor_user_id"] == seed.user.id
+
+
+def test_business_journey_turn_rejects_an_automatic_action_that_does_not_match_the_manifest(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Second review round, Important Finding: nothing structurally stopped
+    an unconstrained model from proposing an `automatic_action.action` other
+    than the journey's exact `low_risk_action` — which `verify_journey`
+    would then reject anyway (deterministically, for every real run). This
+    simulates a provider that ignores/violates the (now-enum-constrained)
+    response schema and proposes an out-of-manifest action string, and
+    confirms the turn fails closed — no execution, no mutation, no receipt —
+    rather than silently accepting arbitrary text."""
+    seed = _seed_automatic_action_fixture(db)
+    instance = seed.instance
+    original_revision = instance.revision
+    original_row_data = dict(instance.row_data)
+
+    deepseek_transport.queue.append({"tool_call": None, "answer": None})
+    deepseek_transport.queue.append({
+        "answer": "Supplier MAT001 flagged for review.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+        "automatic_action": {"target_fixture_id": instance.id, "action": "delete_everything"},
+    })
+
+    context = TurnRuntimeContext(
+        turn_id=seed.turn_id, session_id=seed.session_id, agent_id=seed.agent_id,
+        agent_version_id=seed.agent_version_id, release_id=seed.release_id,
+        model_config_version_id=pinned_model_config_version_id, model_name=MODEL_ID,
+        user_message="Flag MAT001 for review.",
+        extra={
+            "user_id": seed.user.id,
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+        },
+    )
+    runtime = LangGraphRuntime(db=db, gateway=_FakeGateway({}), max_tool_rounds=1)
+    events = _run(runtime, context)
+
+    failed = next(e for e in events if e.event_type == "turn_failed")
+    assert failed.payload["error_code"] == "AUTOMATIC_ACTION_INVALID"
+    assert not any(e.event_type == "final_response" for e in events)
+
+    # No mutation, no receipt, no audit event — rejected before execution.
+    db.expire(instance)
+    assert instance.row_data == original_row_data
+    assert instance.revision == original_revision
+    audit_count = db.execute(text(
+        "SELECT COUNT(*) AS n FROM governance_audit_logs WHERE operation = 'runtime.automatic_action.execute'"
+    )).mappings().one()["n"]
+    assert audit_count == 0

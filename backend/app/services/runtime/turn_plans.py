@@ -548,7 +548,14 @@ def execute_automatic_low_risk_action(
     """The one low-risk action a business-journey turn executes
     automatically, immediately after its final completion — no approval
     gate, unlike the three `create_governed_plan_from_turn` branches
-    (Critical Finding #3).
+    (Critical Finding #3). This is a disposable governed-action path
+    structurally consistent with the `GovernedTurnPlan` mechanism (same
+    kind of self-contained mutation + real audit event + real receipt) —
+    it is explicitly NOT an invocation of the general-purpose Sandbox
+    subsystem (`app.services.runtime.sandbox`), confirmed correct on
+    independent re-review: that subsystem has zero production caller
+    that ever materializes the `SemanticSnapshot` it requires, a real,
+    pre-existing platform gap this task does not attempt to close.
 
     Deliberately does NOT call `app.services.runtime.sandbox.
     simulate_action` (or the real `execute_plan` writer behind it): both

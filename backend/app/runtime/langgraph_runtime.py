@@ -22,6 +22,7 @@ a `turn_failed` event (no hidden reasoning, no canned answer).
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -106,6 +107,28 @@ AGENT_FINAL_RESPONSE_SCHEMA: dict = {
         },
     },
 }
+
+
+def _agent_final_response_schema(expected_low_risk_action: str) -> dict:
+    """The SAME `AGENT_FINAL_RESPONSE_SCHEMA` shape, but — when the journey's
+    one low-risk action is known — with `automatic_action.action` pinned to
+    a single-value `enum`. A second review round found the plain schema
+    unsatisfiable-by-construction: nothing constrained the model's free-text
+    `action` string to equal the exact `low_risk_action` literal
+    `verify_journey`'s manifest cross-check requires, so any real
+    (unconstrained) DeepSeek completion would deterministically fail that
+    check. Pinning it via `enum` gives the SAME "exact-or-fail" structural
+    guarantee this plan already gives the pinned model id, rather than
+    hoping an unconstrained model happens to phrase the action identically.
+    `execute_automatic_low_risk_action`'s own caller (`_execute_journey_
+    automatic_action`) still independently validates the returned value
+    server-side before ever executing it — this schema constraint reduces
+    how often that rejection path is hit against a real, compliant
+    provider; it does not replace the validation."""
+    schema = copy.deepcopy(AGENT_FINAL_RESPONSE_SCHEMA)
+    if expected_low_risk_action:
+        schema["properties"]["automatic_action"]["properties"]["action"]["enum"] = [expected_low_risk_action]
+    return schema
 
 
 class RuntimeModelError(Exception):
@@ -289,6 +312,7 @@ class LangGraphRuntime:
         self._journey_caller = None
         self._journey_preflight_model_id = None
         self._journey_security_domain_id = None
+        self._journey_low_risk_action = None
         if self._business_journey is not None:
             row = self.db.execute(text(
                 "SELECT u.security_domain_id FROM agent_sessions s "
@@ -296,6 +320,22 @@ class LangGraphRuntime:
             ), {"sid": context.session_id}).mappings().one_or_none()
             if row:
                 self._journey_security_domain_id = row["security_domain_id"]
+
+            # Resolved once, up front, from the SAME manifest `verify_journey`
+            # cross-checks against — never re-derived or hardcoded a second
+            # time (second review round, Important Finding). Empty/missing
+            # is possible only if the manifest itself declares no low-risk
+            # action; `_agent_final_response_schema`/`_execute_journey_
+            # automatic_action` both treat that as "no constraint" rather
+            # than failing the turn.
+            from evals.business_journeys.contracts import BusinessJourneyModelError
+            from evals.business_journeys.orchestrator import get_journey_low_risk_action
+
+            journey_id = self._business_journey.get("journey_id") or ""
+            try:
+                self._journey_low_risk_action = get_journey_low_risk_action(journey_id)
+            except (ValueError, BusinessJourneyModelError) as exc:
+                raise RuntimeModelError("JOURNEY_MANIFEST_INVALID", str(exc)) from exc
         if self.caller is not None:
             # injected test caller: no DB resolution needed
             self._caller_info = {"model": context.model_name or "mock", "injected": True}
@@ -484,7 +524,7 @@ class LangGraphRuntime:
         try:
             final = caller.complete(
                 self._journey_context(context, call_kind="agent_final", logical_call_index=3),
-                final_parts, response_schema=AGENT_FINAL_RESPONSE_SCHEMA,
+                final_parts, response_schema=_agent_final_response_schema(self._journey_low_risk_action or ""),
             )
         except BusinessJourneyModelError as exc:
             raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
@@ -498,13 +538,27 @@ class LangGraphRuntime:
 
     def _execute_journey_automatic_action(self, context: TurnRuntimeContext, final_structured: dict):
         """Executes the turn's one no-approval-gate low-risk action
-        (Critical Finding #3), immediately after the final completion, using
+        (Critical Finding #3), immediately after the final completion, via
         `app.services.runtime.turn_plans.execute_automatic_low_risk_action`
-        — never `app.services.runtime.sandbox.simulate_action` (see that
-        function's own docstring for why it is structurally unreachable from
-        a plain conversational turn). Returns `None` when the model's final
-        completion didn't name an automatic action at all (e.g. it made no
-        tool call and therefore has no real target id to act on)."""
+        — a disposable governed-action path structurally consistent with the
+        `GovernedTurnPlan` mechanism (same kind of self-contained mutation +
+        real audit event + real receipt an "approved" plan already produces),
+        NOT an invocation of the general-purpose `app.services.runtime.
+        sandbox.simulate_action` Sandbox subsystem (see that function's own
+        docstring for why it is structurally unreachable from a plain
+        conversational turn — confirmed by reading its body, not assumed).
+
+        Never trusts the model's `action` string for execution purposes
+        (second review round, Important Finding): even though
+        `_agent_final_response_schema` already constrains it to the
+        journey's one known `low_risk_action` via a single-value `enum`,
+        this still independently re-validates the returned value against
+        the SAME expected value before ever calling `execute_automatic_
+        low_risk_action` — a provider that ignored/violated its own
+        schema constraint must hit `AUTOMATIC_ACTION_INVALID`, never a
+        silent execution of arbitrary text. Returns `None` when the model's
+        final completion didn't name an automatic action at all (e.g. it
+        made no tool call and therefore has no real target id to act on)."""
         automatic_action = final_structured.get("automatic_action")
         if not automatic_action:
             return None
@@ -512,6 +566,13 @@ class LangGraphRuntime:
         action = str(automatic_action.get("action") or "")
         if not target_fixture_id or not action:
             return None
+
+        expected_action = self._journey_low_risk_action or ""
+        if expected_action and action != expected_action:
+            raise RuntimeModelError(
+                "AUTOMATIC_ACTION_INVALID",
+                f"model proposed action {action!r}, journey requires {expected_action!r}",
+            )
 
         from app.services.runtime.turn_plans import TurnPlanError, execute_automatic_low_risk_action
 
