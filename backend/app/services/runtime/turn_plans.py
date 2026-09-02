@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.runtime_execution import GovernedTurnPlan
-from app.services.governance_audit import canonical_event, event_hash, partition_key_for
+from app.services.governance_audit import append_audit_event, event_hash, partition_key_for
 
 GOVERNED_PLAN_TTL_SECONDS = 900
 BRANCHES = ("approved", "rejected", "expired")
@@ -220,6 +220,27 @@ def _expected_payload_digest(
     })
 
 
+def _compute_plan_hash(
+    *, turn_id: str, tool_execution_id: str, branch: str, target_fixture_id: str,
+    payload_digest: str, idempotency_key: str,
+) -> str:
+    """A real, tamper-evident content digest — deliberately excludes the
+    randomly-generated `GovernedTurnPlan.id`. `decide_governed_plan`
+    recomputes this from the plan row's OWN current column values (never
+    trusting the stored `plan_hash` column) and compares against the
+    presented value, so a plan whose `branch`/`target_fixture_id`/etc. were
+    mutated by any path other than this module would fail the comparison —
+    not silently pass it."""
+    return _sha256_json({
+        "turn_id": turn_id,
+        "tool_execution_id": tool_execution_id,
+        "branch": branch,
+        "target_fixture_id": target_fixture_id,
+        "payload_digest": payload_digest,
+        "idempotency_key": idempotency_key,
+    })
+
+
 def create_governed_plan_from_turn(
     db: Session,
     *,
@@ -255,16 +276,12 @@ def create_governed_plan_from_turn(
 
     now = _now()
     plan_id = _new_id()
+    approval_id = _new_id()  # a real, independent identity — never the plan's own PK (Important #9)
     before_hash = _sha256_json(target["row_data"])
-    plan_hash = _sha256_json({
-        "plan_id": plan_id,
-        "turn_id": turn_id,
-        "tool_execution_id": tool_execution["id"],
-        "branch": branch,
-        "target_fixture_id": target_fixture_id,
-        "idempotency_key": idempotency_key,
-        "payload_digest": payload_digest,
-    })
+    plan_hash = _compute_plan_hash(
+        turn_id=turn_id, tool_execution_id=tool_execution["id"], branch=branch,
+        target_fixture_id=target_fixture_id, payload_digest=payload_digest, idempotency_key=idempotency_key,
+    )
     correlation_id = _correlation("create", plan_id)
     # The "expired" branch is pinned already-expired at creation time (see
     # module docstring) rather than waiting out a real TTL or requiring a
@@ -273,6 +290,7 @@ def create_governed_plan_from_turn(
 
     row = GovernedTurnPlan(
         id=plan_id,
+        approval_id=approval_id,
         turn_id=turn_id,
         tool_execution_id=tool_execution["id"],
         branch=branch,
@@ -291,7 +309,7 @@ def create_governed_plan_from_turn(
     db.commit()
 
     return GovernedActionPlan(
-        action_plan_id=plan_id, plan_hash=plan_hash, approval_id=plan_id,
+        action_plan_id=plan_id, plan_hash=plan_hash, approval_id=approval_id,
         branch=branch, target_fixture_id=target_fixture_id, status="pending",
         correlation_id=correlation_id,
     )
@@ -302,13 +320,22 @@ def _append_governance_audit_event(
     correlation_id: str, actor_user_id: str, lineage: Mapping[str, Any],
 ) -> str:
     """A minimal, cross-dialect append to the SAME `governance_audit_logs`
-    chain `app.services.governance_audit.append_audit` writes — reusing its
-    pure canonicalization/hashing helpers, but reading the chain head WITHOUT
+    chain `app.services.governance_audit.append_audit` writes — calls that
+    module's own `append_audit_event` to build the canonical, hashed event
+    (Important #6: never hand-duplicates that 21-key dict, so a future field
+    added there can't silently desync this path's rows from the rest of the
+    chain) and writes to the SAME tables, but reads the chain head WITHOUT
     `FOR UPDATE` (Postgres/MySQL-only syntax the SQLite unit harness cannot
     run at all). This governed-turn-plan decision path is a low-frequency,
     one-at-a-time human action, not the high-concurrency writer path
     `append_audit` itself guards — so the missing row lock is an accepted,
-    documented gap here, not a silent regression of that other module."""
+    documented gap here, not a silent regression of that other module.
+    `policy_ids`/`lineage` are written as plain JSON-text parameters (never
+    the `CAST(... AS jsonb)` `append_audit` uses): a raw `text()` parameter
+    into a `postgresql.JSONB` column already receives the correct implicit
+    coercion in Postgres, and the explicit cast corrupts a valid JSON string
+    to the integer `0` on SQLite (verified directly) — the same reasoning
+    already applied to `entity_instances.row_data` in this module."""
     now = datetime.now(timezone.utc)
     partition_key = partition_key_for(security_domain_id, now)
     db.execute(text(
@@ -321,15 +348,14 @@ def _append_governance_audit_event(
     ), {"partition": partition_key}).mappings().one()
     sequence = head["next_sequence"]
     previous_hash = bytes(head["last_hash"]) if head["last_hash"] is not None else None
-    event = {
-        "security_domain_id": security_domain_id, "partition_key": partition_key, "sequence": sequence,
-        "actor_user_id": actor_user_id, "operation": operation, "decision": decision,
-        "policy_ids": {}, "correlation_id": correlation_id, "input_hash": None, "output_hash": None,
-        "lineage": dict(lineage), "outcome": "SUCCEEDED", "previous_hash": previous_hash.hex() if previous_hash else None,
-        "agent_id": None, "agent_version_id": None, "release_id": None, "model_version_id": None,
-        "connection_version_id": None, "retention_class": "standard",
-        "occurred_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-    }
+    event = append_audit_event(
+        security_domain_id=security_domain_id, partition_key=partition_key, sequence=sequence,
+        actor_user_id=actor_user_id, operation=operation, decision=decision, policy_ids=None,
+        correlation_id=correlation_id, input_hash=None, output_hash=None, lineage=dict(lineage),
+        outcome="SUCCEEDED", previous_hash=previous_hash, agent_id=None, agent_version_id=None,
+        release_id=None, model_version_id=None, connection_version_id=None, retention_class="standard",
+        occurred_at=now,
+    )
     digest = event_hash(event)
     row_id = _new_id()
     db.execute(text(
@@ -343,9 +369,11 @@ def _append_governance_audit_event(
     ), {
         "id": row_id, "domain": security_domain_id, "partition": partition_key, "sequence": sequence,
         "actor": actor_user_id, "operation": operation, "decision": decision,
-        "policy_ids": json.dumps({}), "correlation_id": correlation_id, "input_hash": None, "output_hash": None,
-        "lineage": json.dumps(dict(lineage), ensure_ascii=False), "outcome": "SUCCEEDED",
-        "previous_hash": previous_hash, "event_hash": digest, "retention_class": "standard", "occurred_at": now,
+        "policy_ids": json.dumps(event["policy_ids"], ensure_ascii=False), "correlation_id": correlation_id,
+        "input_hash": None, "output_hash": None,
+        "lineage": json.dumps(event["lineage"], ensure_ascii=False), "outcome": event["outcome"],
+        "previous_hash": previous_hash, "event_hash": digest, "retention_class": event["retention_class"],
+        "occurred_at": now,
     })
     db.execute(text(
         "UPDATE governance_audit_chain_heads SET next_sequence = :next, last_hash = :hash "
@@ -371,12 +399,28 @@ def decide_governed_plan(
     actor_user_id: str,
     security_domain_id: str,
 ) -> GovernedActionPlanView:
-    """Transition a `pending` plan to `approved`/`rejected`. Only "approved"
+    """Transition a `pending`-or-lapsed plan to its terminal state:
+    "approved"/"rejected" record an explicit human decision (only "approved"
     performs a real mutation of the target's `row_data`; the plan and its
     `EntityInstance` row are updated in the SAME transaction, so a reader can
     never observe a plan marked approved whose target has not actually
-    changed."""
-    if decision not in ("approved", "rejected"):
+    changed); "expired" records a genuine TTL lapse with no target mutation
+    (Critical Finding #2 — every branch, including "expired", gets a real
+    audit event and receipt, not just "approved"/"rejected").
+
+    Two independent integrity checks, not one:
+    - `presented_plan_hash` is compared against a hash RECOMPUTED from the
+      plan row's own current column values (`_compute_plan_hash`), never
+      the stored `plan_hash` column — so a plan whose content was mutated by
+      any path other than this module fails the comparison instead of
+      silently passing it (Important Finding #8).
+    - For "approved"/"rejected", `decision` must equal the plan's own
+      `branch` (the outcome the browser committed to via the payload digest
+      at creation time) — a plan created as `branch="rejected"` can never be
+      approved through this endpoint, closing the authorization gap
+      Important Finding #7 identified. "expired" has no such requirement:
+      any plan (regardless of its intended branch) can genuinely lapse."""
+    if decision not in ("approved", "rejected", "expired"):
         raise TurnPlanError("DECISION_INVALID", f"{decision!r}")
 
     row = db.query(GovernedTurnPlan).filter(GovernedTurnPlan.id == plan_id).one_or_none()
@@ -388,15 +432,28 @@ def decide_governed_plan(
     ), {"turn": row.turn_id}).mappings().one_or_none()
     if turn_owner is None or turn_owner["owner_user_id"] != actor_user_id:
         raise TurnPlanError("PLAN_NOT_FOUND")
-    if presented_plan_hash != row.plan_hash:
+
+    recomputed_hash = _compute_plan_hash(
+        turn_id=row.turn_id, tool_execution_id=row.tool_execution_id, branch=row.branch,
+        target_fixture_id=row.target_fixture_id, payload_digest=row.payload_digest,
+        idempotency_key=row.idempotency_key,
+    )
+    if presented_plan_hash != recomputed_hash:
         raise TurnPlanError("PLAN_HASH_MISMATCH")
 
     now = _now()
     current_status = _plan_status(row, now=now)
-    if current_status == "expired":
-        raise TurnPlanError("GOVERNED_PLAN_EXPIRED")
-    if current_status != "pending":
+    if current_status == "pending":
+        if decision == "expired":
+            raise TurnPlanError("GOVERNED_PLAN_NOT_EXPIRED", "the plan's TTL has not lapsed yet")
+    elif current_status == "expired":
+        if decision != "expired":
+            raise TurnPlanError("GOVERNED_PLAN_EXPIRED")
+    else:
         raise TurnPlanError("GOVERNED_PLAN_ALREADY_DECIDED", f"current status={current_status}")
+
+    if decision in ("approved", "rejected") and decision != row.branch:
+        raise TurnPlanError("DECISION_BRANCH_MISMATCH", f"plan branch={row.branch!r}")
 
     receipt_id = _new_id()
     if decision == "approved":
@@ -460,7 +517,7 @@ def _to_view(row: GovernedTurnPlan, *, now: datetime) -> GovernedActionPlanView:
     return GovernedActionPlanView(
         action_plan_id=row.id,
         plan_hash=row.plan_hash,
-        approval_id=row.id,
+        approval_id=row.approval_id,
         turn_id=row.turn_id,
         branch=row.branch,
         target_fixture_id=row.target_fixture_id,

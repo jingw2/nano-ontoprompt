@@ -13,16 +13,23 @@ persistence — runs for real against the SQLite unit harness.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from sqlalchemy import text
 
+from app.models.entity import Entity
+from app.models.entity_instance import EntityInstance
+from app.models.ontology import OntologyProject
+from app.models.user import User
 import app.services.model_config_selector as model_config_selector
 from app.runtime.langgraph_runtime import LangGraphRuntime, RuntimeModelError
 from app.runtime.protocol import TurnRuntimeContext
+from app.services.runtime.turn_plans import create_governed_plan_from_turn
 from evals.business_journeys.contracts import (
     MODEL_ID,
     OFFICIAL_ORIGIN,
@@ -241,3 +248,153 @@ def test_business_journey_turn_requires_the_deepseek_api_key_env_var(
 
     failed = next(e for e in events if e.event_type == "turn_failed")
     assert failed.payload["error_code"] == "DEEPSEEK_API_KEY_REQUIRED"
+
+
+def _sha256_json(value) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creation_can_read(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Closes the exact gap Critical Finding #1 identified: `LangGraphRuntime`
+    must persist a REAL `agent_tool_executions` row for a business-journey
+    turn's governed query call, and `create_governed_plan_from_turn` must be
+    able to find it — not a row `test_runtime_turn_plans.py` hand-seeded.
+    This test runs the real turn through `LangGraphRuntime.start_turn`
+    (writing the tool-execution row for real), separately marks the turn
+    'succeeded' with a real response message (the worker's own job,
+    untouched by this task), and then calls `create_governed_plan_from_turn`
+    against the SAME database with NO hand-seeded tool-evidence row."""
+    user = User(
+        id=str(uuid.uuid4()), username="tp-e2e-user", email="tp-e2e@example.invalid",
+        password_hash="x", role="editor", security_domain_id="00000000-0000-0000-0000-000000000001",
+    )
+    db.add(user)
+    db.commit()
+
+    project = OntologyProject(
+        id=str(uuid.uuid4()), name="tp-e2e-ontology", domain="test",
+        created_by=user.id, security_domain_id="00000000-0000-0000-0000-000000000001",
+    )
+    db.add(project)
+    db.flush()
+    entity = Entity(id=str(uuid.uuid4()), ontology_id=project.id, name_cn="目标实体")
+    db.add(entity)
+    db.flush()
+    release_id = str(uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO ontology_releases "
+        "(id, ontology_id, version_no, version, manifest_bytes, manifest_projection, "
+        "schema_hash, status, created_by, created_at) "
+        "VALUES (:id, :oid, 1, 'v1', :mb, :proj, :sh, 'published', :cb, CURRENT_TIMESTAMP)"
+    ), {
+        "id": release_id, "oid": project.id, "mb": b"manifest",
+        "proj": json.dumps({"entities": [{"id": entity.id}]}),
+        "sh": b"schema-hash-0000000000000000000000", "cb": user.id,
+    })
+    project.latest_published_release_id = release_id
+    db.commit()
+    instance = EntityInstance(
+        id=str(uuid.uuid4()), entity_id=entity.id, ontology_id=project.id,
+        row_identity="row-1", row_data={"name": "MAT001"},
+    )
+    db.add(instance)
+    db.commit()
+
+    agent_id = str(uuid.uuid4())
+    agent_version_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    turn_id = str(uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO agents (id, visibility, status, owner_id, active_version_id, created_at, updated_at) "
+        "VALUES (:id, 'private', 'active', :owner, :version, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": agent_id, "owner": user.id, "version": agent_version_id})
+    db.execute(text(
+        "INSERT INTO agent_ontology_bindings (id, agent_version_id, ontology_id, capabilities, allowlists, created_at) "
+        "VALUES (:id, :version, :ontology, '[]', '{}', CURRENT_TIMESTAMP)"
+    ), {"id": str(uuid.uuid4()), "version": agent_version_id, "ontology": project.id})
+    db.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES (:id, :agent, :owner, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": session_id, "agent": agent_id, "owner": user.id})
+    db.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES (:id, :sid, 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": turn_id, "sid": session_id})
+    db.commit()
+
+    deepseek_transport.queue.append({
+        "tool_call": {"descriptor_id": f"query:{project.id}", "query": "below safety stock"},
+        "answer": None,
+    })
+    response_content = "Supplier MAT001 is below safety stock."
+    deepseek_transport.queue.append({
+        "answer": response_content,
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+    })
+
+    class _RealishGateway:
+        """Executes against the real `entity_instances` row seeded above,
+        instead of a canned payload — proving the persisted tool-execution
+        row's `result_hash` reflects a real query outcome."""
+
+        def execute(self, request, *, ontology_id: str):
+            rows = db.query(EntityInstance).filter(EntityInstance.ontology_id == ontology_id).all()
+            payload = {"items": [{"id": r.id, "row_data": r.row_data} for r in rows]}
+            return SimpleNamespace(outcome="allowed", correlation_id="tool:real", payload=payload)
+
+    context = TurnRuntimeContext(
+        turn_id=turn_id, session_id=session_id, agent_id=agent_id, agent_version_id=agent_version_id,
+        release_id=release_id, model_config_version_id=pinned_model_config_version_id, model_name=MODEL_ID,
+        user_message="Which suppliers are below safety stock?",
+        extra={
+            "user_id": user.id,
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+            "ontology_tool_selection": [{"ontology_id": project.id, "selected_tools": []}],
+        },
+    )
+    runtime = LangGraphRuntime(db=db, gateway=_RealishGateway(), max_tool_rounds=1)
+    events = _run(runtime, context)
+
+    tool_events = [e for e in events if e.event_type == "tool_executed"]
+    assert len(tool_events) == 1
+    tool_execution_id = tool_events[0].payload["tool_execution_id"]
+
+    # Confirm the row is REAL — read it back independently of the runtime.
+    persisted = db.execute(text(
+        "SELECT id, turn_id, status, result_hash FROM agent_tool_executions WHERE id = :id"
+    ), {"id": tool_execution_id}).mappings().one()
+    assert persisted["turn_id"] == turn_id
+    assert persisted["status"] == "succeeded"
+    assert persisted["result_hash"]
+
+    # The worker's own job (untouched by this task): finalize the turn with
+    # a real response message once the transcript is complete.
+    response_message_id = str(uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO agent_messages (id, session_id, turn_id, role, ordinal, content, created_at) "
+        "VALUES (:id, :sid, :turn, 'assistant', 1, :content, CURRENT_TIMESTAMP)"
+    ), {"id": response_message_id, "sid": session_id, "turn": turn_id, "content": response_content})
+    db.execute(text(
+        "UPDATE agent_turns SET status = 'succeeded', response_message_id = :rmid WHERE id = :id"
+    ), {"rmid": response_message_id, "id": turn_id})
+    db.commit()
+
+    tool_result_hash = persisted["result_hash"]
+    digest = _sha256_json({
+        "turn_id": turn_id, "tool_execution_id": tool_execution_id, "tool_result_hash": tool_result_hash,
+        "final_response_hash": _sha256_text(response_content), "branch": "approved",
+        "target_fixture_id": instance.id,
+    })
+    plan = create_governed_plan_from_turn(
+        db, turn_id=turn_id, branch="approved", target_fixture_id=instance.id,
+        idempotency_key=f"key-{uuid.uuid4()}", payload_digest=digest, actor_user_id=user.id,
+    )
+    assert plan.status == "pending"

@@ -458,33 +458,68 @@ class LangGraphRuntime:
         """The one governed MCP/query call/result a business-journey turn is
         allowed: resolves to the first bound ontology's `_READ_INSTANCES`
         tool, through the SAME governed `ToolGateway` every other tool call
-        in this runtime goes through — never a second, ungoverned path."""
+        in this runtime goes through — never a second, ungoverned path.
+
+        Also persists a real `agent_tool_executions` row (same table/shape
+        `_execute_action_call` already writes for the high-risk action path)
+        so `app.services.runtime.turn_plans._load_tool_evidence` — which
+        reads this table, not the ephemeral `tool_executed` event — has a
+        real row to find. A query-category call needs no approval, so this
+        writes the row directly in its terminal ('succeeded'/'failed')
+        status rather than 'proposed'."""
+        descriptor_id = str(tool_call.get("descriptor_id") or _READ_INSTANCES)
         if not self._bindings:
             raise RuntimeModelError("TOOL_UNSUPPORTED", "turn has no bound ontology")
         binding = self._bindings[0]
         ontology_id = binding["ontology_id"]
         release_id = self._release_by_ontology.get(ontology_id)
+        query_text = str(tool_call.get("query") or "")
+        parameters = {
+            "ontology_id": ontology_id, "release_id": release_id,
+            "query": query_text, "limit": 10, "sort_by": None, "sort_order": None,
+        }
+        canonical_params = json.dumps(
+            {"descriptor_id": descriptor_id, "parameters": parameters},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        parameters_hash = hashlib.sha256(canonical_params.encode("utf-8")).hexdigest()
         request = GatewayRequest(
             agent_id=context.agent_id, user_id=self._owner_user_id or "",
-            descriptor_id=_READ_INSTANCES, operation="instance_read",
-            parameters={
-                "ontology_id": ontology_id, "release_id": release_id,
-                "query": str(tool_call.get("query") or ""), "limit": 10,
-                "sort_by": None, "sort_order": None,
-            },
+            descriptor_id=_READ_INSTANCES, operation="instance_read", parameters=parameters,
         )
+        tool_execution_id = str(uuid.uuid4())
         try:
             result = self._gateway.execute(request, ontology_id=ontology_id)
         except Exception as exc:
+            self.db.execute(text(
+                "INSERT INTO agent_tool_executions (id, turn_id, idempotency_key, status, descriptor, "
+                "parameters_hash, result_hash, created_at, updated_at) "
+                "VALUES (:id, :turn, :key, 'failed', :descriptor, :ph, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {"id": tool_execution_id, "turn": context.turn_id, "key": tool_execution_id,
+                "descriptor": json.dumps({"descriptor_id": descriptor_id}), "ph": parameters_hash})
+            self.db.commit()
             _seq(events, context.turn_id, "tool_executed", {
-                "descriptor_id": tool_call.get("descriptor_id") or _READ_INSTANCES,
-                "outcome": "rejected", "detail": str(exc)[:300],
+                "descriptor_id": descriptor_id, "outcome": "rejected", "detail": str(exc)[:300],
+                "tool_execution_id": tool_execution_id,
             })
             return {"error": str(exc)[:300]}
+
+        result_hash = hashlib.sha256(
+            json.dumps(dict(result.payload), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
+        self.db.execute(text(
+            "INSERT INTO agent_tool_executions (id, turn_id, idempotency_key, status, descriptor, "
+            "parameters_hash, result_hash, created_at, updated_at) "
+            "VALUES (:id, :turn, :key, 'succeeded', :descriptor, :ph, :rh, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ), {"id": tool_execution_id, "turn": context.turn_id, "key": tool_execution_id,
+            "descriptor": json.dumps({"descriptor_id": descriptor_id}), "ph": parameters_hash,
+            "rh": result_hash})
+        self.db.commit()
         _seq(events, context.turn_id, "tool_executed", {
-            "descriptor_id": tool_call.get("descriptor_id") or _READ_INSTANCES,
+            "descriptor_id": descriptor_id,
             "outcome": result.outcome,
             "correlation_id": result.correlation_id,
+            "tool_execution_id": tool_execution_id,
             **(_bound_summary(result.payload)),
         })
         return dict(result.payload)

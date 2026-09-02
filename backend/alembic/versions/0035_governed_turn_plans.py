@@ -28,6 +28,9 @@ def upgrade() -> None:
     op.create_table(
         "governed_turn_plans",
         sa.Column("id", sa.String(36), primary_key=True),
+        # A real, independent approval identity (Important Finding #9) — never
+        # aliased to `id`; minted alongside the plan in the same atomic create.
+        sa.Column("approval_id", sa.String(36), nullable=False),
         sa.Column(
             "turn_id", sa.String(36), sa.ForeignKey("agent_turns.id", ondelete="RESTRICT"),
             nullable=False, index=True,
@@ -52,8 +55,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("branch IN ('approved', 'rejected', 'expired')", name="ck_governed_turn_plans_branch"),
-        sa.CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_governed_turn_plans_status"),
+        sa.CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'expired')", name="ck_governed_turn_plans_status",
+        ),
         sa.UniqueConstraint("idempotency_key", name="uq_governed_turn_plans_idempotency_key"),
+        sa.UniqueConstraint("approval_id", name="uq_governed_turn_plans_approval_id"),
     )
 
 

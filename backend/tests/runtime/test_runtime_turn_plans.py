@@ -242,7 +242,13 @@ def test_three_branch_plans_are_genuinely_independent_and_produce_correct_outcom
         db, plan_id=plans["rejected"].action_plan_id, presented_plan_hash=plans["rejected"].plan_hash,
         decision="rejected", actor_user_id=fixture["user_id"], security_domain_id=fixture["security_domain_id"],
     )
-    expired_view = get_governed_plan(db, plan_id=plans["expired"].action_plan_id, actor_user_id=fixture["user_id"])
+    # "expired" is decided too (Critical Finding #2) — not just read — so it
+    # gets the SAME shape of real receipt/audit evidence as the other two
+    # branches, not a permanently-NULL pair.
+    expired_view = decide_governed_plan(
+        db, plan_id=plans["expired"].action_plan_id, presented_plan_hash=plans["expired"].plan_hash,
+        decision="expired", actor_user_id=fixture["user_id"], security_domain_id=fixture["security_domain_id"],
+    )
 
     assert approved_view.status == "approved"
     assert approved_view.must_write is True
@@ -252,10 +258,24 @@ def test_three_branch_plans_are_genuinely_independent_and_produce_correct_outcom
     assert rejected_view.status == "rejected"
     assert rejected_view.must_write is False
     assert rejected_view.target_before_hash == rejected_view.target_after_hash
+    assert rejected_view.receipt_id and rejected_view.audit_event_id
 
     assert expired_view.status == "expired"
     assert expired_view.must_write is False
     assert expired_view.target_before_hash == expired_view.target_after_hash
+    assert expired_view.receipt_id and expired_view.audit_event_id
+
+    # Every branch's audit event is real and independently readable.
+    for view in (approved_view, rejected_view, expired_view):
+        audit_row = db.execute(text(
+            "SELECT decision, operation FROM governance_audit_logs WHERE id = :id"
+        ), {"id": view.audit_event_id}).mappings().one()
+        assert audit_row["decision"] == view.status
+        assert audit_row["operation"] == "runtime.governed_turn_plan.decide"
+
+    # approval_id is a real, independent identity — not an alias of the
+    # plan's own primary key.
+    assert {p.approval_id for p in plans.values()}.isdisjoint({p.action_plan_id for p in plans.values()})
 
     # The approved instance's row_data really changed in the database.
     mutated = db.query(EntityInstance).filter(EntityInstance.id == targets["approved"]).one()
@@ -304,6 +324,68 @@ def test_decide_rejects_a_wrong_plan_hash(turn_plan_fixture, db):
     with pytest.raises(TurnPlanError, match="PLAN_HASH_MISMATCH"):
         decide_governed_plan(
             db, plan_id=plan.action_plan_id, presented_plan_hash="0" * 64, decision="approved",
+            actor_user_id=turn_plan_fixture["user_id"], security_domain_id=turn_plan_fixture["security_domain_id"],
+        )
+
+
+def test_decide_rejects_a_decision_that_does_not_match_the_plans_committed_branch(turn_plan_fixture, db):
+    """Important Finding #7: a plan created as `branch="rejected"` (what the
+    browser committed to via the payload digest) can never be approved
+    through `decide_governed_plan` — closing the authorization gap where
+    `verify_journey` only caught the resulting hash mismatch after the fact."""
+    plan = create_governed_plan_from_turn(
+        db, turn_id=turn_plan_fixture["turn_id"], branch="rejected",
+        target_fixture_id=turn_plan_fixture["target_fixture_id"], idempotency_key="key-branch-mismatch",
+        payload_digest=_digest(turn_plan_fixture, branch="rejected"),
+        actor_user_id=turn_plan_fixture["user_id"],
+    )
+    with pytest.raises(TurnPlanError, match="DECISION_BRANCH_MISMATCH"):
+        decide_governed_plan(
+            db, plan_id=plan.action_plan_id, presented_plan_hash=plan.plan_hash, decision="approved",
+            actor_user_id=turn_plan_fixture["user_id"], security_domain_id=turn_plan_fixture["security_domain_id"],
+        )
+    # The plan is untouched — no target mutation happened before the branch
+    # check rejected the request.
+    row = db.execute(text(
+        "SELECT status FROM governed_turn_plans WHERE id = :id"
+    ), {"id": plan.action_plan_id}).mappings().one()
+    assert row["status"] == "pending"
+
+
+def test_decide_rejects_recording_an_expiry_before_the_ttl_has_actually_lapsed(turn_plan_fixture, db):
+    plan = create_governed_plan_from_turn(
+        db, turn_id=turn_plan_fixture["turn_id"], branch="approved",
+        target_fixture_id=turn_plan_fixture["target_fixture_id"], idempotency_key="key-not-expired-yet",
+        payload_digest=_digest(turn_plan_fixture, branch="approved"),
+        actor_user_id=turn_plan_fixture["user_id"],
+    )
+    with pytest.raises(TurnPlanError, match="GOVERNED_PLAN_NOT_EXPIRED"):
+        decide_governed_plan(
+            db, plan_id=plan.action_plan_id, presented_plan_hash=plan.plan_hash, decision="expired",
+            actor_user_id=turn_plan_fixture["user_id"], security_domain_id=turn_plan_fixture["security_domain_id"],
+        )
+
+
+def test_plan_hash_is_recomputed_from_content_and_detects_a_tampered_row(turn_plan_fixture, db):
+    """Important Finding #8: `plan_hash` must be a real, tamper-evident
+    content digest, recomputed from the plan's OWN stored columns at decide
+    time — not a random-`plan_id`-salted value only ever string-compared
+    against itself. Directly mutating `target_fixture_id` via raw SQL (as if
+    some other, buggy code path corrupted the row) must make the ORIGINAL
+    presented hash fail, proving the check is genuinely content-derived."""
+    plan = create_governed_plan_from_turn(
+        db, turn_id=turn_plan_fixture["turn_id"], branch="approved",
+        target_fixture_id=turn_plan_fixture["target_fixture_id"], idempotency_key="key-tamper-check",
+        payload_digest=_digest(turn_plan_fixture, branch="approved"),
+        actor_user_id=turn_plan_fixture["user_id"],
+    )
+    db.execute(text(
+        "UPDATE governed_turn_plans SET target_fixture_id = :other WHERE id = :id"
+    ), {"other": "some-other-fixture-id", "id": plan.action_plan_id})
+    db.commit()
+    with pytest.raises(TurnPlanError, match="PLAN_HASH_MISMATCH"):
+        decide_governed_plan(
+            db, plan_id=plan.action_plan_id, presented_plan_hash=plan.plan_hash, decision="approved",
             actor_user_id=turn_plan_fixture["user_id"], security_domain_id=turn_plan_fixture["security_domain_id"],
         )
 

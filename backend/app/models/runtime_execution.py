@@ -182,11 +182,20 @@ class GovernedTurnPlan(Base):
     __tablename__ = "governed_turn_plans"
     __table_args__ = (
         CheckConstraint("branch IN ('approved', 'rejected', 'expired')", name="ck_governed_turn_plans_branch"),
-        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_governed_turn_plans_status"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'expired')", name="ck_governed_turn_plans_status",
+        ),
         UniqueConstraint("idempotency_key", name="uq_governed_turn_plans_idempotency_key"),
+        UniqueConstraint("approval_id", name="uq_governed_turn_plans_approval_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    # A real, independent approval identity (Important Finding #9) — never
+    # aliased to `id`. Minted alongside the plan at creation time, since the
+    # brief's own "creates one new immutable plan AND approval" is a single
+    # atomic operation here, not a plan proposal followed by a later,
+    # separate approval-record creation.
+    approval_id: Mapped[str] = mapped_column(String(36), nullable=False, default=_new_id)
     turn_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("agent_turns.id", ondelete="RESTRICT"), nullable=False, index=True,
     )
