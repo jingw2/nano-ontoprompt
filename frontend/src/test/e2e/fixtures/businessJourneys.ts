@@ -25,6 +25,7 @@
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { TestInfo } from '@playwright/test'
 
 export type JourneyId = 'supply_chain' | 'finance' | 'credit'
@@ -42,8 +43,10 @@ const FORBIDDEN_MANIFEST_KEYS = new Set([
   'messages', 'input_rows', 'rows', 'api_key', 'authorization', 'token', 'secret',
 ])
 
-// frontend/src/test/e2e/fixtures -> repository root (5 levels up).
-const REPO_ROOT = path.resolve(__dirname, '../../../../../')
+// frontend/src/test/e2e/fixtures -> repository root (5 levels up). Playwright
+// loads spec/fixture files as ESM, so `__dirname` is unavailable here.
+const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url))
+const REPO_ROOT = path.resolve(CURRENT_DIR, '../../../../../')
 const RUNTIME_FIXTURES_DIR = path.join(REPO_ROOT, 'test_data', 'runtime')
 
 export interface AgentBindingOptionsFixture {
@@ -322,5 +325,24 @@ export function assertNoSkippedTests(testInfo: TestInfo): void {
   }
   if (testInfo.status === 'skipped') {
     throw new Error(`test "${testInfo.title}" is skipped; business-journey acceptance tests must never skip`)
+  }
+}
+
+/** The one read-only, pre-turn health check this fixture is allowed to make
+ * (`Browser API use is limited to health and read-only evidence
+ * validation`): a plain `GET /health` against the application-under-test.
+ * Every Agent-creation/binding/dialogue/tool/Sandbox/plan/approval action
+ * remains a real browser interaction — this never seeds or mutates state. */
+export async function assertApiHealthy(apiBase: string): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${apiBase.replace(/\/$/, '')}/health`)
+  } catch (err) {
+    fail(`API health check request failed against ${apiBase}: ${(err as Error).message}`)
+  }
+  if (!response.ok) fail(`API health check returned HTTP ${response.status}`)
+  const body = await response.json() as { status?: string; db?: string }
+  if (body.status !== 'ok' || body.db !== 'ok') {
+    fail(`API is unhealthy: status=${String(body.status)} db=${String(body.db)}`)
   }
 }

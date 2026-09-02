@@ -4,10 +4,16 @@ export default defineConfig({
   testDir: './src/test/e2e',
   fullyParallel: false,
   retries: 1,
-  timeout: 30000,
+  // business-journeys.spec.ts drives real Pipeline/Curated/DeepSeek-backed
+  // Runtime turns, well past this suite's previous 30s budget; the spec
+  // itself pins `trace: 'on'`/`screenshot: 'on'` (test.use), so this bump
+  // only affects overall per-test/assertion timeouts.
+  timeout: 120_000,
+  expect: { timeout: 15_000 },
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
   projects: [
     {

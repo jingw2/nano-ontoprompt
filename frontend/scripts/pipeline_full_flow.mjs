@@ -1,4 +1,12 @@
 /**
+ * MANUAL DEMO SCRIPT — NOT acceptance evidence, NOT run by any CI/acceptance
+ * command. This is a hand-run, screenshot-taking walkthrough for local
+ * exploration only; it seeds state directly through the API (not the real
+ * `AgentCreateWizard`/conversation UI) and asserts nothing. The real,
+ * strict, non-skippable acceptance path is
+ * `frontend/src/test/e2e/business-journeys.spec.ts` (business-journey
+ * Task 4) — run it, not this file, for any CI/acceptance signal.
+ *
  * 供应链 Pipeline → Ontology 全流程演示
  *
  * 流程：
