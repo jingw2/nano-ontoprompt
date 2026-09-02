@@ -73,7 +73,8 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
                           ontology_bindings: list[dict] | None = None,
                           external_tool_bindings: list[dict] | None = None,
                           skill_bindings: list[dict] | None = None,
-                          citations: list[dict] | None = None) -> TurnRuntimeContext:
+                          citations: list[dict] | None = None,
+                          business_journey: dict | None = None) -> TurnRuntimeContext:
     """Assemble the pinned Turn context.  `ontology_bindings` (when given)
     carries the Agent's enabled tool selection per bound Ontology;
     `external_tool_bindings` (when given) carries the Agent version's bound
@@ -82,8 +83,20 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
     release/lineage identifiers for the Turn.  All are exposed on `extra` so
     the Tool Gateway only exposes the selected tools for this Agent and the
     runtime persists the citations as observable events
-    (P2B-TOOLS runtime filtering + grounded-citation surface)."""
+    (P2B-TOOLS runtime filtering + grounded-citation surface).
+
+    `business_journey` (Task 3, business-journey acceptance) — when given,
+    `{"run_id", "journey_id"}` at minimum — routes the Turn through
+    `LangGraphRuntime`'s dedicated `DeepSeekVisionCaller` two-completion
+    protocol (`LangGraphRuntime._run_business_journey_turn`) instead of the
+    generic provider-agnostic tool-calling loop. No production caller of
+    this function passes it yet (there is no browser/dispatch-side plumbing
+    carrying a business-journey run/journey id today) — it exists so that
+    plumbing has a ready-made, already-tested hook to populate once it
+    exists, rather than requiring a second context-assembly path."""
     extra: dict[str, Any] = {}
+    if business_journey:
+        extra["business_journey"] = dict(business_journey)
     if ontology_bindings:
         extra["ontology_tool_selection"] = []
         for b in ontology_bindings:

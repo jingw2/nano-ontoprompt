@@ -57,6 +57,45 @@ _TRAVERSE_RELATIONS = "ontology.traverse_relations"
 _EXECUTE_READ_LOGIC = "ontology.execute_read_logic"
 _PREVIEW_ACTION = "ontology.preview_action"
 
+# ---------------------------------------------------------------------------
+# Business-journey completions (Task 3): a turn whose pinned model
+# configuration is the exact official business-journey DeepSeek vision
+# config (`context.extra["business_journey"]`, set by whatever assembles the
+# Turn context once a real caller thread exists) is driven through the ONE
+# production `DeepSeekVisionCaller` instead of the generic provider-agnostic
+# `llm_service.chat_completion` tool-calling loop. `DeepSeekVisionCaller.
+# complete()` has no OpenAI-style function-calling wire shape at all — it
+# takes raw input parts and a JSON response schema — so this is a genuinely
+# separate two-completion protocol (`agent_initial` decides at most one
+# governed query tool call; `agent_final` answers using that tool's result),
+# not a drop-in swap of the generic loop's model caller.
+AGENT_INITIAL_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "required": ["tool_call"],
+    "properties": {
+        "tool_call": {
+            "type": ["object", "null"],
+            "properties": {
+                "descriptor_id": {"type": "string"},
+                "query": {"type": "string"},
+            },
+        },
+        "answer": {"type": ["string", "null"]},
+    },
+}
+AGENT_FINAL_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "required": ["answer", "entities", "relations", "rules", "actions", "citations"],
+    "properties": {
+        "answer": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "relations": {"type": "array", "items": {"type": "string"}},
+        "rules": {"type": "array", "items": {"type": "string"}},
+        "actions": {"type": "array", "items": {"type": "string"}},
+        "citations": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
 
 class RuntimeModelError(Exception):
     """The model call could not complete (fail closed, no canned fallback)."""
@@ -139,6 +178,7 @@ class LangGraphRuntime:
     timeout_seconds: float = MODEL_TIMEOUT_SECONDS
     _caller_info: dict | None = field(default=None, init=False, repr=False)
     _release_by_ontology: dict[str, str | None] = field(default_factory=dict, init=False, repr=False)
+    _business_journey: dict | None = field(default=None, init=False, repr=False)
 
     # ------------------------------------------------------------------ graph
     async def start_turn(self, context: TurnRuntimeContext) -> list[RuntimeEvent]:
@@ -155,6 +195,18 @@ class LangGraphRuntime:
                 "release_id": context.release_id,
                 "citations": list(context.extra.get("citations", [])),
             })
+
+            if self._business_journey is not None:
+                # A business-journey turn never assembles the generic
+                # application-state/message-budget context at all — its two
+                # completions are addressed with only the user's question
+                # and (optionally) one governed tool result, per the
+                # dedicated protocol above.
+                final = await asyncio.to_thread(self._run_business_journey_turn, context, events)
+                _seq(events, context.turn_id, "final_response", {"message": final})
+                _seq(events, context.turn_id, "turn_succeeded", {})
+                return events
+
             assembled = self._assemble_context(context)
             _seq(events, context.turn_id, "assemble_context", assembled)
 
@@ -206,9 +258,17 @@ class LangGraphRuntime:
             ), {"id": context.session_id}).mappings().one_or_none()
             if row:
                 self._owner_user_id = row["owner_user_id"]
+        self._business_journey = context.extra.get("business_journey")
+        self._journey_caller = None
         if self.caller is not None:
             # injected test caller: no DB resolution needed
             self._caller_info = {"model": context.model_name or "mock", "injected": True}
+        elif self._business_journey is not None:
+            # A business-journey turn never resolves the generic provider
+            # caller at all — `DeepSeekVisionCaller` (a genuinely different
+            # transport/contract, see the module-level schema constants
+            # above) is the only caller it is ever allowed to use.
+            self._journey_caller = self._resolve_business_journey_caller(context)
         elif self._caller_info is None:
             self._caller_info = self._resolve_caller(context)
         self._gateway = self.gateway or ToolGateway(self.db)
@@ -286,6 +346,148 @@ class LangGraphRuntime:
         except ModelVersionUnavailableError as exc:
             raise RuntimeModelError("MODEL_VERSION_UNAVAILABLE",
                                      f"model version {context.model_config_version_id} is unavailable") from exc
+
+    def _resolve_business_journey_caller(self, context: TurnRuntimeContext):
+        """Build the ONE production `DeepSeekVisionCaller` for a
+        business-journey turn. `context.extra["business_journey"]` carries
+        `run_id`/`journey_id` (needed for the exact correlation-id contract)
+        plus an optional `api_key_env_var`/`ledger` for tests; the pinned
+        `context.model_config_version_id` is independently revalidated by
+        `select_journey_model_config` (exact provider/model/origin, fail
+        closed on drift) — never trusted from `extra` alone."""
+        import os
+
+        from evals.business_journeys.contracts import ModelCallLedger, ModelConfigurationError
+        from app.services.model_callers.deepseek_vision import DeepSeekVisionCaller
+        from app.services.model_config_selector import select_journey_model_config
+
+        config = self._business_journey
+        try:
+            model_config = select_journey_model_config(context.model_config_version_id, db=self.db)
+        except ModelConfigurationError as exc:
+            raise RuntimeModelError("MODEL_CONFIG_INVALID", str(exc)) from exc
+        api_key = os.environ.get(config.get("api_key_env_var") or "DEEPSEEK_API_KEY") or ""
+        if not api_key:
+            raise RuntimeModelError("DEEPSEEK_API_KEY_REQUIRED", "environment variable is not set")
+        ledger = config.get("ledger") or ModelCallLedger()
+        self._journey_ledger = ledger
+        return DeepSeekVisionCaller(api_key, model_config, ledger)
+
+    def _journey_context(self, context: TurnRuntimeContext, *, call_kind: str, logical_call_index: int):
+        from evals.business_journeys.contracts import MODEL_ID, JourneyModelContext
+
+        config = self._business_journey
+        run_id = config["run_id"]
+        journey_id = config["journey_id"]
+        return JourneyModelContext(
+            run_id=run_id, journey_id=journey_id, model_config_version_id=context.model_config_version_id,
+            model_id=MODEL_ID, call_kind=call_kind, logical_call_index=logical_call_index,
+            correlation_id=f"{run_id}:{journey_id}:{call_kind}:{logical_call_index}",
+        )
+
+    def _run_business_journey_turn(self, context: TurnRuntimeContext, events: list[RuntimeEvent]) -> str:
+        """The two-completion business-journey protocol: `agent_initial`
+        (logical index 2) decides at most one governed query-tool call;
+        `agent_final` (logical index 3) answers using that tool's persisted
+        result. Both completions go through the SAME `DeepSeekVisionCaller`
+        resolved in `_prepare`; this method makes no other model call and
+        never falls back to another caller on a config/model mismatch —
+        `DeepSeekVisionCaller`/`select_journey_model_config` already raise a
+        fatal `ModelConfigurationError`/`RuntimeModelError` for that."""
+        from evals.business_journeys.contracts import BusinessJourneyModelError, InputPart, sha256_text
+
+        caller = self._journey_caller
+        question = context.user_message or ""
+        question_part = InputPart(kind="text", media_type="text/plain", content=question,
+                                  sha256=sha256_text(question))
+
+        try:
+            initial = caller.complete(
+                self._journey_context(context, call_kind="agent_initial", logical_call_index=2),
+                [question_part], response_schema=AGENT_INITIAL_RESPONSE_SCHEMA,
+            )
+        except BusinessJourneyModelError as exc:
+            raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
+        self._emit_journey_model_call_event(events, context, initial, call_kind="agent_initial",
+                                            logical_call_index=2)
+
+        tool_call = (initial.structured or {}).get("tool_call")
+        tool_result_part: InputPart | None = None
+        if tool_call:
+            result = self._execute_journey_tool_call(context, events, tool_call)
+            tool_result_part = InputPart(
+                kind="text", media_type="application/json",
+                content=json.dumps(result, ensure_ascii=False),
+                sha256=sha256_text(json.dumps(result, ensure_ascii=False, sort_keys=True)),
+            )
+
+        final_parts = [question_part] + ([tool_result_part] if tool_result_part else [])
+        try:
+            final = caller.complete(
+                self._journey_context(context, call_kind="agent_final", logical_call_index=3),
+                final_parts, response_schema=AGENT_FINAL_RESPONSE_SCHEMA,
+            )
+        except BusinessJourneyModelError as exc:
+            raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
+        self._emit_journey_model_call_event(events, context, final, call_kind="agent_final",
+                                            logical_call_index=3)
+
+        return str((final.structured or {}).get("answer") or "")
+
+    def _emit_journey_model_call_event(self, events: list[RuntimeEvent], context: TurnRuntimeContext,
+                                       response, *, call_kind: str, logical_call_index: int) -> None:
+        from evals.business_journeys.contracts import MODEL_ID, OFFICIAL_ORIGIN
+
+        run_id = self._business_journey["run_id"]
+        journey_id = self._business_journey["journey_id"]
+        _seq(events, context.turn_id, "model_call", {
+            "call_kind": call_kind,
+            "logical_call_index": logical_call_index,
+            "correlation_id": f"{run_id}:{journey_id}:{call_kind}:{logical_call_index}",
+            "model_caller": "DeepSeekVisionCaller",
+            "model_origin": OFFICIAL_ORIGIN,
+            "requested_model": MODEL_ID,
+            "observed_model": response.model,
+            "preflight_model_id": MODEL_ID,
+            "http_attempts": response.http_attempts,
+            "retry_count": response.retry_count,
+        })
+
+    def _execute_journey_tool_call(self, context: TurnRuntimeContext, events: list[RuntimeEvent],
+                                   tool_call: dict) -> dict:
+        """The one governed MCP/query call/result a business-journey turn is
+        allowed: resolves to the first bound ontology's `_READ_INSTANCES`
+        tool, through the SAME governed `ToolGateway` every other tool call
+        in this runtime goes through — never a second, ungoverned path."""
+        if not self._bindings:
+            raise RuntimeModelError("TOOL_UNSUPPORTED", "turn has no bound ontology")
+        binding = self._bindings[0]
+        ontology_id = binding["ontology_id"]
+        release_id = self._release_by_ontology.get(ontology_id)
+        request = GatewayRequest(
+            agent_id=context.agent_id, user_id=self._owner_user_id or "",
+            descriptor_id=_READ_INSTANCES, operation="instance_read",
+            parameters={
+                "ontology_id": ontology_id, "release_id": release_id,
+                "query": str(tool_call.get("query") or ""), "limit": 10,
+                "sort_by": None, "sort_order": None,
+            },
+        )
+        try:
+            result = self._gateway.execute(request, ontology_id=ontology_id)
+        except Exception as exc:
+            _seq(events, context.turn_id, "tool_executed", {
+                "descriptor_id": tool_call.get("descriptor_id") or _READ_INSTANCES,
+                "outcome": "rejected", "detail": str(exc)[:300],
+            })
+            return {"error": str(exc)[:300]}
+        _seq(events, context.turn_id, "tool_executed", {
+            "descriptor_id": tool_call.get("descriptor_id") or _READ_INSTANCES,
+            "outcome": result.outcome,
+            "correlation_id": result.correlation_id,
+            **(_bound_summary(result.payload)),
+        })
+        return dict(result.payload)
 
     def _release_for(self, context: TurnRuntimeContext, binding: dict) -> str | None:
         ontology_id = binding["ontology_id"]

@@ -47,6 +47,14 @@ from app.services.runtime.policy import _as_aware_utc
 from app.services.runtime.reconciliation import ReconciliationCase, get_reconciliation_case
 from app.services.runtime.sandbox import SandboxError, SandboxResult, simulate_action
 from app.services.runtime.service import ActionPlan, ActionPlanRequest, RuntimeService
+from app.services.runtime.turn_plans import (
+    GovernedActionPlan,
+    GovernedActionPlanView,
+    TurnPlanError,
+    create_governed_plan_from_turn,
+    decide_governed_plan,
+    get_governed_plan,
+)
 
 router = APIRouter()
 
@@ -110,7 +118,8 @@ def _require_runtime_context(required_scope: str):
 
 
 async def runtime_access_error_handler(
-    request, exc: RuntimeAccessError | ExecutionError | BindingError | PlanValidationError | SandboxError,
+    request,
+    exc: RuntimeAccessError | ExecutionError | BindingError | PlanValidationError | SandboxError | TurnPlanError,
 ) -> JSONResponse:
     """The single place every structured Runtime denial — credential-layer
     (`RuntimeAccessError`) or service-layer (`ExecutionError`/`BindingError`/
@@ -532,6 +541,111 @@ def create_rollback_plan_route(
 ) -> dict[str, Any]:
     plan = create_rollback_plan(db, execution_id=execution_id, context=context)
     return _serialize_action_plan(plan)
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (business-journey acceptance): governed-action proposals created
+# FROM an Agent turn's own persisted evidence.
+#
+# Unlike every other route above, these three are "Runtime UI" endpoints —
+# driven by the signed-in user's own browser session (`get_current_user`),
+# not a delegated Agent credential (`_require_runtime_context`). They live
+# in this router because they are conceptually "propose/decide an action
+# plan," the same family as `/action-plans` above, but their SUBJECT is a
+# `GovernedTurnPlan` (`app.services.runtime.turn_plans`) — a deliberately
+# separate table from `RuntimePlan`, since a plain conversational turn never
+# produces the materialized `SemanticSnapshot`/catalog `Action` a `RuntimePlan`
+# requires. See that module's own docstring for the full rationale.
+
+
+class GovernedPlanFromTurnRequestBody(BaseModel):
+    """Extra fields are rejected — the caller can only ever assert what a
+    proposal actually needs (turn/branch/target/idempotency/digest), never
+    an identity or a decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    branch: str
+    target_fixture_id: str
+    idempotency_key: str
+    payload_digest: str
+
+
+class GovernedPlanDecisionRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str
+    plan_hash: str
+
+
+def _serialize_governed_action_plan(plan: GovernedActionPlan) -> dict[str, Any]:
+    return {
+        "action_plan_id": plan.action_plan_id,
+        "plan_hash": plan.plan_hash,
+        "approval_id": plan.approval_id,
+        "branch": plan.branch,
+        "target_fixture_id": plan.target_fixture_id,
+        "status": plan.status,
+        "correlation_id": plan.correlation_id,
+    }
+
+
+def _serialize_governed_action_plan_view(view: GovernedActionPlanView) -> dict[str, Any]:
+    return {
+        "action_plan_id": view.action_plan_id,
+        "plan_hash": view.plan_hash,
+        "approval_id": view.approval_id,
+        "turn_id": view.turn_id,
+        "branch": view.branch,
+        "target_fixture_id": view.target_fixture_id,
+        "status": view.status,
+        "execution_class": view.execution_class,
+        "target_before_hash": view.target_before_hash,
+        "target_after_hash": view.target_after_hash,
+        "must_write": view.must_write,
+        "receipt_id": view.receipt_id,
+        "audit_event_id": view.audit_event_id,
+        "correlation_id": view.correlation_id,
+    }
+
+
+@router.post("/action-plans/from-turn", status_code=201)
+def create_action_plan_from_turn(
+    body: GovernedPlanFromTurnRequestBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    plan = create_governed_plan_from_turn(
+        db, turn_id=body.turn_id, branch=body.branch, target_fixture_id=body.target_fixture_id,
+        idempotency_key=body.idempotency_key, payload_digest=body.payload_digest,
+        actor_user_id=current_user.id,
+    )
+    return _serialize_governed_action_plan(plan)
+
+
+@router.get("/action-plans/from-turn/{plan_id}")
+def get_action_plan_from_turn(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    view = get_governed_plan(db, plan_id=plan_id, actor_user_id=current_user.id)
+    return _serialize_governed_action_plan_view(view)
+
+
+@router.post("/action-plans/from-turn/{plan_id}/decide")
+def decide_action_plan_from_turn(
+    plan_id: str,
+    body: GovernedPlanDecisionRequestBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    view = decide_governed_plan(
+        db, plan_id=plan_id, presented_plan_hash=body.plan_hash, decision=body.decision,
+        actor_user_id=current_user.id, security_domain_id=current_user.security_domain_id,
+    )
+    return _serialize_governed_action_plan_view(view)
 
 
 __all__ = ["router", "runtime_access_error_handler", "RuntimeAccessError"]

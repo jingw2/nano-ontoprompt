@@ -90,6 +90,7 @@ from app.models.runtime_execution import (
     RuntimeExecution,
     RuntimeReconciliationCase,
     RuntimeExecutionApproval,
+    GovernedTurnPlan,
 )
 
 
@@ -185,6 +186,7 @@ def load_all_models():
         RuntimeExecution,
         RuntimeReconciliationCase,
         RuntimeExecutionApproval,
+        GovernedTurnPlan,
     )
 
     return Base.metadata
@@ -277,5 +279,6 @@ __all__ = [
     "RuntimeExecution",
     "RuntimeReconciliationCase",
     "RuntimeExecutionApproval",
+    "GovernedTurnPlan",
     "load_all_models",
 ]

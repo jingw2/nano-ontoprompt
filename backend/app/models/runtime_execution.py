@@ -156,4 +156,63 @@ class RuntimeExecutionApproval(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
-__all__ = ["RuntimeExecution", "RuntimeReconciliationCase", "RuntimeExecutionApproval"]
+class GovernedTurnPlan(Base):
+    """One governed-action proposal created FROM AN AGENT TURN'S OWN
+    persisted evidence (Task 3, business-journey acceptance), not from an
+    `ActionPlanRequest`/investigation like `RuntimePlan`.
+
+    This is a deliberately separate table from both `RuntimePlan` (which
+    requires a materialized `SemanticSnapshot` + a catalog `Action` row —
+    neither of which a plain conversational Agent turn produces) and
+    `AgentApproval` (which is wired into the SAME turn's OWN dispatch/resume
+    state machine — reusing it for three independent UI-initiated proposals
+    against three different targets would incorrectly resume/requeue that
+    turn three times). A `GovernedTurnPlan` never touches `agent_turns.status`
+    or `runtime_plans` at all; it only READS `agent_tool_executions`/
+    `agent_messages` as evidence and stands on its own for the
+    approve/reject/expire decision.
+
+    `idempotency_key` is globally unique, so a caller replaying the same key
+    (whether or not the rest of the payload matches) is a real constraint
+    violation, not a value `create_governed_plan_from_turn` could silently
+    interpret as "replay the existing plan" — the browser is required to
+    mint a fresh key per branch, and reusing one is always rejected.
+    """
+
+    __tablename__ = "governed_turn_plans"
+    __table_args__ = (
+        CheckConstraint("branch IN ('approved', 'rejected', 'expired')", name="ck_governed_turn_plans_branch"),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_governed_turn_plans_status"),
+        UniqueConstraint("idempotency_key", name="uq_governed_turn_plans_idempotency_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    turn_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_turns.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    tool_execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tool_executions.id", ondelete="RESTRICT"), nullable=False,
+    )
+    branch: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_fixture_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    target_before_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_after_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    receipt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    audit_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    decided_by_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+__all__ = [
+    "GovernedTurnPlan",
+    "RuntimeExecution",
+    "RuntimeReconciliationCase",
+    "RuntimeExecutionApproval",
+]

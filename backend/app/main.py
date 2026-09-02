@@ -69,6 +69,7 @@ from app.services.runtime.credentials import RuntimeAccessError
 from app.services.runtime.execution import ExecutionError
 from app.services.runtime.action_bindings import BindingError, PlanValidationError
 from app.services.runtime.sandbox import SandboxError
+from app.services.runtime.turn_plans import TurnPlanError
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -230,6 +231,7 @@ app.add_exception_handler(ExecutionError, runtime_v2.runtime_access_error_handle
 app.add_exception_handler(BindingError, runtime_v2.runtime_access_error_handler)
 app.add_exception_handler(PlanValidationError, runtime_v2.runtime_access_error_handler)
 app.add_exception_handler(SandboxError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(TurnPlanError, runtime_v2.runtime_access_error_handler)
 
 def get_db():
     db = SessionLocal()

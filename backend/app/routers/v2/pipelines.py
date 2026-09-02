@@ -377,6 +377,11 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
         "status": run.status,
         "stats": run.stats,
         "error_log": run.error_log,
+        # Set by pipeline_run_task once real source rows are resolved (input
+        # lineage) and again to the curated output version on success; a
+        # caller polling for durable completion previously had no way to
+        # read this back at all.
+        "dataset_version_id": run.dataset_version_id,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }

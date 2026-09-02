@@ -90,7 +90,20 @@ def current_grant(db: Session, ontology_id: str, user_id: str) -> dict | None:
 
 def _row_dict(row) -> dict:
     result = dict(row)
-    result["capabilities"] = list(result["capabilities"])
+    capabilities = result["capabilities"]
+    # `capabilities` is a JSON column; a raw `text()` SELECT (used throughout
+    # this module) round-trips it as a Python list on PostgreSQL but as a
+    # raw JSON-encoded string on SQLite — `list("...")` on that string would
+    # silently iterate individual characters instead of the real
+    # capabilities, which made every capability check fail closed for the
+    # wrong reason (confirmed directly: `require_project_grant` denying
+    # "edit" for a grant that genuinely holds it). Decode explicitly rather
+    # than indexing into the raw `'['` character.
+    if isinstance(capabilities, (str, bytes, bytearray)):
+        import json
+
+        capabilities = json.loads(capabilities) if capabilities else []
+    result["capabilities"] = list(capabilities)
     return result
 
 

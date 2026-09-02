@@ -215,10 +215,46 @@ class BatchEditRequest(BaseModel):
     edits: list[dict]  # [{row_pk, field_name, old_value, new_value}]
 
 
+def _ensure_curated_dataset_row(db: Session, dataset_id: str) -> None:
+    """`ReviewService` (and therefore this whole review workflow) reads and
+    writes `CuratedDataset`/`v2_curated_datasets` — a separate table from
+    the `Dataset`/`v2_datasets` (`kind="curated"`) rows the real Pipeline DAG
+    engine (`app.tasks.v2.pipeline_run._save_curated_dataset`) actually
+    creates. Nothing links the two today, so `POST /{dataset_id}/reviews`
+    404s for every dataset `GET /api/v2/curated` (which reads `Dataset`) ever
+    lists — confirmed directly by driving a real pipeline run end to end.
+    Bridging them by reusing the SAME id (both are UUID-keyed, and nothing
+    else currently reads or writes `CuratedDataset.id` as anything other
+    than an opaque primary key) is the minimal fix: auto-provision the
+    corresponding `CuratedDataset` row, from the real `Dataset`'s own
+    name/schema metadata, the first time a review is started for it."""
+    from app.models.v2.dataset import Dataset, DatasetVersion
+
+    existing = db.get(CuratedDataset, dataset_id)
+    if existing is not None:
+        return
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or dataset.kind != "curated":
+        raise HTTPException(404, f"Curated dataset {dataset_id} not found")
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset.id
+    ).order_by(DatasetVersion.version_no.desc()).first()
+    quality_score = None
+    if dataset.schema_json and isinstance(dataset.schema_json, dict):
+        quality_score = dataset.schema_json.get("quality_score")
+    db.add(CuratedDataset(
+        id=dataset.id, name=dataset.name, schema_json=dataset.schema_json,
+        latest_version_id=version.id if version else None, quality_score=quality_score,
+        status="pending_review",
+    ))
+    db.commit()
+
+
 @router.post("/{dataset_id}/reviews")
 def start_review(dataset_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """为数据集启动审核流程"""
     from app.services.v2.curated.review_service import ReviewService
+    _ensure_curated_dataset_row(db, dataset_id)
     svc = ReviewService(db)
     review = svc.start_review(dataset_id)
     return {"review_id": review.id, "status": review.status}
