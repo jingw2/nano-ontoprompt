@@ -541,6 +541,19 @@ def verify_journey(
     if not evidence.automatic_receipt_id:
         raise JourneyAcceptanceError("AUTOMATIC_RECEIPT_MISSING: turn recorded no automatic receipt")
 
+    # The manifest's `low_risk_action` names WHICH action the turn is
+    # required to have executed automatically (no approval gate) — reading
+    # it back here and cross-checking it against what was actually persisted
+    # is the genuine use of this field `prepare_journey` already parses via
+    # `_semantic_minimum` but, before this check existed, never verified.
+    manifest = load_journey_manifest(journey_id, _RUNTIME_DATA_DIR)
+    expected_low_risk_action = str(manifest.semantic_minima.get("low_risk_action") or "")
+    if expected_low_risk_action and evidence.automatic_action != expected_low_risk_action:
+        raise JourneyAcceptanceError(
+            f"AUTOMATIC_ACTION_MISMATCH: expected {expected_low_risk_action!r}, "
+            f"persisted {evidence.automatic_action!r}"
+        )
+
     ontology_call = _synthetic_ontology_call(run_id, journey_id)
     calls = (ontology_call,) + evidence.model_calls
     http_attempts = sum(call.http_attempts for call in calls)

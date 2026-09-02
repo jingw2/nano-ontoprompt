@@ -402,6 +402,7 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
             "audit_event_id": _uuid_for(f"{turn_id}:audit"),
             "receipt_id": _uuid_for(f"{turn_id}:receipt"),
             "sandbox_receipt_id": _uuid_for(f"{turn_id}:sandbox"),
+            "automatic_action": str(minima.get("low_risk_action") or ""),
         }},
         {"sequence": 7, "event_type": "turn_succeeded", "payload": {}},
     ]

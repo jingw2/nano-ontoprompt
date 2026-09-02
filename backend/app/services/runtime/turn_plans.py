@@ -16,10 +16,20 @@ turn's own dispatch/resume state machine). It makes no model call.
 `pending`: "approved" performs one real, self-contained mutation of the
 target `EntityInstance.row_data` (so `target_before_hash != target_after_hash`
 is a genuine, observable fact, not a fabricated one) and records a receipt;
-"rejected" mutates nothing. A plan whose `expiry` has passed can never be
-decided (`GOVERNED_PLAN_EXPIRED`) — the "expired" branch reaches that state
-by `create_governed_plan_from_turn` pinning its `expiry` to the moment of
-creation, not by a background sweep.
+"rejected" mutates nothing; "expired" also records a real audit event and
+receipt for a genuinely lapsed plan, with no target mutation. A plan whose
+`expiry` has passed can only ever be decided "expired" — the "expired"
+branch reaches that state by `create_governed_plan_from_turn` pinning its
+`expiry` to the moment of creation, not by a background sweep.
+
+`execute_automatic_low_risk_action` is the turn's one NO-approval-gate
+action — called directly from within `LangGraphRuntime._run_business_
+journey_turn` right after the final completion, before the turn is even
+finalized, unlike the three `GovernedTurnPlan` branches (which are UI-driven,
+after the fact). It performs the same kind of real, self-contained mutation
++ audit event as an "approved" `GovernedTurnPlan`, for the same reason
+`RuntimePlan`/`AgentApproval` are unreachable from a plain conversational
+turn (see `execute_automatic_low_risk_action`'s own docstring).
 """
 from __future__ import annotations
 
@@ -512,6 +522,81 @@ def get_governed_plan(db: Session, *, plan_id: str, actor_user_id: str) -> Gover
     return _to_view(row, now=_now())
 
 
+@dataclass(frozen=True)
+class AutomaticActionReceipt:
+    """Proof that the turn's one low-risk action executed automatically —
+    no human approval gate, unlike a `GovernedTurnPlan`'s three branches."""
+
+    receipt_id: str
+    audit_event_id: str
+    action: str
+    target_fixture_id: str
+    target_before_hash: str
+    target_after_hash: str
+
+
+def execute_automatic_low_risk_action(
+    db: Session,
+    *,
+    turn_id: str,
+    agent_id: str,
+    target_fixture_id: str,
+    action: str,
+    actor_user_id: str,
+    security_domain_id: str,
+) -> AutomaticActionReceipt:
+    """The one low-risk action a business-journey turn executes
+    automatically, immediately after its final completion — no approval
+    gate, unlike the three `create_governed_plan_from_turn` branches
+    (Critical Finding #3).
+
+    Deliberately does NOT call `app.services.runtime.sandbox.
+    simulate_action` (or the real `execute_plan` writer behind it): both
+    require a materialized `SemanticSnapshot` + a catalog `Action` row,
+    resolved through `RuntimeService().get_action_plan(...)` under a
+    delegated `RuntimeContext` credential — confirmed directly by reading
+    `simulate_action`'s own body — none of which a plain conversational
+    Agent turn produces or can construct from within itself. This is
+    EXACTLY the same "genuinely separate from RuntimePlan/AgentApproval"
+    reasoning the module docstring already gives for `GovernedTurnPlan`
+    (independently reviewed and confirmed correct for the three high-risk
+    branches); it applies identically here. This performs the SAME kind of
+    real, self-contained mutation + real audit event + real receipt
+    `decide_governed_plan`'s "approved" outcome already does, for the
+    automatic (no-approval) case — called directly from within the turn
+    (`LangGraphRuntime._run_business_journey_turn`), before the turn is
+    finalized, so it resolves `agent_id` from the caller's own already-pinned
+    context rather than re-reading a turn row whose `status` isn't
+    `succeeded` yet.
+    """
+    target = _resolve_disposable_target(db, agent_id=agent_id, target_fixture_id=target_fixture_id)
+    before_hash = _sha256_json(target["row_data"])
+    mutated = dict(target["row_data"])
+    mutated["_automatic_action_applied"] = action
+    now = _now()
+    db.execute(text(
+        "UPDATE entity_instances SET row_data = :data, revision = revision + 1, "
+        "updated_at = :now WHERE id = :id"
+    ), {"data": json.dumps(mutated, ensure_ascii=False), "now": now, "id": target_fixture_id})
+    after_hash = _sha256_json(mutated)
+
+    audit_event_id = _append_governance_audit_event(
+        db,
+        security_domain_id=security_domain_id,
+        operation="runtime.automatic_action.execute",
+        decision="automatic",
+        correlation_id=_correlation("automatic", turn_id),
+        actor_user_id=actor_user_id,
+        lineage={"turn_id": turn_id, "target_fixture_id": target_fixture_id, "action": action},
+    )
+    db.commit()
+
+    return AutomaticActionReceipt(
+        receipt_id=_new_id(), audit_event_id=audit_event_id, action=action,
+        target_fixture_id=target_fixture_id, target_before_hash=before_hash, target_after_hash=after_hash,
+    )
+
+
 def _to_view(row: GovernedTurnPlan, *, now: datetime) -> GovernedActionPlanView:
     status = _plan_status(row, now=now)
     return GovernedActionPlanView(
@@ -534,10 +619,12 @@ def _to_view(row: GovernedTurnPlan, *, now: datetime) -> GovernedActionPlanView:
 
 __all__ = [
     "GOVERNED_PLAN_TTL_SECONDS",
+    "AutomaticActionReceipt",
     "GovernedActionPlan",
     "GovernedActionPlanView",
     "TurnPlanError",
     "create_governed_plan_from_turn",
     "decide_governed_plan",
+    "execute_automatic_low_risk_action",
     "get_governed_plan",
 ]

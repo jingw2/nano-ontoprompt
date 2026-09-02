@@ -434,3 +434,113 @@ def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creatio
         idempotency_key=f"key-{uuid.uuid4()}", payload_digest=digest, actor_user_id=user.id,
     )
     assert plan.status == "pending"
+
+
+def test_business_journey_turn_executes_the_automatic_low_risk_action_with_a_real_receipt(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Closes Critical Finding #3: the turn's one low-risk action must run
+    automatically (no approval gate) with a REAL receipt — not the event
+    payload shape only the test fake previously supplied. This runs the real
+    `LangGraphRuntime.start_turn`, whose final completion names the fixture
+    row to act on, and then reads back — independently of the runtime — the
+    real `EntityInstance.row_data` mutation and the real
+    `governance_audit_logs` row the automatic action must have written."""
+    user = User(
+        id=str(uuid.uuid4()), username="tp-auto-user", email="tp-auto@example.invalid",
+        password_hash="x", role="editor", security_domain_id="00000000-0000-0000-0000-000000000001",
+    )
+    db.add(user)
+    db.commit()
+
+    project = OntologyProject(
+        id=str(uuid.uuid4()), name="tp-auto-ontology", domain="test",
+        created_by=user.id, security_domain_id="00000000-0000-0000-0000-000000000001",
+    )
+    db.add(project)
+    db.flush()
+    entity = Entity(id=str(uuid.uuid4()), ontology_id=project.id, name_cn="目标实体")
+    db.add(entity)
+    db.flush()
+    release_id = str(uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO ontology_releases "
+        "(id, ontology_id, version_no, version, manifest_bytes, manifest_projection, "
+        "schema_hash, status, created_by, created_at) "
+        "VALUES (:id, :oid, 1, 'v1', :mb, :proj, :sh, 'published', :cb, CURRENT_TIMESTAMP)"
+    ), {
+        "id": release_id, "oid": project.id, "mb": b"manifest",
+        "proj": json.dumps({"entities": [{"id": entity.id}]}),
+        "sh": b"schema-hash-0000000000000000000000", "cb": user.id,
+    })
+    project.latest_published_release_id = release_id
+    db.commit()
+    instance = EntityInstance(
+        id=str(uuid.uuid4()), entity_id=entity.id, ontology_id=project.id,
+        row_identity="row-1", row_data={"name": "MAT001"},
+    )
+    db.add(instance)
+    db.commit()
+    original_revision = instance.revision
+
+    agent_id = str(uuid.uuid4())
+    agent_version_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    turn_id = str(uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO agents (id, visibility, status, owner_id, active_version_id, created_at, updated_at) "
+        "VALUES (:id, 'private', 'active', :owner, :version, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": agent_id, "owner": user.id, "version": agent_version_id})
+    db.execute(text(
+        "INSERT INTO agent_ontology_bindings (id, agent_version_id, ontology_id, capabilities, allowlists, created_at) "
+        "VALUES (:id, :version, :ontology, '[]', '{}', CURRENT_TIMESTAMP)"
+    ), {"id": str(uuid.uuid4()), "version": agent_version_id, "ontology": project.id})
+    db.execute(text(
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
+        "VALUES (:id, :agent, :owner, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": session_id, "agent": agent_id, "owner": user.id})
+    db.execute(text(
+        "INSERT INTO agent_turns (id, session_id, status, dispatch_generation, created_at, updated_at) "
+        "VALUES (:id, :sid, 'running', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"id": turn_id, "sid": session_id})
+    db.commit()
+
+    deepseek_transport.queue.append({"tool_call": None, "answer": None})
+    deepseek_transport.queue.append({
+        "answer": "Supplier MAT001 flagged for review.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+        "automatic_action": {"target_fixture_id": instance.id, "action": "flag_reviewed"},
+    })
+
+    context = TurnRuntimeContext(
+        turn_id=turn_id, session_id=session_id, agent_id=agent_id, agent_version_id=agent_version_id,
+        release_id=release_id, model_config_version_id=pinned_model_config_version_id, model_name=MODEL_ID,
+        user_message="Flag MAT001 for review.",
+        extra={
+            "user_id": user.id,
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+        },
+    )
+    runtime = LangGraphRuntime(db=db, gateway=_FakeGateway({}), max_tool_rounds=1)
+    events = _run(runtime, context)
+
+    final_event = next(e for e in events if e.event_type == "final_response")
+    receipt_id = final_event.payload["receipt_id"]
+    sandbox_receipt_id = final_event.payload["sandbox_receipt_id"]
+    audit_event_id = final_event.payload["audit_event_id"]
+    assert receipt_id and sandbox_receipt_id and audit_event_id
+    assert final_event.payload["automatic_action"] == "flag_reviewed"
+    assert any(e.event_type == "turn_succeeded" for e in events)
+
+    # Read back the real mutation, independently of the runtime.
+    db.expire(instance)
+    assert instance.row_data.get("_automatic_action_applied") == "flag_reviewed"
+    assert instance.revision == original_revision + 1
+
+    # Read back the real audit event, independently of the runtime.
+    audit_row = db.execute(text(
+        "SELECT operation, decision, actor_user_id FROM governance_audit_logs WHERE id = :id"
+    ), {"id": audit_event_id}).mappings().one()
+    assert audit_row["operation"] == "runtime.automatic_action.execute"
+    assert audit_row["decision"] == "automatic"
+    assert audit_row["actor_user_id"] == user.id

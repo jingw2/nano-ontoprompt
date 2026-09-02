@@ -225,6 +225,7 @@ class PersistedJourneyEvidence:
     audit_event_ids: tuple[str, ...]
     sandbox_receipt_id: str
     automatic_receipt_id: str
+    automatic_action: str
     model_calls: tuple[ModelCallRecord, ...]
     plan_branches: tuple[PlanBranchEvidence, ...]
 
@@ -693,6 +694,7 @@ class JourneyApiClient:
         audit_event_ids: list[str] = []
         sandbox_receipt_id = ""
         automatic_receipt_id = ""
+        automatic_action = ""
         model_config_version_id = ""
         model_calls: list[ModelCallRecord] = []
         for event in events:
@@ -728,6 +730,7 @@ class JourneyApiClient:
                 audit_event_ids.append(str(payload.get("audit_event_id") or ""))
                 sandbox_receipt_id = str(payload.get("sandbox_receipt_id") or "")
                 automatic_receipt_id = str(payload.get("receipt_id") or "")
+                automatic_action = str(payload.get("automatic_action") or "")
 
         if not agent_id or not agent_version_id:
             raise JourneyAcceptanceError("TURN_STARTED_EVENT_MISSING: no persisted agent_id/agent_version_id")
@@ -760,6 +763,7 @@ class JourneyApiClient:
             audit_event_ids=tuple(a for a in audit_event_ids if a),
             sandbox_receipt_id=sandbox_receipt_id,
             automatic_receipt_id=automatic_receipt_id,
+            automatic_action=automatic_action,
             model_calls=tuple(model_calls),
             plan_branches=tuple(branches),
         )
