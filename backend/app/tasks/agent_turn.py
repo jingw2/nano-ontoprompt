@@ -12,11 +12,63 @@ fails closed and never finalizes.  No API execution fallback and no Action
 writes.
 """
 import asyncio
+import json
 import uuid
 
 from sqlalchemy import text
 
 from app.tasks.celery_app import celery_app
+
+
+def _resolve_business_journey(model_config_options) -> dict | None:
+    """A turn's Agent is routed through the business-journey two-completion
+    protocol (`LangGraphRuntime._run_business_journey_turn`) precisely when
+    its PINNED, IMMUTABLE model configuration was one `evals.business_
+    journeys.orchestrator.prepare_journey` created — there is no separate
+    request field or browser signal for this (an ordinary human turn must
+    behave identically to today); the association is carried entirely by
+    that immutable config's own `options` JSON
+    (`evals.business_journeys.api_client.JourneyApiClient.create_model_config`
+    tags it there at creation time, the one and only place a business-
+    journey model configuration is ever minted). `options` round-trips as a
+    dict on PostgreSQL but can arrive as a JSON string on the SQLite unit
+    harness — decode defensively, matching the same duality this codebase
+    already normalizes for `EntityInstance.row_data` elsewhere."""
+    if isinstance(model_config_options, (str, bytes, bytearray)):
+        try:
+            model_config_options = json.loads(model_config_options) if model_config_options else {}
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(model_config_options, dict):
+        return None
+    candidate = model_config_options.get("business_journey")
+    if not isinstance(candidate, dict):
+        return None
+    run_id = candidate.get("run_id")
+    journey_id = candidate.get("journey_id")
+    if not run_id or not journey_id:
+        return None
+    return {"run_id": str(run_id), "journey_id": str(journey_id)}
+
+
+def _load_turn_dispatch_row(db, *, turn_id: str):
+    """The one query a dispatched Turn's context is assembled from — pulled
+    into its own function so the business-journey detection (`options ->
+    model_config_options -> _resolve_business_journey`) is directly
+    testable without needing the full claim/runtime/finalize machinery
+    `agent_turn_execute` itself requires."""
+    return db.execute(text(
+        "SELECT t.session_id, s.agent_id, s.owner_user_id, a.active_version_id, "
+        "v.default_model_config_version_id, v.default_model_name, mcv.options AS model_config_options, "
+        "m.content AS user_message "
+        "FROM agent_turns t "
+        "JOIN agent_sessions s ON s.id = t.session_id "
+        "JOIN agents a ON a.id = s.agent_id "
+        "JOIN agent_versions v ON v.id = a.active_version_id "
+        "LEFT JOIN model_config_versions mcv ON mcv.id = v.default_model_config_version_id "
+        "LEFT JOIN agent_messages m ON m.id = t.request_message_id "
+        "WHERE t.id = :id"
+    ), {"id": turn_id}).mappings().one()
 
 
 @celery_app.task(bind=True, name="agent.turn_execute")
@@ -41,17 +93,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             db, turn_id=turn_id, dispatch_generation=dispatch_generation,
             worker_artifact_id=worker_artifact_id, claim_token=claim_token,
         )
-        row = db.execute(text(
-            "SELECT t.session_id, s.agent_id, s.owner_user_id, a.active_version_id, "
-            "v.default_model_config_version_id, v.default_model_name, "
-            "m.content AS user_message "
-            "FROM agent_turns t "
-            "JOIN agent_sessions s ON s.id = t.session_id "
-            "JOIN agents a ON a.id = s.agent_id "
-            "JOIN agent_versions v ON v.id = a.active_version_id "
-            "LEFT JOIN agent_messages m ON m.id = t.request_message_id "
-            "WHERE t.id = :id"
-        ), {"id": turn_id}).mappings().one()
+        row = _load_turn_dispatch_row(db, turn_id=turn_id)
         # P2B-TOOLS: resolve the pinned context (release citation + ontology
         # bindings) so the Tool Gateway exposes only this Agent's selected
         # tools and the resolve_snapshot event carries the release citation.
@@ -68,6 +110,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             external_tool_bindings=[dict(b) for b in pinned.tool_bindings],
             skill_bindings=[dict(b) for b in pinned.skill_bindings],
             citations=list(pinned.citations),
+            business_journey=_resolve_business_journey(row["model_config_options"]),
         )
         # the runtime executes the model + governed tools for this user
         context.extra["user_id"] = row["owner_user_id"]

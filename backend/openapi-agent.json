@@ -6221,6 +6221,52 @@
         ]
       }
     },
+    "/api/v1/agent-turns/{turn_id}/tool-evidence": {
+      "get": {
+        "description": "Read-only `tool_execution_id`/`status`/`result_hash` for the turn's\nown persisted tool execution — never the raw parameters or result\npayload. The governed high-risk plan UI reads this to compute the\nexact `payload_digest` `POST /api/v2/runtime/action-plans/from-turn`\nvalidates, rather than reconstructing an approximation of the\nserver-side hash from the bounded trace-event summary.",
+        "operationId": "get_tool_evidence_api_v1_agent_turns__turn_id__tool_evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tool Evidence",
+        "tags": [
+          "agent-turns"
+        ]
+      }
+    },
     "/api/v1/agents": {
       "get": {
         "description": "Access-filtered agent list: stable `created_at DESC, id DESC` keyset\npagination with an opaque signed cursor and q/id/name/date filters.",

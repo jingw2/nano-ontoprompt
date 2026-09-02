@@ -87,10 +87,27 @@ export default function ConversationPanel({
   const modelCalls = journeyEvents.filter(e => e.event_type === 'model_call').map(e => modelCallFrom(e.payload))
   const initialCall = modelCalls.find(c => c?.callKind === 'agent_initial') ?? null
   const finalCall = modelCalls.find(c => c?.callKind === 'agent_final') ?? null
+  // The real citation shape (`app.services.runtime.context.
+  // resolve_pinned_context`) is `{"type":"release","release_id":...,
+  // "version_no":...,"entities":N,"relations":N}` — the grounded ontology
+  // RELEASE the turn resolved, never a source-document reference. Render
+  // the release id/version, not `String(object)` (which would just print
+  // `[object Object]`).
   const citations = Array.isArray(resolveSnapshotEvent?.payload.citations)
-    ? (resolveSnapshotEvent!.payload.citations as unknown[]).map(String)
+    ? (resolveSnapshotEvent!.payload.citations as Record<string, unknown>[])
+      .filter(c => c && typeof c === 'object')
+      .map(c => `release ${String(c.release_id ?? '')} v${String(c.version_no ?? '')}`)
     : []
-  const hasAutomaticReceipt = Boolean(finalEvent && typeof finalEvent.payload.receipt_id === 'string')
+  const realAuditEventId = finalEvent && typeof finalEvent.payload.audit_event_id === 'string'
+    ? finalEvent.payload.audit_event_id : null
+  const realReceiptId = finalEvent && typeof finalEvent.payload.receipt_id === 'string'
+    ? finalEvent.payload.receipt_id : null
+  // The final response only ever carries `receipt_id`/`automatic_action`
+  // together, and only for the turn's one no-approval-gate low-risk
+  // execution (`LangGraphRuntime._execute_journey_automatic_action`) — both
+  // being present is real evidence of that specific outcome, not a label
+  // applied "regardless of actual state".
+  const hasAutomaticReceipt = Boolean(realReceiptId && finalEvent?.payload.automatic_action)
 
   const submit = () => {
     if (!draft.trim()) return
@@ -175,10 +192,12 @@ export default function ConversationPanel({
           {toolEvent && (
             <p data-testid="journey-tool-trace">{String(toolEvent.payload.descriptor_id ?? '')}</p>
           )}
-          {finalEvent && (
-            <p data-testid="journey-audit-trace">
-              {t('agent.app.audit_automatic', 'automatic')} · {String(finalEvent.payload.audit_event_id ?? '')}
-            </p>
+          {realAuditEventId && (
+            // The real, persisted audit event id — never a translated/
+            // hardcoded label (a missing i18n key would otherwise render
+            // its own fallback text regardless of whether real audit
+            // evidence exists at all).
+            <p data-testid="journey-audit-trace">{realAuditEventId}</p>
           )}
           {initialCall && (
             <div data-testid="journey-model-probe" data-status="passed" data-model-id={initialCall.preflightModelId}>
@@ -210,8 +229,14 @@ export default function ConversationPanel({
           )}
           {hasAutomaticReceipt && (
             <>
+              {/* The turn's final response carries a receipt only for its
+                 one no-approval-gate low-risk execution — there is no
+                 other execution class this element could represent, so
+                 "AUTOMATIC" is accurate for exactly the real condition
+                 `hasAutomaticReceipt` (receipt_id + automatic_action both
+                 persisted) checks, not a label shown regardless of it. */}
               <p data-testid="journey-sandbox-status">AUTOMATIC</p>
-              <p data-testid="journey-automatic-receipt">{String(finalEvent!.payload.receipt_id ?? '')}</p>
+              <p data-testid="journey-automatic-receipt">{realReceiptId}</p>
             </>
           )}
         </div>

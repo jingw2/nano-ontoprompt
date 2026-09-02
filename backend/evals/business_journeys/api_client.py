@@ -335,7 +335,21 @@ class JourneyApiClient:
         The provider key is transmitted to the application exactly once, in
         this request body; it is never returned, stored on this object, or
         written to any artifact.
+
+        The created VERSION's ``options`` (an arbitrary, already-persisted
+        JSON column — `model_config_versions.options`, round-tripped
+        verbatim by `POST /models/{id}/versions`) carries a
+        ``business_journey: {run_id, journey_id}`` tag. This is the ONLY
+        association between an immutable model configuration and the
+        journey/run that created it; `app.tasks.agent_turn.
+        _resolve_business_journey` reads it straight back to decide
+        whether a real browser turn on the bound Agent should route
+        through the business-journey two-completion protocol — no separate
+        request field, header, or browser-visible signal exists or is
+        needed, since a turn's Agent is permanently pinned to this exact
+        immutable config.
         """
+        business_journey_tag = {"run_id": self._run_id, "journey_id": journey_id}
         config = self._post(
             "/api/v1/models", reason_code="MODEL_CONFIG_MISSING",
             json={
@@ -345,7 +359,7 @@ class JourneyApiClient:
                 "api_base": OFFICIAL_ORIGIN,
                 "api_key": deepseek_api_key,
                 "models": [MODEL_ID],
-                "options": {"temperature": 0, "seed": 0},
+                "options": {"temperature": 0, "seed": 0, "business_journey": business_journey_tag},
             },
         )
         config_id = _dig(config, "data", "id") or _dig(config, "id")
@@ -356,7 +370,7 @@ class JourneyApiClient:
             f"/api/v1/models/{config_id}/versions", reason_code="MODEL_CONFIG_VERSION_MISSING",
             json={
                 "api_base": OFFICIAL_ORIGIN,
-                "options": {"temperature": 0, "seed": 0},
+                "options": {"temperature": 0, "seed": 0, "business_journey": business_journey_tag},
                 "model_contract": [{
                     "provider_model_revision": MODEL_ID,
                     "verified_at": None,

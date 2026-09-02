@@ -193,6 +193,31 @@ def get_turn(db: Session, *, turn_id: str, actor_id: str) -> dict:
     return dict(row) | {"turn_id": row["id"]}
 
 
+def get_tool_evidence(db: Session, *, turn_id: str, actor_id: str) -> dict:
+    """Read-only projection of the turn's own persisted tool execution —
+    `id`/`status`/`result_hash` ONLY, never raw parameters or the result
+    payload. Exists so a browser client can read the exact
+    `agent_tool_executions.result_hash`
+    `app.services.runtime.turn_plans._expected_payload_digest` hashes,
+    instead of reconstructing an approximation of it from the (possibly
+    truncated) bounded event-stream summary. Mirrors `turn_plans.
+    _load_tool_evidence`'s own selection (oldest-first, one row) exactly,
+    so this always reads the SAME row that governed-plan creation would."""
+    turn = db.execute(text(
+        "SELECT s.owner_user_id FROM agent_turns t JOIN agent_sessions s ON s.id = t.session_id "
+        "WHERE t.id = :id"
+    ), {"id": turn_id}).mappings().one_or_none()
+    if turn is None or turn["owner_user_id"] != actor_id:
+        raise TurnApiError("TURN_NOT_FOUND")
+    row = db.execute(text(
+        "SELECT id, status, result_hash FROM agent_tool_executions "
+        "WHERE turn_id = :turn ORDER BY created_at ASC LIMIT 1"
+    ), {"turn": turn_id}).mappings().one_or_none()
+    if row is None:
+        raise TurnApiError("TOOL_EVIDENCE_NOT_FOUND")
+    return {"tool_execution_id": row["id"], "status": row["status"], "result_hash": row["result_hash"]}
+
+
 def cancel_turn_api(db: Session, *, turn_id: str, actor_id: str) -> dict:
     """Pre-claim cancel -> terminal cancelled; claimed -> cancelling signal.
     Delegates to the dispatch service (Section 6 semantics)."""

@@ -6,7 +6,7 @@ import {
   type ApprovalRecord,
   type ApprovalResolutionResult,
 } from '@/api/agentApprovals'
-import { apiClientV2 } from '@/api/client'
+import { apiClient, apiClientV2 } from '@/api/client'
 import { ontologyApi } from '@/api/ontologies'
 import type { RuntimeEventRecord } from './ExecutionTracePanel'
 
@@ -177,27 +177,24 @@ interface DecidedPlanResponse {
 
 /** Python `json.dumps(value, ensure_ascii=False, sort_keys=True, ...)`
  * equivalent, in the two exact separator styles this backend uses for its
- * two different SHA-256 digests (`app.services.runtime.turn_plans` uses
- * compact `(",", ":")`; `app.runtime.langgraph_runtime`'s tool-result hash
- * uses the DEFAULT `(", ", ": ")`). Object keys are sorted recursively,
- * matching `sort_keys=True`; strings are never ASCII-escaped, matching
- * `ensure_ascii=False`. Numeric formatting can diverge from Python's float
- * repr at the margins — this codebase's digest inputs here are ids/hashes/
- * branch names (always strings) plus whatever `row_data` a tool result
- * echoed back, so this is a best-effort, not a byte-for-byte guarantee for
- * arbitrary numeric fixture data. */
-function pythonJsonDumps(value: unknown, opts: { compact: boolean }): string {
-  const itemSep = opts.compact ? ',' : ', '
-  const kvSep = opts.compact ? ':' : ': '
+ * one SHA-256 digest: `app.services.runtime.turn_plans._compute_plan_hash`'s
+ * `payload_digest` input, hashed with Python's COMPACT `(",", ":")`
+ * separators and `sort_keys=True`/`ensure_ascii=False`. The digest's own
+ * `tool_result_hash` component is no longer reconstructed client-side — it
+ * is read verbatim from `GET /agent-turns/{turnId}/tool-evidence`, the
+ * turn's own persisted `agent_tool_executions.result_hash` — so this
+ * serializer only ever needs to match the compact form, and only ever over
+ * plain ids/hashes/branch names (never arbitrary row data). */
+function pythonJsonDumpsCompact(value: unknown): string {
   const ser = (v: unknown): string => {
     if (v === null || v === undefined) return 'null'
     if (typeof v === 'boolean' || typeof v === 'number') return JSON.stringify(v)
     if (typeof v === 'string') return JSON.stringify(v)
-    if (Array.isArray(v)) return `[${v.map(ser).join(itemSep)}]`
+    if (Array.isArray(v)) return `[${v.map(ser).join(',')}]`
     if (typeof v === 'object') {
       const obj = v as Record<string, unknown>
       const keys = Object.keys(obj).sort()
-      return `{${keys.map(k => `${JSON.stringify(k)}${kvSep}${ser(obj[k])}`).join(itemSep)}}`
+      return `{${keys.map(k => `${JSON.stringify(k)}:${ser(obj[k])}`).join(',')}}`
     }
     throw new Error(`UNSERIALIZABLE_VALUE_${typeof v}`)
   }
@@ -264,30 +261,25 @@ export function GovernedPlanPanel(
     const targetId = selectedTarget[branch]
     if (!targetId) { setError('SELECT_TARGET_FIRST'); return }
     const finalEvent = events.find(e => e.event_type === 'final_response')
-    const toolEvent = events.find(e => e.event_type === 'tool_executed')
-    if (!finalEvent || !toolEvent) { setError('TURN_EVIDENCE_NOT_READY'); return }
-    const toolExecutionId = String(toolEvent.payload.tool_execution_id ?? '')
-    if (!toolExecutionId) { setError('TOOL_EVIDENCE_MISSING'); return }
-    const items = Array.isArray(toolEvent.payload.items) ? toolEvent.payload.items : []
-    const itemCount = typeof toolEvent.payload.item_count === 'number' ? toolEvent.payload.item_count : items.length
-    if (itemCount > items.length) {
-      // The persisted trace event bounds `items` to 5 (`_bound_summary`) —
-      // beyond that this panel cannot reconstruct the exact bytes the
-      // server hashed, so it fails closed rather than guessing.
-      setError('TOOL_RESULT_TRUNCATED_CANNOT_RECONSTRUCT_DIGEST')
-      return
-    }
+    if (!finalEvent) { setError('TURN_EVIDENCE_NOT_READY'); return }
     setBusy(true)
     setError('')
     try {
-      const resultPayload = { items, correlation_id: toolEvent.payload.correlation_id ?? null }
-      const toolResultHash = await sha256Hex(pythonJsonDumps(resultPayload, { compact: false }))
+      // The real, persisted `agent_tool_executions.result_hash` — never a
+      // client-side reconstruction of the tool-result hash (that approach
+      // was fragile: it required the bounded trace-event summary to be
+      // byte-identical to what the server hashed, which only held when the
+      // tool result was small enough not to be truncated).
+      const evidence = await apiClient.get<{ tool_execution_id: string; status: string; result_hash: string | null }>(
+        `/agent-turns/${turnId}/tool-evidence`,
+      )
+      if (!evidence.result_hash) { setError('TOOL_RESULT_HASH_NOT_READY'); return }
       const responseContent = String(finalEvent.payload.message ?? '')
       const finalResponseHash = await sha256Hex(responseContent)
-      const payloadDigest = await sha256Hex(pythonJsonDumps({
-        turn_id: turnId, tool_execution_id: toolExecutionId, tool_result_hash: toolResultHash,
+      const payloadDigest = await sha256Hex(pythonJsonDumpsCompact({
+        turn_id: turnId, tool_execution_id: evidence.tool_execution_id, tool_result_hash: evidence.result_hash,
         final_response_hash: finalResponseHash, branch, target_fixture_id: targetId,
-      }, { compact: true }))
+      }))
       const idempotencyKey = `${turnId}:${branch}:${crypto.randomUUID()}`
       const created = await apiClientV2.post<CreatedPlanResponse>('/runtime/action-plans/from-turn', {
         turn_id: turnId, branch, target_fixture_id: targetId,

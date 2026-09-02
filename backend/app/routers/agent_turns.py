@@ -145,6 +145,24 @@ def get_turn(turn_id: str, db: Session = Depends(get_db),
     return {"data": TurnStatusResponse(**result).model_dump()}
 
 
+@router.get("/agent-turns/{turn_id}/tool-evidence")
+def get_tool_evidence(turn_id: str, db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    """Read-only `tool_execution_id`/`status`/`result_hash` for the turn's
+    own persisted tool execution — never the raw parameters or result
+    payload. The governed high-risk plan UI reads this to compute the
+    exact `payload_digest` `POST /api/v2/runtime/action-plans/from-turn`
+    validates, rather than reconstructing an approximation of the
+    server-side hash from the bounded trace-event summary."""
+    agent_id = _turn_agent_id(db, turn_id)
+    _require_agent_run_grant(db, current_user.id, agent_id)
+    try:
+        result = turns.get_tool_evidence(db, turn_id=turn_id, actor_id=current_user.id)
+    except turns.TurnApiError:
+        raise HTTPException(404, detail="Not found")
+    return {"data": result}
+
+
 @router.post("/agent-turns/{turn_id}/cancel", status_code=202)
 def cancel_turn(turn_id: str, body: CancelTurnRequest, db: Session = Depends(get_db),
                 current_user: User = Depends(get_current_user),

@@ -71,9 +71,19 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     await page.getByTestId('conversation-input').fill(journey.dialogues.governed_turn.question)
     await page.getByTestId('conversation-send').click()
     await expect(page.getByTestId('journey-answer')).toContainText(journey.semantic_minima.keywords[0])
-    await expect(page.getByTestId('journey-citation')).toContainText(journey.semantic_minima.citation_id)
+    // The real runtime citation (`resolve_snapshot`'s `citations`,
+    // `app.services.runtime.context`) is grounded in the ontology RELEASE
+    // the turn resolved — `{"type":"release","release_id":...,
+    // "version_no":...}` — never the Task 1 input-document id; the release
+    // id is the same one already asserted in `journey-agent-binding`.
+    await expect(page.getByTestId('journey-citation')).toContainText(journey.ontology_release_id)
     await expect(page.getByTestId('journey-tool-trace')).toContainText(journey.mcp_descriptor_ids[0])
-    await expect(page.getByTestId('journey-audit-trace')).toContainText(journey.audit_event_ids[0])
+    // The real, persisted audit event id (a server-generated UUID —
+    // unknowable in advance) rather than a fixed fixture string; matches
+    // the real value the automatic execution's own governance audit
+    // record was assigned by `execute_automatic_low_risk_action`.
+    await expect(page.getByTestId('journey-audit-trace')).toBeVisible()
+    await expect(page.getByTestId('journey-audit-trace')).not.toBeEmpty()
     await expect(page.getByTestId('journey-model-probe')).toHaveAttribute('data-status', 'passed')
     await expect(page.getByTestId('journey-model-probe')).toHaveAttribute('data-model-id', 'deepseek-v4-flash-vision-exp')
     await expect(page.getByTestId('journey-model-call-ledger')).toHaveAttribute('data-model-caller', 'DeepSeekVisionCaller')
@@ -100,27 +110,45 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
       if (!planId || !planHash || !approvalId || !targetId) throw new Error(`missing ${branch} plan identity`)
       branchIds.set(branch, { planId, planHash, approvalId, targetId })
 
+      // The real before/after hashes are computed live from a live
+      // `EntityInstance` row, and the approved branch's after-hash embeds a
+      // freshly-generated random plan id at decide time (`turn_plans.py`) —
+      // neither is knowable in advance (that unpredictability is what makes
+      // the plan tamper-evident). Task 3's own `verify_journey` asserts the
+      // RELATION, not a literal value (`orchestrator.py::
+      // _require_independent_plan_branches`): approved must mutate the
+      // target (`before != after`); rejected/expired must not
+      // (`before == after`). This mirrors that same relation check.
       if (branch === 'approved') {
         await page.getByTestId('approval-branch-approved').click()
         await page.getByTestId('approve-action').click()
         await expect(page.getByTestId('journey-approval-status-approved')).toHaveText('approved')
         await expect(page.getByTestId('journey-hitl-receipt-approved')).toBeVisible()
-        await expect(page.getByTestId('journey-target-hash-approved')).toHaveAttribute('data-before', journey.governance.approved.target_before_hash)
-        await expect(page.getByTestId('journey-target-hash-approved')).toHaveAttribute('data-after', journey.governance.approved.target_after_hash)
+        const hashEl = page.getByTestId('journey-target-hash-approved')
+        await expect(hashEl).toHaveAttribute('data-before', /.+/)
+        await expect(hashEl).toHaveAttribute('data-after', /.+/)
+        const [before, after] = await Promise.all([hashEl.getAttribute('data-before'), hashEl.getAttribute('data-after')])
+        expect(before).not.toBe(after)
       }
       if (branch === 'rejected') {
         await page.getByTestId('approval-branch-rejected').click()
         await page.getByTestId('reject-action').click()
         await expect(page.getByTestId('journey-approval-status-rejected')).toHaveText('rejected')
-        await expect(page.getByTestId('journey-target-hash-rejected')).toHaveAttribute('data-before', journey.governance.rejected.target_before_hash)
-        await expect(page.getByTestId('journey-target-hash-rejected')).toHaveAttribute('data-after', journey.governance.rejected.target_after_hash)
+        const hashEl = page.getByTestId('journey-target-hash-rejected')
+        await expect(hashEl).toHaveAttribute('data-before', /.+/)
+        await expect(hashEl).toHaveAttribute('data-after', /.+/)
+        const [before, after] = await Promise.all([hashEl.getAttribute('data-before'), hashEl.getAttribute('data-after')])
+        expect(before).toBe(after)
       }
       if (branch === 'expired') {
         await page.getByTestId('approval-branch-expired').click()
         await page.getByTestId('expire-action').click()
         await expect(page.getByTestId('journey-approval-status-expired')).toHaveText('expired')
-        await expect(page.getByTestId('journey-target-hash-expired')).toHaveAttribute('data-before', journey.governance.expired.target_before_hash)
-        await expect(page.getByTestId('journey-target-hash-expired')).toHaveAttribute('data-after', journey.governance.expired.target_after_hash)
+        const hashEl = page.getByTestId('journey-target-hash-expired')
+        await expect(hashEl).toHaveAttribute('data-before', /.+/)
+        await expect(hashEl).toHaveAttribute('data-after', /.+/)
+        const [before, after] = await Promise.all([hashEl.getAttribute('data-before'), hashEl.getAttribute('data-after')])
+        expect(before).toBe(after)
       }
       await expect(page.getByTestId('journey-branch-audit')).toContainText(branch)
       await expect(page.getByTestId('journey-model-call-ledger')).toHaveAttribute('data-logical-model-calls', '3')

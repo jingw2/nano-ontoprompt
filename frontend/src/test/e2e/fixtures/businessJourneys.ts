@@ -105,13 +105,7 @@ export interface JourneyData {
   ontology_release_id: string
   mcp_descriptor_ids: string[]
   dialogues: { governed_turn: { question: string } }
-  semantic_minima: { keywords: string[]; citation_id: string }
-  audit_event_ids: string[]
-  governance: {
-    approved: { target_before_hash: string; target_after_hash: string }
-    rejected: { target_before_hash: string; target_after_hash: string }
-    expired: { target_before_hash: string; target_after_hash: string }
-  }
+  semantic_minima: { keywords: string[] }
 }
 
 function fail(reason: string): never {
@@ -238,26 +232,30 @@ function readFixtureJson<T>(journeyId: JourneyId, fileName: string): T {
 
 interface SemanticMinimaFixture {
   keywords: string[]
-  source_citation_ids: string[]
 }
 
 interface DialoguesFixture {
   dialogue_scenarios: { question: string }[]
 }
 
-interface GovernanceOutcomeFixture {
-  id: string
-  target_before_hash: string
-  target_after_hash: string
-}
-
 interface GovernanceFixture {
-  governance_outcomes: GovernanceOutcomeFixture[]
+  governance_outcomes: { id: string }[]
 }
 
 /** Returns one typed, fully-validated journey manifest entry, merging Task
  * 3's live preparation evidence with Task 1's checked-in dialogue/semantic/
- * governance fixtures. Throws — never returns a partial/undefined value. */
+ * governance fixtures. Throws — never returns a partial/undefined value.
+ *
+ * `governance.json`'s before/after target hashes are intentionally NOT
+ * exposed here: they are computed live from a live `EntityInstance` row at
+ * plan-create/decide time, and the approved branch's after-hash embeds a
+ * freshly-generated random plan id — neither is knowable in advance from a
+ * static fixture. The spec asserts the RELATION instead (approved mutates
+ * the target, rejected/expired don't), the same thing Task 3's own
+ * `verify_journey` asserts (`orchestrator.py::
+ * _require_independent_plan_branches`) — only the outcome IDS below are
+ * validated here, as part of this fixture's "throws on missing/invalid
+ * data" contract. */
 export function journeyData(journeyId: JourneyId): JourneyData {
   if (!JOURNEY_IDS.includes(journeyId)) fail(`unknown journey id: ${String(journeyId)}`)
   const run = currentRun()
@@ -268,9 +266,6 @@ export function journeyData(journeyId: JourneyId): JourneyData {
   if (!Array.isArray(semanticMinima.keywords) || semanticMinima.keywords.length === 0) {
     fail(`${journeyId} semantic_minima.json has no keywords`)
   }
-  if (!Array.isArray(semanticMinima.source_citation_ids) || semanticMinima.source_citation_ids.length === 0) {
-    fail(`${journeyId} semantic_minima.json has no source_citation_ids`)
-  }
 
   const dialogues = readFixtureJson<DialoguesFixture>(journeyId, 'dialogues.json')
   const governedTurn = dialogues.dialogue_scenarios?.[0]
@@ -279,16 +274,9 @@ export function journeyData(journeyId: JourneyId): JourneyData {
   }
 
   const governance = readFixtureJson<GovernanceFixture>(journeyId, 'governance.json')
-  const outcomesById = new Map(governance.governance_outcomes.map(o => [o.id, o]))
+  const outcomeIds = new Set(governance.governance_outcomes.map(o => o.id))
   for (const id of ['automatic', 'approved', 'rejected', 'expired']) {
-    if (!outcomesById.has(id)) fail(`${journeyId} governance.json is missing outcome "${id}"`)
-  }
-  const branchHashes = (id: 'approved' | 'rejected' | 'expired') => {
-    const outcome = outcomesById.get(id)!
-    if (!outcome.target_before_hash || !outcome.target_after_hash) {
-      fail(`${journeyId} governance.json outcome "${id}" is missing a before/after hash`)
-    }
-    return { target_before_hash: outcome.target_before_hash, target_after_hash: outcome.target_after_hash }
+    if (!outcomeIds.has(id)) fail(`${journeyId} governance.json is missing outcome "${id}"`)
   }
 
   return {
@@ -297,17 +285,7 @@ export function journeyData(journeyId: JourneyId): JourneyData {
     ontology_release_id: preparation.ontology_release_id,
     mcp_descriptor_ids: preparation.mcp_descriptor_ids,
     dialogues: { governed_turn: { question: governedTurn.question } },
-    semantic_minima: { keywords: semanticMinima.keywords, citation_id: semanticMinima.source_citation_ids[0] },
-    // Stable, fixture-known governance outcome identifiers (never a live,
-    // randomly-generated audit-log UUID, which cannot be known before the
-    // browser's own turn runs) — the UI labels the automatic/branch audit
-    // evidence it renders with these same literal outcome names.
-    audit_event_ids: ['automatic', 'approved', 'rejected', 'expired'],
-    governance: {
-      approved: branchHashes('approved'),
-      rejected: branchHashes('rejected'),
-      expired: branchHashes('expired'),
-    },
+    semantic_minima: { keywords: semanticMinima.keywords },
   }
 }
 
