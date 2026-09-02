@@ -108,7 +108,10 @@ def test_supply_chain_mapping_golden_prd_242_semantics(db, admin_user):
          patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
         result = service.build_all(ontology.id)
 
-    assert result["total_entities"] == sum(len(rows) for rows in rows_by_dataset.values())
+    # EntityInstance 重构后 Entity 表只存概念实体（每类一个），
+    # total_entities 返回概念数，实例数另由 total_instances 报告。
+    assert result["total_entities"] == len(pk_by_entity)
+    assert result["total_instances"] == sum(len(rows) for rows in rows_by_dataset.values())
     assert result["total_relations"] >= 5
     assert result["total_logic"] >= 1
     assert result["total_actions"] >= 1
