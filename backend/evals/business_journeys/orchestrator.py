@@ -7,8 +7,11 @@ Two strictly separated phases:
   creates an Agent, Agent version/binding, session, turn, tool call, Sandbox
   result, approval, or plan.
 * ``verify_journey`` reads ONLY persisted post-browser evidence. It consumes
-  zero model calls and makes zero mutations: it holds no ``DeepSeekVisionCaller``
-  at all, and its client only ever issues GETs.
+  zero model calls and makes zero *governed* mutations: it holds no
+  ``DeepSeekVisionCaller`` at all, and its client only ever issues GETs
+  against governed application state — the one exception is the login call
+  every real endpoint's authentication requires, never a plan/approval/
+  grant/ontology write.
 
 The staging run manifest written between the two phases is allowlisted: it
 carries baseline identifiers, hashes, and counters, and is rejected outright
@@ -58,6 +61,17 @@ from journey_registry import JOURNEY_IDS, load_journey_manifest  # noqa: E402
 STAGING_RELATIVE_PATH = Path("business_journeys") / "staging" / "run.json"
 BROWSER_EVIDENCE_DIR = Path("business_journeys") / "browser"
 RUN_MANIFEST_ENV_VAR = "BUSINESS_JOURNEY_RUN_MANIFEST"
+# The application credential BOTH phases authenticate with — prepare_journey
+# takes it as an explicit `api_key` parameter (its own interface requires
+# one, since it writes through authenticated endpoints); verify_journey's
+# interface takes no credential parameter at all, so it reads the SAME
+# environment variable directly (Critical Finding #4 — every endpoint
+# `read_journey_evidence` calls requires `Depends(get_current_user)`; an
+# unauthenticated client gets 401'd on the first request, which the fake
+# HTTP server in `test_orchestrator.py` never modeled). `run.py` never
+# exposes this as a CLI flag either, so the credential is never visible in
+# argv/process listings for either phase.
+APPLICATION_API_KEY_ENV_VAR = "BUSINESS_JOURNEY_API_KEY"
 
 REQUIRED_CALL_KINDS = ("ontology", "agent_initial", "agent_final")
 REQUIRED_BRANCHES = ("approved", "rejected", "expired")
@@ -480,14 +494,31 @@ def verify_journey(
     """Read back one journey's persisted post-browser evidence.
 
     Makes zero model calls (no caller is ever constructed) and zero
-    mutations (`JourneyApiClient.read_journey_evidence` only issues GETs).
+    *governed* mutations — it never calls a plan/approval/grant/ontology
+    write endpoint, matching the brief's own clarification of "zero
+    mutations" ("it does not call approval, plan creation, writeback,
+    model, tool, or Agent creation endpoints"). It DOES authenticate: every
+    endpoint `read_journey_evidence` reads requires `Depends(get_current_
+    user)`, so an unauthenticated client would 401 on its very first
+    request (Critical Finding #4). `verify_journey`'s own interface takes
+    no credential parameter, so the application credential is read from the
+    SAME environment variable `prepare_journey`'s caller supplies explicitly
+    (`APPLICATION_API_KEY_ENV_VAR`) — never a CLI flag, never persisted to
+    any artifact.
     """
     if journey_id not in JOURNEY_IDS:
         raise JourneyAcceptanceError(f"JOURNEY_UNKNOWN: {journey_id!r}")
 
+    api_key = os.environ.get(APPLICATION_API_KEY_ENV_VAR) or ""
+    if not api_key:
+        raise JourneyAcceptanceError(
+            f"APPLICATION_API_KEY_REQUIRED: set {APPLICATION_API_KEY_ENV_VAR}"
+        )
+
     browser_evidence = read_browser_evidence(output_dir, run_id, journey_id)
-    client = JourneyApiClient(api_base, None, run_id=run_id)
+    client = JourneyApiClient(api_base, api_key, run_id=run_id)
     try:
+        client.authenticate()
         evidence = client.read_journey_evidence(run_id, browser_evidence=browser_evidence)
     finally:
         client.close()

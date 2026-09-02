@@ -171,7 +171,14 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
         state = type(self).state
         path = self.path.split("?", 1)[0]
         state.requests.append(f"{method} {path}")
-        if method != "GET":
+        # Login is not a governed-state mutation (no plan/approval/grant/
+        # ontology write) — the brief's own "zero mutations" clarification
+        # for verify_journey is "it does not call approval, plan creation,
+        # writeback, model, tool, or Agent creation endpoints," which login
+        # is not one of. Excluded here so `fake_api.mutations` tracks the
+        # thing the brief actually means (Critical Finding #4: verify_
+        # journey must authenticate to read anything at all).
+        if method != "GET" and path != "/api/v1/auth/login":
             state.mutations.append(f"{method} {path}")
         if re.fullmatch(r"/api/v1/agents", path) and method == "POST":
             state.agent_create_calls += 1
@@ -362,14 +369,21 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
     minima = manifest.semantic_minima
     citations = list(minima.get("source_citation_ids") or [])
     items = [
-        {"sequence": 1, "event_type": "turn_started", "payload": {}},
-        {"sequence": 2, "event_type": "resolve_snapshot", "payload": {"citations": citations}},
+        {"sequence": 1, "event_type": "turn_started", "payload": {
+            "agent_id": _uuid_for(f"{run_id}:{journey_id}:agent"),
+            "agent_version_id": _uuid_for(f"{run_id}:{journey_id}:agent-version"),
+        }},
+        {"sequence": 2, "event_type": "resolve_snapshot", "payload": {
+            "release_id": _uuid_for(f"{run_id}:{journey_id}:release"), "citations": citations,
+        }},
         {"sequence": 3, "event_type": "model_call", "payload": {
             "call_kind": "agent_initial", "logical_call_index": 2,
             "correlation_id": f"{run_id}:{journey_id}:agent_initial:2",
             "model_caller": "DeepSeekVisionCaller", "model_origin": OFFICIAL_ORIGIN,
             "requested_model": MODEL_ID, "observed_model": MODEL_ID,
-            "preflight_model_id": MODEL_ID, "http_attempts": 1, "retry_count": 0,
+            "preflight_model_id": MODEL_ID,
+            "model_config_version_id": _uuid_for(f"{run_id}:{journey_id}:model-version"),
+            "http_attempts": 1, "retry_count": 0,
         }},
         {"sequence": 4, "event_type": "tool_executed", "payload": {
             "descriptor_id": f"query:{_uuid_for(f'{run_id}:{journey_id}:ontology')}",
@@ -380,7 +394,9 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
             "correlation_id": f"{run_id}:{journey_id}:agent_final:3",
             "model_caller": "DeepSeekVisionCaller", "model_origin": OFFICIAL_ORIGIN,
             "requested_model": MODEL_ID, "observed_model": MODEL_ID,
-            "preflight_model_id": MODEL_ID, "http_attempts": 1, "retry_count": 0,
+            "preflight_model_id": MODEL_ID,
+            "model_config_version_id": _uuid_for(f"{run_id}:{journey_id}:model-version"),
+            "http_attempts": 1, "retry_count": 0,
         }},
         {"sequence": 6, "event_type": "final_response", "payload": {
             "audit_event_id": _uuid_for(f"{turn_id}:audit"),
@@ -521,6 +537,10 @@ def fake_api(monkeypatch, tmp_path):
     """A real local HTTP application plus a real DeepSeek mock transport."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    # `verify_journey` (Critical Finding #4) authenticates by reading this
+    # SAME env var `prepare_journey`'s own `api_key="runtime/runtime"` calls
+    # already use throughout this file's given test code.
+    monkeypatch.setenv("BUSINESS_JOURNEY_API_KEY", "runtime/runtime")
 
     state = _FakeState()
     _PLAN_BY_ID.clear()
@@ -833,7 +853,11 @@ def test_verify_all_journeys_reads_the_fixed_order_and_makes_no_mutation(fake_ap
     assert all(v.status == "passed" for v in verifications)
     assert fake_api.mutations == []
     assert fake_api.model_calls == 0
-    assert all(request.startswith("GET ") for request in fake_api.requests)
+    # Every request is a GET except the one login call each of the three
+    # `verify_journey` calls makes to authenticate (Critical Finding #4) —
+    # never a governed-state write.
+    non_get_requests = [r for r in fake_api.requests if not r.startswith("GET ")]
+    assert non_get_requests == ["POST /api/v1/auth/login"] * 3
 
 
 def test_verification_record_never_carries_raw_inputs_or_credentials(fake_api):

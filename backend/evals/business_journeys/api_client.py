@@ -656,9 +656,19 @@ class JourneyApiClient:
         """Read back everything the browser claims to have persisted.
 
         Every request below is a GET. `browser_evidence` supplies only the
-        identifiers to look up; every fact this returns is read from the
-        application's own persisted state.
-        """
+        `turn_id` to look up; every OTHER fact this returns — `agent_id`/
+        `agent_version_id` (the `turn_started` event's own payload, emitted
+        by the real runtime), `ontology_release_id` (the `resolve_snapshot`
+        event), `model_config_version_id` (each `model_call` event) and
+        `mcp_descriptor_ids` (the `tool_executed` events' own
+        `descriptor_id`s) — is read from the turn's own persisted event
+        trace, never trusted from the local browser-evidence file. Whatever
+        the browser file ALSO claims for these fields is cross-checked
+        against the real trace and rejected on any mismatch, rather than
+        silently read from the file (previously: `agent_id`/
+        `agent_version_id`/`ontology_release_id`/`mcp_descriptor_ids`/
+        `model_config_version_id` were read straight from the file, which
+        this method's own docstring already claimed not to do)."""
         journey_id = str(browser_evidence["journey_id"])
         turn_id = str(browser_evidence["turn_id"])
 
@@ -674,20 +684,34 @@ class JourneyApiClient:
         )
         events = (_dig(events_body, "data", "items") or _dig(events_body, "items") or [])
 
+        agent_id = ""
+        agent_version_id = ""
+        ontology_release_id = ""
+        mcp_descriptor_ids: list[str] = []
         citation_ids: list[str] = []
         tool_trace_ids: list[str] = []
         audit_event_ids: list[str] = []
         sandbox_receipt_id = ""
         automatic_receipt_id = ""
+        model_config_version_id = ""
         model_calls: list[ModelCallRecord] = []
         for event in events:
             payload = event.get("payload") or {}
             kind = event.get("event_type")
-            if kind == "resolve_snapshot":
+            if kind == "turn_started":
+                agent_id = str(payload.get("agent_id") or "")
+                agent_version_id = str(payload.get("agent_version_id") or "")
+            elif kind == "resolve_snapshot":
+                ontology_release_id = str(payload.get("release_id") or "")
                 citation_ids.extend(str(c) for c in (payload.get("citations") or []))
             elif kind == "tool_executed":
                 tool_trace_ids.append(str(payload.get("correlation_id") or ""))
+                descriptor_id = str(payload.get("descriptor_id") or "")
+                if descriptor_id and descriptor_id not in mcp_descriptor_ids:
+                    mcp_descriptor_ids.append(descriptor_id)
             elif kind == "model_call" and payload.get("call_kind"):
+                if payload.get("model_config_version_id"):
+                    model_config_version_id = str(payload["model_config_version_id"])
                 model_calls.append(ModelCallRecord(
                     call_kind=str(payload["call_kind"]),
                     logical_call_index=int(payload.get("logical_call_index") or 0),
@@ -705,6 +729,17 @@ class JourneyApiClient:
                 sandbox_receipt_id = str(payload.get("sandbox_receipt_id") or "")
                 automatic_receipt_id = str(payload.get("receipt_id") or "")
 
+        if not agent_id or not agent_version_id:
+            raise JourneyAcceptanceError("TURN_STARTED_EVENT_MISSING: no persisted agent_id/agent_version_id")
+        if not ontology_release_id:
+            raise JourneyAcceptanceError("RESOLVE_SNAPSHOT_EVENT_MISSING: no persisted ontology_release_id")
+        if not model_config_version_id:
+            raise JourneyAcceptanceError("MODEL_CALL_EVENT_MISSING: no persisted model_config_version_id")
+        _require_matches_persisted(browser_evidence, "agent_id", agent_id)
+        _require_matches_persisted(browser_evidence, "agent_version_id", agent_version_id)
+        _require_matches_persisted(browser_evidence, "ontology_release_id", ontology_release_id)
+        _require_matches_persisted(browser_evidence, "model_config_version_id", model_config_version_id)
+
         branches: list[PlanBranchEvidence] = []
         for declared in browser_evidence.get("plan_branches") or []:
             branches.append(self._read_plan_branch(declared))
@@ -712,14 +747,14 @@ class JourneyApiClient:
         return PersistedJourneyEvidence(
             run_id=run_id,
             journey_id=journey_id,
-            agent_id=str(browser_evidence.get("agent_id") or ""),
-            agent_version_id=str(browser_evidence.get("agent_version_id") or ""),
+            agent_id=agent_id,
+            agent_version_id=agent_version_id,
             session_id=str(turn.get("session_id") or ""),
             turn_id=turn_id,
             turn_status=turn_status,
-            ontology_release_id=str(browser_evidence.get("ontology_release_id") or ""),
-            mcp_descriptor_ids=tuple(str(d) for d in (browser_evidence.get("mcp_descriptor_ids") or ())),
-            model_config_version_id=str(browser_evidence.get("model_config_version_id") or ""),
+            ontology_release_id=ontology_release_id,
+            mcp_descriptor_ids=tuple(mcp_descriptor_ids),
+            model_config_version_id=model_config_version_id,
             citation_ids=tuple(citation_ids),
             tool_trace_ids=tuple(t for t in tool_trace_ids if t),
             audit_event_ids=tuple(a for a in audit_event_ids if a),
@@ -830,6 +865,19 @@ def _dig(payload: Any, *keys: str) -> Any:
             return None
         node = node[key]
     return node
+
+
+def _require_matches_persisted(browser_evidence: Mapping[str, Any], field: str, persisted_value: str) -> None:
+    """Cross-check what the browser evidence file CLAIMS for `field` against
+    the value just read from the application's own persisted event trace —
+    the browser's claim is only ever a lookup hint, never trusted on its own
+    (Important Finding #10). A field the browser evidence document doesn't
+    carry at all is not itself an error; only a genuine mismatch is."""
+    claimed = browser_evidence.get(field)
+    if claimed is not None and str(claimed) != persisted_value:
+        raise JourneyAcceptanceError(
+            f"{field.upper()}_MISMATCH: browser claimed {claimed!r}, application persisted {persisted_value!r}"
+        )
 
 
 def new_idempotency_key(run_id: str, journey_id: str, branch: str) -> str:

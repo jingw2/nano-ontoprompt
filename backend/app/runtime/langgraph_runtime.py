@@ -449,6 +449,7 @@ class LangGraphRuntime:
             "requested_model": MODEL_ID,
             "observed_model": response.model,
             "preflight_model_id": MODEL_ID,
+            "model_config_version_id": context.model_config_version_id,
             "http_attempts": response.http_attempts,
             "retry_count": response.retry_count,
         })

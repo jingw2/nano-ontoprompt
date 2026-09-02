@@ -13,15 +13,17 @@ combine them:
 
 Supports exactly ``--phase``, ``--journey``, ``--model-id`` (prepare only),
 ``--api-base``, ``--output``, and ``--run-id`` — no ``--api-key``/model
-endpoint flag exists on this CLI at all. Both `DEEPSEEK_API_KEY` (the
-provider key `prepare_journey` reads directly, per its own contract) and the
-application credential `prepare_journey`'s `api_key` parameter needs are read
-from the environment (`DEEPSEEK_API_KEY`, `BUSINESS_JOURNEY_API_KEY`) rather
-than a command-line flag, so neither secret is ever visible in argv/process
-listings/shell history — the same discipline `DeepSeekVisionClient` already
-applies to the provider key. `verify_journey` takes no credential at all
-(its own signature has no `api_key` parameter), consistent with it never
-calling anything but read-only GETs.
+endpoint flag exists on this CLI at all. `DEEPSEEK_API_KEY` (the provider
+key `prepare_journey` reads directly, per its own contract) and the
+application credential (`orchestrator.APPLICATION_API_KEY_ENV_VAR`) are both
+read from the environment rather than a command-line flag, so neither secret
+is ever visible in argv/process listings/shell history — the same
+discipline `DeepSeekVisionClient` already applies to the provider key.
+`verify_journey`'s own function signature has no `api_key` parameter either
+(consistent with the brief's exact interface), but it internally
+authenticates by reading the SAME `APPLICATION_API_KEY_ENV_VAR` this module
+also reads for `prepare_journey` — every endpoint it reads requires a
+signed-in caller.
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ from pathlib import Path
 
 from .contracts import MODEL_ID
 from .orchestrator import (
+    APPLICATION_API_KEY_ENV_VAR,
     JourneyAcceptanceError,
     prepare_all_journeys,
     prepare_journey,
@@ -41,7 +44,6 @@ from .orchestrator import (
 )
 
 JOURNEY_CHOICES = ("supply_chain", "finance", "credit", "all")
-APPLICATION_API_KEY_ENV_VAR = "BUSINESS_JOURNEY_API_KEY"
 
 
 def _build_parser() -> argparse.ArgumentParser:
