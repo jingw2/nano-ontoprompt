@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { agentSessionsApi, type AgentMessage, type AgentSession } from '@/api/agentSessions'
 import { agentClarificationsApi } from '@/api/agentClarifications'
+import { agentDetailApi } from '@/api/agentDetail'
 import type { ApprovalResolutionResult } from '@/api/agentApprovals'
 import {
   agentStreamApi, initialStreamState, parseSseChunk, streamReducer,
@@ -35,6 +36,23 @@ export default function AgentApplicationTab({ agentId }: Props) {
   // persisted events) — the polling fallback takes over from here
   const [sseDone, setSseDone] = useState(false)
   const lastSeqRef = useRef(0)
+  // the Agent's bound ontology (for the governed high-risk plan panel's
+  // disposable-target listing) — not otherwise loaded by this tab.
+  const [boundOntologyId, setBoundOntologyId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(() => { if (!cancelled) setBoundOntologyId(null) })
+    Promise.all([agentDetailApi.get(agentId), agentDetailApi.versions(agentId)])
+      .then(([detail, page]) => {
+        if (cancelled) return
+        const versions = Array.isArray(page.items) ? page.items : []
+        const active = versions.find(v => v.version_no === detail.version_no)
+        setBoundOntologyId(active?.ontology_bindings?.[0]?.ontology_id ?? null)
+      })
+      .catch(() => { if (!cancelled) setBoundOntologyId(null) })
+    return () => { cancelled = true }
+  }, [agentId])
 
   const loadSessions = useCallback(() => {
     agentSessionsApi.list(agentId).then(res => {
@@ -261,7 +279,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
           <ConversationPanel messages={messages} stream={stream} clarification={clarification}
             pendingApprovalId={pendingApprovalId} onSend={sendMessage}
             onAnswerClarification={answerClarification} onApprovalResolved={onApprovalResolved}
-            onRetry={retry} />
+            onRetry={retry} turnId={lastTurnId} ontologyId={boundOntologyId} />
         </div>
       </div>
       {traceOpen && lastTurnId && (

@@ -9,7 +9,25 @@ import { resolve } from 'node:path'
 import { useAuthStore } from '@/stores/authStore'
 import AgentApplicationTab from './AgentApplicationTab'
 
-const server = setupServer()
+// Baseline handlers (persist across `server.resetHandlers()`, unlike
+// per-test `server.use()` overrides): `AgentApplicationTab` now also loads
+// the Agent's bound ontology (for the governed high-risk plan panel's
+// target picker) on every render, regardless of which test is running.
+const server = setupServer(
+  http.get('*/api/v1/agents/a-1', () =>
+    HttpResponse.json({
+      data: { agent_id: 'a-1', status: 'active', visibility: 'private', versions_count: 0 },
+      message: 'ok',
+    })),
+  http.get('*/api/v1/agents/a-1/versions', () =>
+    HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+  // ConversationPanel now polls this endpoint directly (always-visible
+  // business-journey evidence, not gated behind the trace toggle) whenever
+  // a turnId is set — an empty baseline for tests that don't care about
+  // trace content; tests that do can still `server.use()` an override.
+  http.get('*/api/v1/agent-turns/:turnId/events', () =>
+    HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false, terminal: false }, message: 'ok' })),
+)
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
