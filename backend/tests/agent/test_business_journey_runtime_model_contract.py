@@ -51,13 +51,17 @@ def _no_real_sleep(monkeypatch):
 @pytest.fixture
 def deepseek_transport(monkeypatch):
     """Installs a fake DeepSeek transport and returns the mutable queue of
-    structured JSON bodies it will hand back, in call order."""
+    structured JSON bodies it will hand back, in call order. `models_
+    available` (default: the real MODEL_ID) lets a test simulate a failed
+    `/models` preflight probe without touching anything else."""
     queue: list[dict] = []
     calls: list[str] = []
+    state = SimpleNamespace(queue=queue, calls=calls, models_available=[MODEL_ID], preflight_calls=0)
 
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/models":
-            return httpx.Response(200, json={"data": [{"id": MODEL_ID}]})
+            state.preflight_calls += 1
+            return httpx.Response(200, json={"data": [{"id": m} for m in state.models_available]})
         calls.append(request.url.path)
         structured = queue.pop(0)
         return httpx.Response(200, json={
@@ -75,7 +79,7 @@ def deepseek_transport(monkeypatch):
                             headers={"Authorization": f"Bearer {self._api_key}"})
 
     monkeypatch.setattr(DeepSeekVisionClient, "_client", patched_client)
-    return SimpleNamespace(queue=queue, calls=calls)
+    return state
 
 
 @pytest.fixture
@@ -171,6 +175,11 @@ def test_business_journey_turn_uses_deepseek_vision_caller_for_both_completions(
     assert all(e.payload["model_caller"] == "DeepSeekVisionCaller" for e in model_call_events)
     assert all(e.payload["model_origin"] == OFFICIAL_ORIGIN for e in model_call_events)
     assert all(e.payload["observed_model"] == MODEL_ID for e in model_call_events)
+    # The REAL value a live `/models` call observed, not a hardcoded
+    # constant (Important Finding #11) — and exactly one preflight call was
+    # made for the whole turn, before either completion.
+    assert all(e.payload["preflight_model_id"] == MODEL_ID for e in model_call_events)
+    assert deepseek_transport.preflight_calls == 1
     assert model_call_events[0].payload["correlation_id"] == f"{RUN_ID}:{JOURNEY_ID}:agent_initial:2"
     assert model_call_events[1].payload["correlation_id"] == f"{RUN_ID}:{JOURNEY_ID}:agent_final:3"
 
@@ -180,6 +189,33 @@ def test_business_journey_turn_uses_deepseek_vision_caller_for_both_completions(
 
     totals = ledger.totals(RUN_ID, JOURNEY_ID)
     assert totals["logical_model_calls"] == 2
+
+
+def test_business_journey_turn_requires_a_successful_models_preflight_before_either_completion(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Important Finding #11: the `/models` probe must be genuinely
+    enforced, not a hardcoded value that can never fail. Simulating a
+    `/models` response that does not include MODEL_ID must fail the turn
+    before EITHER completion is attempted."""
+    deepseek_transport.models_available = ["some-other-model"]
+    deepseek_transport.queue.append({"tool_call": None, "answer": None})
+    deepseek_transport.queue.append({"answer": "unreachable", "entities": [], "relations": [],
+                                     "rules": [], "actions": [], "citations": []})
+    context = _context(
+        model_config_version_id=pinned_model_config_version_id,
+        extra={
+            "user_id": str(uuid.uuid4()),
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+        },
+    )
+    runtime = LangGraphRuntime(db=db, gateway=_FakeGateway({}), max_tool_rounds=1)
+    events = _run(runtime, context)
+
+    failed = next(e for e in events if e.event_type == "turn_failed")
+    assert failed.payload["error_code"] == "MODEL_PREFLIGHT_FAILED"
+    assert not any(e.event_type == "model_call" for e in events)
+    assert len(deepseek_transport.queue) == 2  # neither queued completion was ever consumed
 
 
 def test_business_journey_turn_makes_exactly_one_governed_tool_call_when_the_model_asks(

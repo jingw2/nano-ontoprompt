@@ -260,6 +260,7 @@ class LangGraphRuntime:
                 self._owner_user_id = row["owner_user_id"]
         self._business_journey = context.extra.get("business_journey")
         self._journey_caller = None
+        self._journey_preflight_model_id = None
         if self.caller is not None:
             # injected test caller: no DB resolution needed
             self._caller_info = {"model": context.model_name or "mock", "injected": True}
@@ -354,10 +355,25 @@ class LangGraphRuntime:
         plus an optional `api_key_env_var`/`ledger` for tests; the pinned
         `context.model_config_version_id` is independently revalidated by
         `select_journey_model_config` (exact provider/model/origin, fail
-        closed on drift) — never trusted from `extra` alone."""
+        closed on drift) — never trusted from `extra` alone.
+
+        Also performs the one required `/models` preflight probe BEFORE the
+        first browser-triggered completion (Important Finding #11 — the
+        plan's own "persist one successful /models probe... revalidate...
+        before both browser completions" constraint): `caller.preflight()`
+        makes a real network call and returns the model id it actually
+        observed, which `_emit_journey_model_call_event` reports instead of
+        a hardcoded constant that could never fail regardless of whether a
+        real probe happened. A failed preflight (network/model-not-found)
+        raises before either completion is attempted — never silently
+        skipped."""
         import os
 
-        from evals.business_journeys.contracts import ModelCallLedger, ModelConfigurationError
+        from evals.business_journeys.contracts import (
+            BusinessJourneyModelError,
+            ModelCallLedger,
+            ModelConfigurationError,
+        )
         from app.services.model_callers.deepseek_vision import DeepSeekVisionCaller
         from app.services.model_config_selector import select_journey_model_config
 
@@ -371,7 +387,15 @@ class LangGraphRuntime:
             raise RuntimeModelError("DEEPSEEK_API_KEY_REQUIRED", "environment variable is not set")
         ledger = config.get("ledger") or ModelCallLedger()
         self._journey_ledger = ledger
-        return DeepSeekVisionCaller(api_key, model_config, ledger)
+        caller = DeepSeekVisionCaller(api_key, model_config, ledger)
+
+        preflight_context = self._journey_context(context, call_kind="agent_initial", logical_call_index=2)
+        try:
+            probe = caller.preflight(preflight_context)
+        except BusinessJourneyModelError as exc:
+            raise RuntimeModelError("MODEL_PREFLIGHT_FAILED", str(exc)) from exc
+        self._journey_preflight_model_id = probe.observed_model
+        return caller
 
     def _journey_context(self, context: TurnRuntimeContext, *, call_kind: str, logical_call_index: int):
         from evals.business_journeys.contracts import MODEL_ID, JourneyModelContext
@@ -448,7 +472,11 @@ class LangGraphRuntime:
             "model_origin": OFFICIAL_ORIGIN,
             "requested_model": MODEL_ID,
             "observed_model": response.model,
-            "preflight_model_id": MODEL_ID,
+            # The real value `caller.preflight()` observed from a live
+            # `/models` call in `_resolve_business_journey_caller`, never a
+            # hardcoded constant (Important Finding #11) — a failed/skipped
+            # probe would have already raised before either completion.
+            "preflight_model_id": self._journey_preflight_model_id,
             "model_config_version_id": context.model_config_version_id,
             "http_attempts": response.http_attempts,
             "retry_count": response.retry_count,
