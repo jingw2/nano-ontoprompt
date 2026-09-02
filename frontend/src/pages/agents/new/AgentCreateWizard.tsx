@@ -24,9 +24,19 @@ export default function AgentCreateWizard() {
   const [pendingSkills, setPendingSkills] = useState<BoundSkill[]>([])
   const [bindFailures, setBindFailures] = useState<string[]>([])
   const [createdAgentId, setCreatedAgentId] = useState<string | null>(null)
+  // release_id per published ontology, resolved lazily for the
+  // `agent-ontology-release-picker` listbox — a published ontology's tools
+  // response already carries its own current release id (`OntologyTools.
+  // release_id`); this is the ONLY place that value is surfaced during
+  // Agent creation, so it is fetched independently of the tool-selection
+  // hook (which only loads tools for an ALREADY-bound ontology).
+  const [releaseIdByOntology, setReleaseIdByOntology] = useState<Record<string, string>>({})
+  const [releasePickerOpen, setReleasePickerOpen] = useState(false)
+  const [toolPickerOpen, setToolPickerOpen] = useState(false)
 
   const { bindings, toolsByOntology, bindOntology, unbindOntology, toggleCategory, toggleTool } =
     useOntologyToolSelection(ontologies)
+  const boundOntologyId = bindings[0]?.ontology_id ?? null
 
   useEffect(() => {
     let cancelled = false
@@ -43,6 +53,27 @@ export default function AgentCreateWizard() {
       .catch(() => undefined)
     return () => { cancelled = true }
   }, [])
+
+  // release id per published ontology, for the release picker's option
+  // labels — each `OntologyTools` read already carries the ontology's
+  // current `release_id`.
+  useEffect(() => {
+    if (ontologies.length === 0) return
+    let cancelled = false
+    Promise.all(ontologies.map(o =>
+      agentToolsApi.listOntologyTools(o.id)
+        .then(res => [o.id, res.release_id] as const)
+        .catch(() => [o.id, null] as const),
+    )).then(pairs => {
+      if (cancelled) return
+      const next: Record<string, string> = {}
+      for (const [ontologyId, releaseId] of pairs) {
+        if (releaseId) next[ontologyId] = releaseId
+      }
+      setReleaseIdByOntology(next)
+    })
+    return () => { cancelled = true }
+  }, [ontologies])
 
   const bindPendingExternal = useCallback((item: ExternalToolCatalogItem, alias: string) => {
     setPendingExternalTools(prev => [...prev, {
@@ -120,7 +151,7 @@ export default function AgentCreateWizard() {
       <form onSubmit={submit} className="bg-white border rounded-lg p-6 space-y-4" data-testid="agent-create-wizard">
         <div>
           <label className="block text-sm text-gray-600 mb-1" htmlFor="agent-name">{t('agent.create.name', '名称')}</label>
-          <input id="agent-name" value={name} onChange={e => setName(e.target.value)}
+          <input id="agent-name" data-testid="agent-name" value={name} onChange={e => setName(e.target.value)}
             className="w-full border rounded-lg px-3 py-2 text-sm" />
         </div>
         <div>
@@ -130,7 +161,7 @@ export default function AgentCreateWizard() {
         </div>
         <div>
           <label className="block text-sm text-gray-600 mb-1" htmlFor="agent-model">{t('agent.create.model', '模型')}</label>
-          <select id="agent-model" value={modelId} onChange={e => setModelId(e.target.value)}
+          <select id="agent-model" data-testid="agent-model-version" value={modelId} onChange={e => setModelId(e.target.value)}
             className="w-full border rounded-lg px-3 py-2 text-sm">
             <option value="">{t('agent.create.select_model', '选择模型…')}</option>
             {models.map(m => (
@@ -151,6 +182,53 @@ export default function AgentCreateWizard() {
             onToggleCategory={toggleCategory} onToggleTool={toggleTool} />
         </div>
         <div>
+          <label className="block text-sm text-gray-600 mb-1">{t('agent.create.release', '本体发布版本')}</label>
+          {/* Custom listbox (not a native <select>): the acceptance flow
+             clicks this button, then clicks `role="option"` entries — a
+             pattern only a DOM-rendered listbox supports. Selecting a
+             release binds its ontology via the SAME `bindOntology` the
+             picker above uses (one Agent binds at most one ontology). */}
+          <button type="button" data-testid="agent-ontology-release-picker"
+            onClick={() => setReleasePickerOpen(o => !o)}
+            className="w-full border rounded-lg px-3 py-2 text-sm text-left bg-white">
+            {boundOntologyId ? (releaseIdByOntology[boundOntologyId] ?? boundOntologyId)
+              : t('agent.create.select_release', '选择本体发布版本…')}
+          </button>
+          {releasePickerOpen && (
+            <ul role="listbox" className="border rounded-lg mt-1 max-h-48 overflow-auto bg-white shadow text-sm">
+              {ontologies.map(o => (
+                <li key={o.id} role="option" aria-selected={boundOntologyId === o.id}
+                  onClick={() => { bindOntology(o.id); setReleasePickerOpen(false) }}
+                  className="px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                  {releaseIdByOntology[o.id] ?? o.id}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">{t('agent.create.mcp_tools', 'MCP 工具')}</label>
+          <button type="button" data-testid="agent-mcp-tool-picker" disabled={!boundOntologyId}
+            onClick={() => setToolPickerOpen(o => !o)}
+            className="w-full border rounded-lg px-3 py-2 text-sm text-left bg-white disabled:opacity-40">
+            {t('agent.create.select_mcp_tools', '选择 MCP 工具…')} ({bindings[0]?.selected_tools.length ?? 0})
+          </button>
+          {toolPickerOpen && boundOntologyId && (
+            <ul role="listbox" className="border rounded-lg mt-1 max-h-48 overflow-auto bg-white shadow text-sm">
+              {(toolsByOntology[boundOntologyId] ?? []).map(d => {
+                const selected = bindings[0]?.selected_tools.includes(d.descriptor_id) ?? false
+                return (
+                  <li key={d.descriptor_id} role="option" aria-selected={selected}
+                    onClick={() => toggleTool(boundOntologyId, d.descriptor_id, !selected)}
+                    className="px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                    {d.descriptor_id}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+        <div>
           <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.external', '外部工具')}</h3>
           <ExternalToolCard bindings={pendingExternalTools} canEdit
             onBind={bindPendingExternal} onUnbind={unbindPendingExternal}
@@ -167,7 +245,8 @@ export default function AgentCreateWizard() {
           </div>
         )}
         <div className="flex gap-3">
-          <button type="submit" disabled={saving || !name.trim() || !modelId || createdAgentId !== null}
+          <button type="submit" data-testid="agent-create-submit"
+            disabled={saving || !name.trim() || !modelId || createdAgentId !== null}
             className="bg-black text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-40">
             {saving ? t('agent.create.saving', '创建中…') : t('agent.create.submit', '创建')}
           </button>

@@ -17,6 +17,15 @@ export interface RuntimeEventRecord {
 const REDACTED_KEYS = new Set([
   'message', 'model_name', 'tool_alias', 'clarification_id', 'question',
   'approval_id', 'error_code',
+  // Business-journey `model_call`/`tool_executed`/`resolve_snapshot`/
+  // `final_response` payload fields (`app.runtime.langgraph_runtime`) —
+  // every one of these is already a persisted, observable identifier or
+  // counter, never a raw prompt/response.
+  'citations', 'call_kind', 'logical_call_index', 'correlation_id',
+  'model_caller', 'model_origin', 'requested_model', 'observed_model',
+  'preflight_model_id', 'model_config_version_id', 'http_attempts', 'retry_count',
+  'descriptor_id', 'outcome', 'tool_execution_id', 'item_count',
+  'receipt_id', 'sandbox_receipt_id', 'audit_event_id', 'automatic_action',
 ])
 
 function RedactedPayload({ payload }: { payload: Record<string, unknown> }) {

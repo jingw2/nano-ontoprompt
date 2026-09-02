@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/authStore'
 import { agentDetailApi, type AgentDetail, type AgentVersion } from '@/api/agentDetail'
+import { agentToolsApi } from '@/api/agentTools'
 import AgentHeader from './AgentHeader'
 import AgentInfoTab from './AgentInfoTab'
 import SystemPromptTab from './SystemPromptTab'
@@ -49,6 +50,22 @@ export default function AgentDetailPage() {
 
   const activeVersion = versions.find(v => v.version_no === agent?.version_no) ?? null
   const canEdit = role === 'editor' || role === 'admin'
+  const boundOntologyId = activeVersion?.ontology_bindings?.[0]?.ontology_id ?? null
+
+  // Persisted-binding evidence (`journey-agent-binding`): the active
+  // version already carries `default_model_config_version_id` directly;
+  // the bound ontology's currently published RELEASE id is only available
+  // through its own tools read (`OntologyTools.release_id`).
+  const [ontologyReleaseId, setOntologyReleaseId] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(() => { if (!cancelled) setOntologyReleaseId(null) })
+    if (!boundOntologyId) return () => { cancelled = true }
+    agentToolsApi.listOntologyTools(boundOntologyId)
+      .then(res => { if (!cancelled) setOntologyReleaseId(res.release_id) })
+      .catch(() => { if (!cancelled) setOntologyReleaseId(null) })
+    return () => { cancelled = true }
+  }, [boundOntologyId])
 
   const handleSaved = useCallback(() => {
     setDirty(false)
@@ -77,6 +94,13 @@ export default function AgentDetailPage() {
   return (
     <div>
       <AgentHeader agent={agent} dirty={dirty} saving={false} />
+      {activeVersion?.default_model_config_version_id && (
+        <div data-testid="journey-agent-binding" className="text-xs text-gray-500 font-mono mb-3">
+          model: <span data-testid="journey-model-id">{activeVersion.default_model_config_version_id}</span>
+          {' · '}
+          release: <span data-testid="journey-ontology-release">{ontologyReleaseId ?? ''}</span>
+        </div>
+      )}
       <div className="flex gap-1 border-b mb-4">
         {TABS.map(tab => (
           <button key={tab.key} type="button" onClick={() => setTab(tab.key)}

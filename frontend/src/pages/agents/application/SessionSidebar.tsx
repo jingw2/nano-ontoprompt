@@ -13,7 +13,7 @@ export default function SessionSidebar({ sessions, activeSessionId, onSelect, on
   return (
     <div className="border-r w-56 shrink-0 flex flex-col" data-testid="session-sidebar">
       <div className="p-3 border-b">
-        <button type="button" onClick={onNew}
+        <button type="button" data-testid="session-new" onClick={onNew}
           className="w-full bg-black text-white rounded-lg px-3 py-1.5 text-sm hover:bg-gray-800">
           {t('agent.app.new_session', '+ New')}
         </button>

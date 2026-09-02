@@ -182,6 +182,11 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
     <div className="p-6 space-y-6" data-testid="tool-config-tab">
       <div>
         <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.ontology_bindings', '本体绑定')}</h3>
+        {bindings[0]?.selected_tools?.[0] && (
+          <p className="text-xs text-gray-500 font-mono mb-2">
+            {t('agent.tools.bound_mcp_tool', '已绑定工具')}: <span data-testid="journey-mcp-tool">{bindings[0].selected_tools[0]}</span>
+          </p>
+        )}
         {error && <p className="text-sm text-red-500 mb-2">{error}</p>}
         {/* OntologyToolSelector renders the published-ontology dropdown (data-testid="ontology-picker") and bound-ontology panels */}
         <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
