@@ -671,16 +671,31 @@ def _write_scanner_failure(failure_summary_path: Path, *, run_id: str, reason_co
     failure_summary_path.write_text(json.dumps(summary.to_json(), indent=2, sort_keys=True))
 
 
+_RUN_ID_UNRESOLVED = "unresolved-run-id"
+
+
 def _resolve_run_id(explicit: str | None, staging_dir: Path) -> str:
+    """Never raises: the CI gate's own `id: scan` step runs with `if:
+    always()` specifically so it can still emit `scan_safe=false` and a
+    failure summary after an earlier phase failed -- including a phase 3
+    (prepare) failure so early that `<staging>/run.json` was never written.
+    Raising here would make `actions/upload-artifact@v4`'s failure-summary
+    step error on a file that also never got written, instead of cleanly
+    uploading one. Falling through to `_missing_journey_evidence` (which
+    will always also be true when `run.json` itself is missing) is what
+    actually produces the failure summary."""
     if explicit:
         return explicit
     run_manifest = staging_dir / "run.json"
     if run_manifest.exists():
-        document = json.loads(run_manifest.read_text(encoding="utf-8"))
+        try:
+            document = json.loads(run_manifest.read_text(encoding="utf-8"))
+        except ValueError:
+            return _RUN_ID_UNRESOLVED
         run_id = document.get("run_id")
         if run_id:
             return str(run_id)
-    raise SystemExit("RUN_ID_REQUIRED: pass --run-id or ensure <staging>/run.json exists")
+    return _RUN_ID_UNRESOLVED
 
 
 def _build_parser() -> argparse.ArgumentParser:

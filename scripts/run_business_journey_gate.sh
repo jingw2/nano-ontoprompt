@@ -116,6 +116,24 @@ docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orpha
 docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
 export RUNTIME_POSTGRES_URL="postgresql://runtime:runtime@localhost:55432/runtime"
 export RUNTIME_MYSQL_URL="mysql+pymysql://runtime:runtime@localhost:53306/runtime"
+# Two of the deterministic manifest's own `test_targets`
+# (test_event_stream.py::test_events_persisted_before_notify_no_gap,
+# test_tool_gateway_external.py::test_gateway_sanitizes_title_and_url_at_
+# payload_boundary -- behind 6 manifest cases: {supply_chain,finance,
+# credit}-resilience-sse-reconnect and -security-prompt-injection) read
+# TEST_DATABASE_URL directly (module-scope os.environ.get, independent of
+# backend/tests/conftest.py's own sqlite default) and `pytest.skip()`
+# without it; run_registered_case treats a skip as a failure by design, so
+# phase 2 would otherwise always fail closed on these six cases. Both
+# fixtures run real Alembic migrations (0006_agent_runtime/
+# 0015_external_mcp) into their OWN freshly-created, randomly-named schema
+# via a search_path override -- never the `public` schema the running
+# application itself uses -- so pointing this at the SAME disposable
+# stack's own application Postgres (docker-compose.v2.yml's `db` service,
+# database `ontexus`, not the isolated runtime-fixture Postgres above,
+# which has no Alembic history at all) is safe to run concurrently with
+# every other phase.
+export TEST_DATABASE_URL="postgresql://ontexus:ontexus@localhost:5432/ontexus"
 
 echo "[business-journey-gate] phase 1/6: fixture generation/check (zero model calls)"
 python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
