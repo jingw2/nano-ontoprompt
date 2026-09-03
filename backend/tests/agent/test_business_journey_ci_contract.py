@@ -78,6 +78,10 @@ def test_gate_order_and_sanitized_upload_are_explicit():
     # script actually emits, not just that both substrings appear somewhere.
     assert '--staging "$REPO_ROOT/artifacts/business_journeys/staging"' in script
     assert '--sanitized-output "$REPO_ROOT/artifacts/business_journeys/sanitized"' in script
+    assert (
+        '--failure-summary "$ARTIFACTS_DIR/business_journeys/scanner-failure-summary.json" \\\n'
+        '    --deterministic-report "$ARTIFACTS_DIR/runtime/deterministic-cases.json"'
+    ) in script
 
 
 def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
