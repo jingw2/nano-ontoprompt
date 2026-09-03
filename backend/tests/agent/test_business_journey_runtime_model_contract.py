@@ -270,9 +270,11 @@ def test_business_journey_completions_carry_the_protocol_instruction_on_the_wire
     assert "`automatic_action: null` only when the tool result contains no rows" in final_text
 
     # -- and the same two facts are ALSO on the response schema itself
-    automatic_action = (
-        final_body["response_format"]["json_schema"]["schema"]["properties"]["automatic_action"]
-    )
+    final_schema = final_body["response_format"]["json_schema"]["schema"]
+    # nullable, but the key can no longer be silently omitted
+    assert "automatic_action" in final_schema["required"]
+    automatic_action = final_schema["properties"]["automatic_action"]
+    assert automatic_action["required"] == ["target_fixture_id", "action"]
     assert automatic_action["properties"]["action"]["enum"] == [JOURNEY_LOW_RISK_ACTION]
     assert JOURNEY_LOW_RISK_ACTION in automatic_action["properties"]["action"]["description"]
     assert "instance_id" in automatic_action["properties"]["target_fixture_id"]["description"]

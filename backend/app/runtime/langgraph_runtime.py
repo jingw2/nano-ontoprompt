@@ -117,7 +117,14 @@ AGENT_INITIAL_RESPONSE_SCHEMA: dict = {
 }
 AGENT_FINAL_RESPONSE_SCHEMA: dict = {
     "type": "object",
-    "required": ["answer", "entities", "relations", "rules", "actions", "citations"],
+    # `automatic_action` is REQUIRED (nullable, exactly like the initial
+    # schema's `tool_call`): the model must make an explicit decision about
+    # it rather than being able to silently omit the key — omitting it is
+    # what made `_execute_journey_automatic_action` return `None` and drop
+    # `sandbox_receipt_id`/`receipt_id`/`audit_event_id` from the final
+    # payload the browser and `verify_journey` both read back.
+    "required": ["answer", "entities", "relations", "rules", "actions", "citations",
+                 "automatic_action"],
     "properties": {
         "answer": {"type": "string"},
         "entities": {"type": "array", "items": {"type": "string"}},
@@ -136,6 +143,10 @@ AGENT_FINAL_RESPONSE_SCHEMA: dict = {
                 "low-risk action this turn applies automatically, and the tool result row it "
                 "applies to. Use null only when the tool result contains no rows at all."
             ),
+            # Both halves or nothing: a half-filled object is silently
+            # discarded by `_execute_journey_automatic_action`, which reads
+            # as "the model declined" when it actually tried and failed.
+            "required": ["target_fixture_id", "action"],
             "properties": {
                 "target_fixture_id": {"type": "string", "description": _TARGET_FIXTURE_ID_DESCRIPTION},
                 "action": {"type": "string", "description": "The journey's one low-risk action name."},
