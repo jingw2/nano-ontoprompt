@@ -68,10 +68,14 @@ def test_gate_order_and_sanitized_upload_are_explicit():
     positions = [script.index(value) for value in ordered]
     assert positions == sorted(positions)
     assert "frontend/test-results" not in script
-    assert "--staging" in script
-    assert "artifacts/business_journeys/staging" in script
-    assert "--sanitized-output" in script
-    assert "artifacts/business_journeys/sanitized" in script
+    # Contiguous flag=value pairing (not independent substring presence):
+    # the script uses quoted, REPO_ROOT-prefixed absolute paths throughout
+    # for portability (unlike the workflow's own separate `id: scan` step,
+    # which uses the brief's simpler bare-relative form since it always
+    # runs with the repo root as its cwd) -- verify the exact pairing this
+    # script actually emits, not just that both substrings appear somewhere.
+    assert '--staging "$REPO_ROOT/artifacts/business_journeys/staging"' in script
+    assert '--sanitized-output "$REPO_ROOT/artifacts/business_journeys/sanitized"' in script
 
 
 def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
@@ -80,6 +84,11 @@ def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
     scan = next(step for step in steps if step.get("id") == "scan")
     safe_upload = next(step for step in steps if step.get("name") == "Upload sanitized journey evidence")
     failure_upload = next(step for step in steps if step.get("name") == "Upload safe scanner failure summary")
+    assert (
+        "scan --staging artifacts/business_journeys/staging "
+        "--sanitized-output artifacts/business_journeys/sanitized "
+        "--failure-summary artifacts/business_journeys/scanner-failure-summary.json"
+    ) in scan["run"]
     assert scan["if"] == "always()"
     assert safe_upload["if"] == "steps.scan.outputs.scan_safe == 'true'"
     assert failure_upload["if"] == "failure() && steps.scan.outputs.scan_safe != 'true'"
@@ -113,6 +122,25 @@ def test_new_browser_spec_has_no_soft_skip():
     text = SPEC_PATH.read_text()
     assert "test.skip" not in text
     assert "test.fixme" not in text
+
+
+def test_new_browser_spec_has_the_exact_three_titles():
+    text = SPEC_PATH.read_text()
+    for title in (
+        "supply chain journey completes the governed browser loop",
+        "finance journey completes the governed browser loop",
+        "credit journey completes the governed browser loop",
+    ):
+        assert title in text
+
+
+def test_one_retry_policy_for_timeout_and_429():
+    playwright_config = (REPO_ROOT / "frontend" / "playwright.config.ts").read_text()
+    assert "retries: 1" in playwright_config
+    deepseek_client = (REPO_ROOT / "backend" / "evals" / "business_journeys" / "deepseek_client.py").read_text()
+    # One retry means two total HTTP attempts (the original call plus
+    # exactly one retry) for a timeout/429 -- never more.
+    assert "_MAX_HTTP_ATTEMPTS = 2" in deepseek_client
 
 
 def test_job_triggers_on_pull_request_only_and_rejects_non_pr_first():

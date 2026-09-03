@@ -101,11 +101,27 @@ export interface BusinessJourneyRun {
 
 export interface JourneyData {
   journeyId: JourneyId
+  runId: string
   model_config_version_id: string
   ontology_release_id: string
   mcp_descriptor_ids: string[]
   dialogues: { governed_turn: { question: string } }
   semantic_minima: { keywords: string[] }
+}
+
+export interface BrowserPlanBranchEvidence {
+  branch: 'approved' | 'rejected' | 'expired'
+  action_plan_id: string
+  plan_hash: string
+}
+
+export interface BrowserJourneyEvidence {
+  turnId: string
+  agentId?: string
+  sessionId?: string
+  ontologyReleaseId?: string
+  modelConfigVersionId?: string
+  planBranches: BrowserPlanBranchEvidence[]
 }
 
 function fail(reason: string): never {
@@ -281,12 +297,51 @@ export function journeyData(journeyId: JourneyId): JourneyData {
 
   return {
     journeyId,
+    runId: run.run_id,
     model_config_version_id: preparation.model_config_version_id,
     ontology_release_id: preparation.ontology_release_id,
     mcp_descriptor_ids: preparation.mcp_descriptor_ids,
     dialogues: { governed_turn: { question: governedTurn.question } },
     semantic_minima: { keywords: semanticMinima.keywords },
   }
+}
+
+/**
+ * Writes the ONE file `verify_journey` (Task 3's `orchestrator.
+ * read_browser_evidence`) requires: a small pointer/cross-check document,
+ * never the full evidence itself. `read_journey_evidence`
+ * (`api_client.py::read_journey_evidence`) treats every field here except
+ * `turn_id` (the lookup key) and each plan branch's `action_plan_id`/
+ * `plan_hash` (used to fetch and cross-check the real persisted plan) as an
+ * OPTIONAL cross-check against the application's own persisted event trace
+ * — never as a trusted source of truth on its own — so this writer only
+ * ever supplies real, browser-observed identifiers, never derives or
+ * fabricates one.
+ */
+export function writeBrowserEvidence(
+  manifestPath: string, runId: string, journeyId: JourneyId, evidence: BrowserJourneyEvidence,
+): void {
+  // manifestPath = <output_dir>/business_journeys/staging/run.json
+  const businessJourneysDir = path.dirname(path.dirname(manifestPath))
+  const browserDir = path.join(businessJourneysDir, 'browser')
+  fs.mkdirSync(browserDir, { recursive: true })
+  const document: Record<string, unknown> = {
+    schema_version: 1,
+    run_id: runId,
+    journey_id: journeyId,
+    turn_id: evidence.turnId,
+    plan_branches: evidence.planBranches.map(branch => ({
+      branch: branch.branch,
+      action_plan_id: branch.action_plan_id,
+      plan_hash: branch.plan_hash,
+    })),
+  }
+  if (evidence.agentId) document.agent_id = evidence.agentId
+  if (evidence.sessionId) document.session_id = evidence.sessionId
+  if (evidence.ontologyReleaseId) document.ontology_release_id = evidence.ontologyReleaseId
+  if (evidence.modelConfigVersionId) document.model_config_version_id = evidence.modelConfigVersionId
+  const targetPath = path.join(browserDir, `${runId}.${journeyId}.json`)
+  fs.writeFileSync(targetPath, JSON.stringify(document, null, 2), 'utf-8')
 }
 
 /** Fails the test if it was skipped or marked as an intentional bypass

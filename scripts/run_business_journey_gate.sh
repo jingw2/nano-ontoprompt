@@ -49,6 +49,10 @@ cleanup() {
   local status=$?
   echo "[business-journey-gate] cleaning up (exit code so far: $status)"
   docker compose -p "$PROJECT" -f docker-compose.v2.yml down -v --remove-orphans >/dev/null 2>&1 || true
+  # Shared, fixed-name runtime Postgres/MySQL fixture (same file/pattern the
+  # backend-matrix job already uses) -- not part of this run's own unique
+  # Compose project, but still torn down every time this script exits.
+  docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
   if [ -n "$ENV_BACKUP" ]; then
     mv -f "$ENV_BACKUP" .env
     echo "[business-journey-gate] restored original .env"
@@ -73,6 +77,14 @@ cp .env.example .env
 # no-approval-gate business-journey Runtime protocol (backend/app/config.py).
 # Never true in a real deployment; only ever true for this controlled gate.
 echo "BUSINESS_JOURNEY_ACCEPTANCE_ENABLED=true" >> .env
+# The real provider credential: `app/runtime/langgraph_runtime.py` reads
+# `DEEPSEEK_API_KEY` from the backend/worker CONTAINER's own environment
+# when it actually places the agent_initial/agent_final calls -- the
+# workflow-level DEEPSEEK_API_KEY used for the earlier trust/key guard never
+# reaches those containers on its own. `env_file: .env` is how
+# docker-compose.v2.yml's `backend`/`agent_worker` services already load
+# every other secret in this file; never echoed anywhere else.
+echo "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}" >> .env
 
 echo "[business-journey-gate] tearing down any stale state for $PROJECT"
 docker compose -p "$PROJECT" -f docker-compose.v2.yml down -v --remove-orphans >/dev/null 2>&1 || true
@@ -89,6 +101,21 @@ done
 test -n "$HEALTH"
 echo "$HEALTH" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
 echo "[business-journey-gate] backend healthy"
+
+# The application credential `run.py`'s prepare/verify phases authenticate
+# with (`orchestrator.APPLICATION_API_KEY_ENV_VAR`) -- distinct from
+# DEEPSEEK_API_KEY. `app.main`'s own startup `seed_admin` creates this exact
+# user (`FIRST_ADMIN_USER`/`FIRST_ADMIN_PASSWORD`, both left at
+# `.env.example`'s defaults above) the moment the disposable backend boots;
+# `JourneyApiClient.authenticate` accepts this "user/password" form and logs
+# in for real. Never echoed; only ever held in this process's environment.
+export BUSINESS_JOURNEY_API_KEY="admin/admin123"
+
+echo "[business-journey-gate] starting the shared runtime Postgres/MySQL fixture"
+docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
+docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
+export RUNTIME_POSTGRES_URL="postgresql://runtime:runtime@localhost:55432/runtime"
+export RUNTIME_MYSQL_URL="mysql+pymysql://runtime:runtime@localhost:53306/runtime"
 
 echo "[business-journey-gate] phase 1/6: fixture generation/check (zero model calls)"
 python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
@@ -118,7 +145,7 @@ echo "[business-journey-gate] phase 5/6: read-only post-browser verification"
 echo "[business-journey-gate] phase 6/6: scan and materialize sanitized evidence"
 (cd backend && python -m evals.business_journeys.artifacts \
     scan --manifest "$REPO_ROOT/test_data/runtime/manifest.json" \
-    --staging "$STAGING_DIR" \
+    --staging "$REPO_ROOT/artifacts/business_journeys/staging" \
     --sanitized-output "$REPO_ROOT/artifacts/business_journeys/sanitized" \
     --failure-summary "$ARTIFACTS_DIR/business_journeys/scanner-failure-summary.json" \
     --deterministic-report "$ARTIFACTS_DIR/runtime/deterministic-cases.json" \

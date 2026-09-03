@@ -147,6 +147,12 @@ jobs:
         run: bash scripts/run_business_journey_gate.sh
       - id: scan
         if: always()
+        env:
+          # `evals` lives under `backend/` (backend/pyproject.toml only
+          # packages `app*`); PYTHONPATH, not `working-directory: backend`,
+          # so the command's own relative artifact paths still resolve
+          # against the repo root exactly as written.
+          PYTHONPATH: backend
         run: python -m evals.business_journeys.artifacts scan --staging artifacts/business_journeys/staging --sanitized-output artifacts/business_journeys/sanitized --failure-summary artifacts/business_journeys/scanner-failure-summary.json >> "$GITHUB_OUTPUT"
       - name: Upload sanitized journey evidence
         if: steps.scan.outputs.scan_safe == 'true'

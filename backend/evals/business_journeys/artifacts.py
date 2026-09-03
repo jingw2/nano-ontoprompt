@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
@@ -460,6 +461,13 @@ def scan_and_materialize(
         )
         failure_summary_path.parent.mkdir(parents=True, exist_ok=True)
         failure_summary_path.write_text(json.dumps(summary.to_json(), indent=2, sort_keys=True))
+        # Restores the documented contract ("on failure it removes/does not
+        # create that [sanitized] directory") even when this is the SECOND
+        # scan of the same staging directory in one run (the CI gate's own
+        # final phase, then the workflow's separate `id: scan` step) and an
+        # earlier, now-stale successful scan already created one.
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
         return ScanResult(
             status="failed",
             safe_evidence_dir=None,
@@ -469,12 +477,14 @@ def scan_and_materialize(
             counts=counts,
         )
 
-    # `exist_ok=True`: the CI gate script's own final phase and the
-    # workflow's separate `id: scan` step (which captures `scan_safe` into
-    # `$GITHUB_OUTPUT`) both invoke this scan over the same staging
-    # directory in the same run -- the second call is a harmless, idempotent
-    # re-scan/re-write, not a collision.
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Always a fresh, atomically-rebuilt directory -- never a merge with
+    # whatever a previous call left behind. This tolerates the CI gate's own
+    # two real invocations of this scan (its final phase, then the
+    # workflow's separate `id: scan` step) over identical, unchanged staged
+    # content without silently trusting stale output from the first call.
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=False)
     for path in staged_files:
         if path.name in NON_ALLOWLIST_STAGING_FILENAMES:
             continue
@@ -551,9 +561,28 @@ def assemble_journey_evidence(
     (``JourneyPreparation.to_dict()`` / ``JourneyVerification.to_dict()``,
     Task 3) into the closed ``ArtifactAllowlist`` schema for CI staging.
 
-    Disclosed, honest gap: neither record tracks a per-call wall-clock
-    timestamp or a dedicated backend trace id today, so ``call_timestamps``
-    and ``backend_trace_ids`` are always empty here -- never a fabricated
+    ``verify_journey`` (``orchestrator.py``) already reconstructs the FULL
+    per-journey totals into ``JourneyVerification`` -- ``logical_model_calls``,
+    ``http_attempts``, ``retry_count``, and ``call_kinds`` there already cover
+    all three logical calls (the synthetic ontology call plus the two
+    browser-driven calls; see ``_synthetic_ontology_call``/`` calls = (
+    ontology_call,) + evidence.model_calls`` in that module), as do
+    ``model_caller``/``model_origin``/``preflight_model_id``/
+    ``requested_model_id``/``observed_model_ids``. Only ``preparation`` is
+    consulted here, for the one field verification does not carry:
+    ``fixture_manifest_sha256``. Adding preparation's own (already-included)
+    counters on top would double the budget (previously a real bug fixed
+    here: 4 logical calls instead of the mandated 3).
+
+    Disclosed, honest gap: ``call_timestamps`` is always empty -- a per-call
+    wall-clock timestamp exists on the low-level ``ModelResponse`` dataclass
+    (``contracts.py``), but is never propagated up through
+    ``ModelCallRecord``/``JourneyVerification``, so there is genuinely
+    nothing to read at this level; this is not fabricated as a placeholder.
+    ``backend_trace_ids`` IS populated for real, from ``verification``'s own
+    ``correlation_ids`` (``"{run_id}:{journey_id}:{call_kind}:{index}"`` per
+    logical call, already computed by ``verify_journey``) -- a genuine,
+    non-fabricated backend-assigned trace identifier per call, not an empty
     placeholder. ``semantic_outcomes`` is not a separately-measured field
     either; it is safe to mark every logical call "passed" here because this
     function is only ever called after `prepare_journey`'s semantic-minimum
@@ -561,29 +590,30 @@ def assemble_journey_evidence(
     raised on any failure -- by the time a preparation/verification record
     reaches here, every one of its calls passed.
     """
-    logical_model_calls = int(preparation["logical_model_calls"]) + int(verification["logical_model_calls"])
+    logical_model_calls = int(verification["logical_model_calls"])
+    observed_model_ids = tuple(verification["observed_model_ids"])
     return ArtifactAllowlist(
         schema_version=1,
         run_id=run_id,
         journey_id=journey_id,
         fixture_manifest_sha256=str(preparation["fixture_manifest_sha256"]),
-        model_requested=str(preparation["requested_model_id"]),
-        model_observed=str(preparation["observed_model_id"]),
-        model_origin=str(preparation["model_origin"]),
-        model_caller=str(preparation["model_caller"]),
-        model_config_version_id=str(preparation["model_config_version_id"]),
-        preflight_model_id=str(preparation["preflight_model_id"]),
+        model_requested=str(verification["requested_model_id"]),
+        model_observed=str(observed_model_ids[-1]) if observed_model_ids else "",
+        model_origin=str(verification["model_origin"]),
+        model_caller=str(verification["model_caller"]),
+        model_config_version_id=str(verification["model_config_version_id"]),
+        preflight_model_id=str(verification["preflight_model_id"]),
         logical_model_calls=logical_model_calls,
-        http_attempts=int(preparation["http_attempts"]) + int(verification["http_attempts"]),
-        retry_count=int(preparation["retry_count"]) + int(verification["retry_count"]),
+        http_attempts=int(verification["http_attempts"]),
+        retry_count=int(verification["retry_count"]),
         call_timestamps=(),
-        call_kinds=tuple(preparation["call_kinds"]) + tuple(verification["call_kinds"]),
+        call_kinds=tuple(verification["call_kinds"]),
         semantic_outcomes=("passed",) * logical_model_calls,
         state_transitions=tuple(branch["branch"] for branch in verification["plan_branches"]),
         citation_ids=tuple(verification["citation_ids"]),
         tool_trace_ids=tuple(verification["tool_trace_ids"]),
         audit_event_ids=tuple(verification["audit_event_ids"]),
-        backend_trace_ids=(),
+        backend_trace_ids=tuple(verification.get("correlation_ids") or ()),
     )
 
 
@@ -608,6 +638,37 @@ def _check_deterministic_report(path: Path | None) -> str | None:
         if result.get("status") != "passed" or result.get("skipped"):
             return _DETERMINISTIC_REPORT_REASON
     return None
+
+
+_JOURNEY_EVIDENCE_MISSING_REASON = "JOURNEY_EVIDENCE_MISSING"
+
+
+def _missing_journey_evidence(staging_dir: Path) -> tuple[str, ...]:
+    """Journeys with no ``<staging>/<journey_id>.json`` (`assemble_journey_
+    evidence`'s own output, written by ``run.py`` after a passing verify).
+    Without this check, a staging directory containing only Task 3's
+    `run.json` (e.g. because an earlier phase failed before any journey's
+    evidence file was written) would scan zero files, hit no forbidden
+    value, and vacuously report `scan_safe=true` -- exactly backwards for a
+    gate whose `id: scan` step runs with `if: always()` specifically to
+    still produce a safe result after an earlier failure."""
+    return tuple(
+        journey_id for journey_id in JOURNEY_IDS
+        if not (staging_dir / f"{journey_id}.json").exists()
+    )
+
+
+def _write_scanner_failure(failure_summary_path: Path, *, run_id: str, reason_codes: tuple[str, ...]) -> None:
+    summary = ScannerFailureSummary(
+        schema_version=1,
+        run_id=run_id,
+        status="scanner_failed",
+        reason_codes=reason_codes,
+        category_counts={code: 1 for code in reason_codes},
+        scanner_version=SCANNER_VERSION,
+    )
+    failure_summary_path.parent.mkdir(parents=True, exist_ok=True)
+    failure_summary_path.write_text(json.dumps(summary.to_json(), indent=2, sort_keys=True))
 
 
 def _resolve_run_id(explicit: str | None, staging_dir: Path) -> str:
@@ -649,10 +710,20 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_scan(args: argparse.Namespace) -> int:
     runtime_root = args.manifest.parent if args.manifest else _RUNTIME_DATA_DIR
     run_id = _resolve_run_id(args.run_id, args.staging)
-    forbidden_values = build_all_journeys_forbidden_values(runtime_root)
+
+    # Checked before scanning a single byte: a staging directory missing a
+    # journey's evidence file (e.g. because an earlier phase failed first)
+    # must never vacuously pass just because it also contains no forbidden
+    # value.
+    missing = _missing_journey_evidence(args.staging)
+    if missing:
+        _write_scanner_failure(args.failure_summary, run_id=run_id, reason_codes=(_JOURNEY_EVIDENCE_MISSING_REASON,))
+        print("scan_safe=false")
+        return 1
 
     deterministic_reason = _check_deterministic_report(args.deterministic_report)
 
+    forbidden_values = build_all_journeys_forbidden_values(runtime_root)
     result = scan_and_materialize(
         args.staging,
         output_dir=args.sanitized_output,
@@ -664,21 +735,12 @@ def _run_scan(args: argparse.Namespace) -> int:
     if deterministic_reason is not None and result.scan_safe:
         # The evidence itself was safe, but the deterministic registry run
         # this gate depends on was not clean -- fail closed the same way a
-        # forbidden-value hit would, with the same fixed-schema summary.
-        import shutil
-
+        # forbidden-value hit would, with the same fixed-schema summary, and
+        # remove the sanitized directory `scan_and_materialize` just created
+        # so a not-actually-safe run leaves no sanitized evidence behind.
         if result.safe_evidence_dir is not None:
             shutil.rmtree(result.safe_evidence_dir, ignore_errors=True)
-        summary = ScannerFailureSummary(
-            schema_version=1,
-            run_id=run_id,
-            status="scanner_failed",
-            reason_codes=(deterministic_reason,),
-            category_counts={deterministic_reason: 1},
-            scanner_version=SCANNER_VERSION,
-        )
-        args.failure_summary.parent.mkdir(parents=True, exist_ok=True)
-        args.failure_summary.write_text(json.dumps(summary.to_json(), indent=2, sort_keys=True))
+        _write_scanner_failure(args.failure_summary, run_id=run_id, reason_codes=(deterministic_reason,))
         print("scan_safe=false")
         return 1
 

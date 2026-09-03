@@ -23,8 +23,15 @@ import {
   assertNoSkippedTests,
   journeyData,
   loadBusinessJourneyRun,
+  writeBrowserEvidence,
 } from './fixtures/businessJourneys'
 import { loginAsAdmin } from './helpers/ui'
+
+// Validated by `beforeAll` (via `loadBusinessJourneyRun`) before any test
+// runs; read again here only to locate where each journey's browser
+// evidence document must be written (`writeBrowserEvidence`'s only
+// consumer, Task 3's `orchestrator.read_browser_evidence`).
+const RUN_MANIFEST_PATH = process.env.BUSINESS_JOURNEY_RUN_MANIFEST || ''
 
 const API_BASE = process.env.AGENT_E2E_API_BASE || 'http://localhost:8000'
 
@@ -66,10 +73,32 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     await page.getByTestId('agent-create-submit').click()
     await expect(page.getByTestId('journey-agent-binding')).toContainText(journey.ontology_release_id)
     await expect(page.getByTestId('journey-agent-binding')).toContainText(journey.model_config_version_id)
+    // The real, server-assigned agent id: the app navigates to `/agents/:id`
+    // (`AgentDetailPage`'s own `useParams`) once creation succeeds, and the
+    // binding assertions above already prove that navigation completed.
+    const agentIdMatch = /\/agents\/([^/?#]+)/.exec(page.url())
+    if (!agentIdMatch) throw new Error(`could not read agent id from URL: ${page.url()}`)
+    const agentId = agentIdMatch[1]
     await page.getByRole('button', { name: /Agent Application|智能体应用/ }).click()
     await page.getByTestId('session-new').click()
     await page.getByTestId('conversation-input').fill(journey.dialogues.governed_turn.question)
-    await page.getByTestId('conversation-send').click()
+    // `agentStreamApi.createTurn` (`POST /api/v1/agent-sessions/{id}/turns`)
+    // is the one real place the browser learns the persisted `turn_id`/
+    // `session_id` (`agent_id`/`agent_version_id`/`ontology_release_id`/
+    // `model_config_version_id` are optional cross-checks `verify_journey`
+    // fetches from the turn's own event trace on its own — see
+    // `api_client.py::read_journey_evidence`) — intercept the real response
+    // rather than adding a DOM element that would only exist for this spec.
+    const [turnResponse] = await Promise.all([
+      page.waitForResponse(response =>
+        /\/api\/v1\/agent-sessions\/[^/]+\/turns$/.test(new URL(response.url()).pathname)
+        && response.request().method() === 'POST'),
+      page.getByTestId('conversation-send').click(),
+    ])
+    const turnBody = await turnResponse.json() as { data?: { turn_id?: string; session_id?: string } }
+    const turnId = turnBody.data?.turn_id
+    const sessionId = turnBody.data?.session_id
+    if (!turnId) throw new Error('createTurn response missing turn_id')
     await expect(page.getByTestId('journey-answer')).toContainText(journey.semantic_minima.keywords[0])
     // The real runtime citation (`resolve_snapshot`'s `citations`,
     // `app.services.runtime.context`) is grounded in the ontology RELEASE
@@ -157,5 +186,21 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     expect(new Set([...branchIds.values()].map(item => item.planHash)).size).toBe(3)
     expect(new Set([...branchIds.values()].map(item => item.approvalId)).size).toBe(3)
     expect(new Set([...branchIds.values()].map(item => item.targetId)).size).toBe(3)
+
+    // The one file Task 3's `verify_journey` (`orchestrator.
+    // read_browser_evidence`) requires to run at all — without this, phase
+    // 5 of the real gate has no input and fails closed on every run.
+    writeBrowserEvidence(RUN_MANIFEST_PATH, journey.runId, journeyId, {
+      turnId,
+      agentId,
+      sessionId,
+      ontologyReleaseId: journey.ontology_release_id,
+      modelConfigVersionId: journey.model_config_version_id,
+      planBranches: (['approved', 'rejected', 'expired'] as const).map(branch => {
+        const ids = branchIds.get(branch)
+        if (!ids) throw new Error(`missing recorded plan identity for branch ${branch}`)
+        return { branch, action_plan_id: ids.planId, plan_hash: ids.planHash }
+      }),
+    })
   })
 }
