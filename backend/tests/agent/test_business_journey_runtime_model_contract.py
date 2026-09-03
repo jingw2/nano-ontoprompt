@@ -27,7 +27,11 @@ from app.models.entity_instance import EntityInstance
 from app.models.ontology import OntologyProject
 from app.models.user import User
 import app.services.model_config_selector as model_config_selector
-from app.runtime.langgraph_runtime import LangGraphRuntime, RuntimeModelError
+from app.runtime.langgraph_runtime import (
+    LangGraphRuntime,
+    RuntimeModelError,
+    journey_system_instruction,
+)
 from app.runtime.protocol import TurnRuntimeContext
 from app.services.runtime.turn_plans import create_governed_plan_from_turn
 from evals.business_journeys.contracts import (
@@ -62,13 +66,19 @@ def deepseek_transport(monkeypatch):
     `/models` preflight probe without touching anything else."""
     queue: list[dict] = []
     calls: list[str] = []
-    state = SimpleNamespace(queue=queue, calls=calls, models_available=[MODEL_ID], preflight_calls=0)
+    # Every real outgoing `/chat/completions` request body, in call order —
+    # so a test can assert what was ACTUALLY sent to the provider (messages,
+    # response schema), not merely what a helper returns.
+    bodies: list[dict] = []
+    state = SimpleNamespace(queue=queue, calls=calls, bodies=bodies,
+                            models_available=[MODEL_ID], preflight_calls=0)
 
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/models":
             state.preflight_calls += 1
             return httpx.Response(200, json={"data": [{"id": m} for m in state.models_available]})
         calls.append(request.url.path)
+        bodies.append(json.loads(request.content.decode("utf-8")))
         structured = queue.pop(0)
         return httpx.Response(200, json={
             "model": MODEL_ID,
@@ -195,6 +205,97 @@ def test_business_journey_turn_uses_deepseek_vision_caller_for_both_completions(
 
     totals = ledger.totals(RUN_ID, JOURNEY_ID)
     assert totals["logical_model_calls"] == 2
+
+
+def test_business_journey_completions_carry_the_protocol_instruction_on_the_wire(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """Final whole-branch review, Critical Finding 1 + Important Finding 2:
+    the journey protocol sent NO system prompt and left `automatic_action`/
+    `tool_call` optional-and-undescribed, so nothing told the model to
+    produce the evidence the rest of the chain reads back.
+
+    This asserts against the REAL outgoing `/chat/completions` request
+    bodies the transport received — the same standard the `/models`
+    preflight and the `action` enum were held to — not against the helper
+    that builds them. A live provider cannot be made to obey the
+    instruction here (no key), but it can be proven the instruction is
+    genuinely constructed and sent, names the journey's own low-risk
+    action, and states the `instance_id` -> `target_fixture_id` mapping.
+    """
+    deepseek_transport.queue.append({
+        "tool_call": {"descriptor_id": "query:ontology-001", "query": "below safety stock"},
+        "answer": None,
+    })
+    deepseek_transport.queue.append({
+        "answer": "Supplier MAT001 is below safety stock.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+    })
+    context = _context(
+        model_config_version_id=pinned_model_config_version_id,
+        extra={
+            "user_id": str(uuid.uuid4()),
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+            "ontology_tool_selection": [{"ontology_id": "ontology-001", "selected_tools": []}],
+        },
+    )
+    runtime = LangGraphRuntime(db=db, gateway=_FakeGateway({"items": []}), max_tool_rounds=1)
+    events = _run(runtime, context)
+    assert any(e.event_type == "turn_succeeded" for e in events), [e.payload for e in events]
+
+    assert len(deepseek_transport.bodies) == 2
+    initial_body, final_body = deepseek_transport.bodies
+
+    # -- the initial completion: a system message that requires a tool call
+    initial_system = [m for m in initial_body["messages"] if m["role"] == "system"]
+    assert len(initial_system) == 1
+    initial_text = initial_system[0]["content"]
+    assert "tool_call" in initial_text
+    assert "MUST propose exactly one tool call" in initial_text
+    assert "`tool_call: null`" in initial_text
+    # ...and it did not displace the user's own question.
+    user_parts = [m for m in initial_body["messages"] if m["role"] == "user"][0]["content"]
+    assert any(part["text"] == context.user_message for part in user_parts)
+    assert initial_body["response_format"]["json_schema"]["schema"]["properties"]["tool_call"]["description"]
+
+    # -- the final completion: a system message that requires the automatic
+    #    action, names THIS journey's action, and bridges instance_id
+    final_system = [m for m in final_body["messages"] if m["role"] == "system"]
+    assert len(final_system) == 1
+    final_text = final_system[0]["content"]
+    assert "MUST also populate `automatic_action`" in final_text
+    assert repr(JOURNEY_LOW_RISK_ACTION) in final_text
+    assert "`automatic_action.target_fixture_id` must be copied VERBATIM from the "\
+           "`instance_id` field" in final_text
+    assert "`automatic_action: null` only when the tool result contains no rows" in final_text
+
+    # -- and the same two facts are ALSO on the response schema itself
+    automatic_action = (
+        final_body["response_format"]["json_schema"]["schema"]["properties"]["automatic_action"]
+    )
+    assert automatic_action["properties"]["action"]["enum"] == [JOURNEY_LOW_RISK_ACTION]
+    assert JOURNEY_LOW_RISK_ACTION in automatic_action["properties"]["action"]["description"]
+    assert "instance_id" in automatic_action["properties"]["target_fixture_id"]["description"]
+    assert "REQUIRED whenever the tool result contains at least one row" in automatic_action["description"]
+
+    # -- the instruction rides the two completions that already exist: no
+    #    third call, no extra HTTP attempt (budget contract unchanged).
+    assert deepseek_transport.calls == ["/chat/completions", "/chat/completions"]
+
+
+def test_journey_system_instruction_is_journey_specific_and_rejects_unknown_call_kinds():
+    """The instruction text is derived from the journey's OWN manifest
+    `low_risk_action` (threaded through `_prepare`), never a hardcoded
+    literal: a different action value produces different instruction text."""
+    finance = journey_system_instruction("agent_final", "journal_entry")
+    assert "'journal_entry'" in finance
+    assert "risk_label" not in finance
+    # A manifest that declares no low-risk action constrains nothing, exactly
+    # like `_agent_final_response_schema`'s own empty-value behaviour.
+    unconstrained = journey_system_instruction("agent_final", "")
+    assert "automatic_action" not in unconstrained
+    with pytest.raises(ValueError, match="UNKNOWN_JOURNEY_CALL_KIND"):
+        journey_system_instruction("agent_middle", "risk_label")
 
 
 def test_business_journey_turn_requires_a_successful_models_preflight_before_either_completion(

@@ -266,3 +266,104 @@ def test_session_close_204(schema):
             assert r.status_code == 423
     finally:
         session.close()
+
+
+def _seed_tool_execution(session, *, turn_id: str, execution_id: str, status: str = "succeeded",
+                         result_hash: str | None = "b" * 64) -> None:
+    session.execute(text(
+        "INSERT INTO agent_tool_executions "
+        "(id, turn_id, idempotency_key, status, descriptor, parameters_hash, result_hash, "
+        "created_at, updated_at) "
+        "VALUES (:id, :turn, :key, :status, CAST(:descriptor AS json), :ph, :rh, now(), now())"
+    ), {"id": execution_id, "turn": turn_id, "key": execution_id, "status": status,
+        "descriptor": '{"descriptor_id": "query:o-1"}', "ph": "a" * 64, "rh": result_hash})
+    session.commit()
+
+
+def test_turn_tool_evidence_returns_the_persisted_execution(schema):
+    """`GET /agent-turns/{turn_id}/tool-evidence` is on the critical path for
+    governed-plan creation: the browser reads the REAL persisted
+    `result_hash` from here to compute the `payload_digest` that
+    `POST /api/v2/runtime/action-plans/from-turn` validates. Parked as a
+    minor by Task 4's review (registration/manifest coverage only), fixed in
+    the final review round with a direct test of the real route."""
+    session = _session(schema)
+    _seed(session)
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'editor'})}"}
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            r = c.post("/api/v1/agents/a-1/sessions", json={}, headers=headers)
+            session_id = r.json()["data"]["id"]
+            c.post(f"/api/v1/agent-sessions/{session_id}/turns",
+                   json={"user_message": "Hello", "turn_id": "turn-evidence"},
+                   headers={**headers, "Idempotency-Key": "ag-turn-evid-0000001"})
+
+            # no tool execution yet -> 404, not an empty/None-filled body
+            r = c.get("/api/v1/agent-turns/turn-evidence/tool-evidence", headers=headers)
+            assert r.status_code == 404
+
+            _seed_tool_execution(session, turn_id="turn-evidence", execution_id="tex-1")
+            r = c.get("/api/v1/agent-turns/turn-evidence/tool-evidence", headers=headers)
+            assert r.status_code == 200
+            assert r.json()["data"] == {
+                "tool_execution_id": "tex-1", "status": "succeeded", "result_hash": "b" * 64,
+            }
+
+            # the SAME row `turn_plans._load_tool_evidence` reads: oldest
+            # first, exactly one, never the newer row.
+            _seed_tool_execution(session, turn_id="turn-evidence", execution_id="tex-2",
+                                 result_hash="c" * 64)
+            r = c.get("/api/v1/agent-turns/turn-evidence/tool-evidence", headers=headers)
+            assert r.json()["data"]["tool_execution_id"] == "tex-1"
+
+            # an unknown turn is indistinguishable from one with no evidence
+            assert c.get("/api/v1/agent-turns/turn-missing/tool-evidence",
+                         headers=headers).status_code == 404
+    finally:
+        session.close()
+
+
+def test_turn_tool_evidence_enforces_the_same_grant_and_ownership_check(schema):
+    """Same existence-hiding contract as every other turn-scoped route: a
+    user with no active `run` grant on the agent gets 404, never the real
+    `result_hash` a governed plan's `payload_digest` is built from."""
+    session = _session(schema)
+    _seed(session)
+    stranger_id = str(uuid.uuid4())
+    session.execute(text(
+        "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+        "VALUES (:id,'st2','st2@t.com','h','editor',true,:d,now(),now())"
+    ), {"id": stranger_id, "d": DEFAULT_DOMAIN})
+    session.commit()
+    owner_headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'editor'})}"}
+    stranger_headers = {"Authorization": f"Bearer {create_access_token({'sub': stranger_id, 'role': 'editor'})}"}
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            r = c.post("/api/v1/agents/a-1/sessions", json={}, headers=owner_headers)
+            session_id = r.json()["data"]["id"]
+            c.post(f"/api/v1/agent-sessions/{session_id}/turns",
+                   json={"user_message": "Hello", "turn_id": "turn-evid-own"},
+                   headers={**owner_headers, "Idempotency-Key": "ag-turn-evid-0000002"})
+            _seed_tool_execution(session, turn_id="turn-evid-own", execution_id="tex-own")
+
+            assert c.get("/api/v1/agent-turns/turn-evid-own/tool-evidence",
+                         headers=stranger_headers).status_code == 404
+            # unauthenticated is refused outright
+            assert c.get("/api/v1/agent-turns/turn-evid-own/tool-evidence").status_code in (401, 403)
+            # a run grant alone is not enough: the service ALSO requires the
+            # caller to own the session the turn belongs to.
+            session.execute(text(
+                "INSERT INTO agent_access_grants (id, agent_id, user_id, capabilities, revision, "
+                "status, created_by, created_at, updated_at) "
+                "VALUES (:id, 'a-1', :u, CAST(:caps AS json), 1, 'active', :u, now(), now())"
+            ), {"id": str(uuid.uuid4()), "u": stranger_id, "caps": '["discover", "run"]'})
+            session.commit()
+            assert c.get("/api/v1/agent-turns/turn-evid-own/tool-evidence",
+                         headers=stranger_headers).status_code == 404
+            # the owner still reads it
+            assert c.get("/api/v1/agent-turns/turn-evid-own/tool-evidence",
+                         headers=owner_headers).status_code == 200
+    finally:
+        session.close()
