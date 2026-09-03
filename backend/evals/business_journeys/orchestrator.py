@@ -662,7 +662,9 @@ def _ontology_call_from_manifest(*, output_dir: Path, run_id: str, journey_id: s
     ``run.json``, and this function reads them straight back — the same
     manifest, read the same way, as `_require_granted_mcp_descriptors`.
     Fails closed (`RUN_MANIFEST_PREPARATION_MISSING`) if this journey has no
-    preparation entry, exactly like that check does.
+    preparation entry, exactly like that check does, and
+    (`RUN_MANIFEST_PREPARATION_INCOMPLETE`) if the entry is missing either
+    counter.
     """
     from .api_client import ModelCallRecord
 

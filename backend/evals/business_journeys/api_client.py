@@ -64,6 +64,11 @@ ONTOLOGY_RESPONSE_SCHEMA: Mapping[str, object] = {
         "relations": {"type": "array", "items": {"type": "string"}},
         "relation_edges": {
             "type": "array",
+            "description": (
+                "Every name in `relations` must also appear as the `name` of "
+                "one edge here, verbatim -- a relation named but never given "
+                "an edge cannot be written back."
+            ),
             "items": {
                 "type": "object",
                 "required": ["name", "source", "target"],
@@ -1007,17 +1012,29 @@ class JourneyApiClient:
             elif kind == "model_call" and payload.get("call_kind"):
                 if payload.get("model_config_version_id"):
                     model_config_version_id = str(payload["model_config_version_id"])
+                # `http_attempts`/`retry_count`/`logical_call_index` feed the
+                # HTTP-attempt budget check below (`http_attempts >
+                # MAX_HTTP_ATTEMPTS`) -- a `model_call` event genuinely
+                # missing one of these would silently under-report real
+                # usage and mask a budget violation, the same failure mode
+                # `_preparation_entry` fails closed on for the manifest's
+                # copy of these counters.
+                for _field in ("logical_call_index", "http_attempts", "retry_count"):
+                    if payload.get(_field) is None:
+                        raise JourneyAcceptanceError(
+                            f"MODEL_CALL_EVENT_INCOMPLETE: turn {turn_id} model_call event has no {_field}"
+                        )
                 model_calls.append(ModelCallRecord(
                     call_kind=str(payload["call_kind"]),
-                    logical_call_index=int(payload.get("logical_call_index") or 0),
+                    logical_call_index=int(payload["logical_call_index"]),
                     correlation_id=str(payload.get("correlation_id") or ""),
                     model_caller=str(payload.get("model_caller") or ""),
                     model_origin=str(payload.get("model_origin") or ""),
                     requested_model=str(payload.get("requested_model") or ""),
                     observed_model=str(payload.get("observed_model") or ""),
                     preflight_model_id=str(payload.get("preflight_model_id") or ""),
-                    http_attempts=int(payload.get("http_attempts") or 0),
-                    retry_count=int(payload.get("retry_count") or 0),
+                    http_attempts=int(payload["http_attempts"]),
+                    retry_count=int(payload["retry_count"]),
                 ))
             elif kind == "final_response":
                 audit_event_ids.append(str(payload.get("audit_event_id") or ""))

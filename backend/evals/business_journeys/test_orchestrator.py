@@ -1353,3 +1353,45 @@ def test_create_model_config_refuses_a_non_loopback_api_base(api_base):
     client = JourneyApiClient(api_base, run_id="journey-loopback-guard")
     with pytest.raises(JourneyAcceptanceError, match="API_BASE_NOT_LOOPBACK"):
         client.create_model_config("supply_chain", "sk-should-never-be-sent")
+
+
+@pytest.mark.parametrize("missing_field", ["http_attempts", "retry_count", "logical_call_index"])
+def test_read_journey_evidence_fails_closed_when_a_model_call_event_is_missing_a_counter(missing_field):
+    """The same "invent a number instead of reading the real one" bug fixed
+    for the staging manifest's copy of these counters
+    (`test_verify_fails_closed_when_the_preparation_is_missing_a_budget_counter`)
+    also existed here, one layer closer to the source: `read_journey_evidence`
+    used to build a `ModelCallRecord` with `int(payload.get("http_attempts")
+    or 0)`, so a real `model_call` event genuinely missing one of these
+    fields would silently read as 0 rather than fail closed -- under-
+    reporting the real total the HTTP-attempt budget check
+    (`http_attempts > MAX_HTTP_ATTEMPTS`) sums over, which could mask a real
+    budget violation instead of catching it."""
+    from evals.business_journeys.api_client import JourneyApiClient
+
+    turn_id = "turn-missing-counter"
+    payload = {
+        "call_kind": "agent_initial", "logical_call_index": 2,
+        "http_attempts": 1, "retry_count": 0,
+    }
+    del payload[missing_field]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/api/v1/agent-turns/{turn_id}":
+            return httpx.Response(200, json={"data": {"status": "succeeded"}})
+        if request.url.path == f"/api/v1/agent-turns/{turn_id}/events":
+            return httpx.Response(200, json={"data": {"items": [
+                {"sequence": 1, "event_type": "turn_started", "payload": {
+                    "agent_id": "agent-1", "agent_version_id": "agent-version-1",
+                }},
+                {"sequence": 2, "event_type": "model_call", "payload": payload},
+            ]}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    client = JourneyApiClient("http://fake-app.test", run_id="journey-missing-counter-event")
+    client._client = httpx.Client(transport=httpx.MockTransport(handle))
+    with pytest.raises(JourneyAcceptanceError, match="MODEL_CALL_EVENT_INCOMPLETE"):
+        client.read_journey_evidence(
+            "journey-missing-counter-event",
+            browser_evidence={"journey_id": "credit", "turn_id": turn_id},
+        )
