@@ -542,6 +542,9 @@ def verify_journey(
 
     _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
     _require_independent_plan_branches(evidence.plan_branches)
+    _require_granted_mcp_descriptors(
+        evidence, output_dir=output_dir, run_id=run_id, journey_id=journey_id,
+    )
 
     if not evidence.tool_trace_ids:
         raise JourneyAcceptanceError("TOOL_TRACE_MISSING: turn recorded no tool execution")
@@ -655,6 +658,46 @@ def _require_model_call_chain(
             raise JourneyAcceptanceError(f"MODEL_ID_MISMATCH: observed {call.observed_model!r}")
         if call.preflight_model_id != MODEL_ID:
             raise JourneyAcceptanceError(f"MODEL_PROBE_MISSING: {call.preflight_model_id!r}")
+
+
+def _require_granted_mcp_descriptors(
+    evidence: PersistedJourneyEvidence, *, output_dir: Path, run_id: str, journey_id: str,
+) -> None:
+    """Cross-check the descriptor ids the turn actually executed against the
+    descriptors `prepare_journey` really published and granted.
+
+    `agent_id`/`agent_version_id`/`ontology_release_id`/
+    `model_config_version_id` were all already validated against a second,
+    independent source (`_require_matches_persisted`, against the browser
+    evidence document); `mcp_descriptor_ids` was the one identity field with
+    no such cross-check, so nothing noticed that the value collected from
+    the `tool_executed` event was not necessarily a real granted descriptor
+    at all. The second source here is the staging run manifest
+    `prepare_journey` wrote from the application's own published tool
+    catalog (`publish_mcp_descriptors`), read from the SAME `output_dir`
+    this phase already reads the browser evidence from.
+    """
+    manifest = read_run_manifest(output_dir)
+    if manifest.get("run_id") != run_id:
+        raise JourneyAcceptanceError(
+            f"RUN_MANIFEST_MISLABELLED: {manifest.get('run_id')!r} != {run_id!r}"
+        )
+    preparations = [
+        p for p in (manifest.get("preparations") or [])
+        if isinstance(p, Mapping) and p.get("journey_id") == journey_id
+    ]
+    if not preparations:
+        raise JourneyAcceptanceError(f"RUN_MANIFEST_PREPARATION_MISSING: {journey_id}")
+    granted = {str(d) for d in (preparations[0].get("mcp_descriptor_ids") or ())}
+    if not granted:
+        raise JourneyAcceptanceError(f"MCP_DESCRIPTOR_MISSING: no granted descriptors for {journey_id}")
+    if not evidence.mcp_descriptor_ids:
+        raise JourneyAcceptanceError("MCP_DESCRIPTOR_MISSING: turn executed no governed descriptor")
+    ungranted = [d for d in evidence.mcp_descriptor_ids if d not in granted]
+    if ungranted:
+        raise JourneyAcceptanceError(
+            f"MCP_DESCRIPTOR_NOT_GRANTED: {ungranted!r} not in {sorted(granted)!r}"
+        )
 
 
 def _require_independent_plan_branches(branches: Sequence[PlanBranchEvidence]) -> None:

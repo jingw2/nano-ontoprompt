@@ -164,12 +164,22 @@ class DeepSeekVisionClient:
         *,
         response_schema: Mapping[str, object],
         correlation_id: str,
+        system_instruction: str | None = None,
     ) -> ModelResponse:
+        """``system_instruction``, when supplied, is sent as a leading
+        ``system`` role message on the SAME completion -- it never adds a
+        second HTTP request or a second logical model call, so the
+        journey's ``logical_model_calls``/``max_http_attempts`` budget is
+        unaffected."""
         url = f"{OFFICIAL_ORIGIN}{_CHAT_COMPLETIONS_PATH}"
         validate_official_url(url)
+        messages: list[Mapping[str, object]] = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": [_encode_part(part) for part in parts]})
         body = {
             "model": MODEL_ID,
-            "messages": [{"role": "user", "content": [_encode_part(part) for part in parts]}],
+            "messages": messages,
             "response_format": {"type": "json_schema", "json_schema": {"schema": dict(response_schema)}},
         }
 

@@ -676,8 +676,14 @@ class JourneyApiClient:
         by the real runtime), `ontology_release_id` (the `resolve_snapshot`
         event), `model_config_version_id` (each `model_call` event) and
         `mcp_descriptor_ids` (the `tool_executed` events' own
-        `descriptor_id`s) — is read from the turn's own persisted event
-        trace, never trusted from the local browser-evidence file. Whatever
+        `descriptor_id`s, which `LangGraphRuntime._execute_journey_tool_call`
+        resolves from the ontology's OWN published tool catalog — the same
+        catalog `publish_mcp_descriptors` reads — rather than echoing the
+        model's free-text request; `orchestrator._require_granted_mcp_
+        descriptors` then cross-checks them against the descriptors
+        `prepare_journey` actually granted) — is read from the turn's own
+        persisted event trace, never trusted from the local
+        browser-evidence file. Whatever
         the browser file ALSO claims for these fields is cross-checked
         against the real trace and rejected on any mismatch, rather than
         silently read from the file (previously: `agent_id`/

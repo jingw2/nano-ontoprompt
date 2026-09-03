@@ -68,13 +68,18 @@ class DeepSeekVisionCaller:
         parts: Sequence[InputPart],
         *,
         response_schema: Mapping[str, object],
+        system_instruction: str | None = None,
     ) -> ModelResponse:
+        """``system_instruction`` rides the SAME completion as a leading
+        ``system`` message (see ``DeepSeekVisionClient.complete``); it is
+        one logical call and one ledger lease either way."""
         self._validate_config(context)
         lease = self._ledger.begin_logical_call(context)
 
         try:
             response = self._client.complete(
-                parts, response_schema=response_schema, correlation_id=context.correlation_id
+                parts, response_schema=response_schema, correlation_id=context.correlation_id,
+                system_instruction=system_instruction,
             )
         except DeepSeekRetryExhausted as exc:
             for attempt_no in range(1, getattr(exc, "http_attempts", 2) + 1):

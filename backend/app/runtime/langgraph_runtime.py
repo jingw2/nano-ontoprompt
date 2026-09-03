@@ -70,18 +70,49 @@ _PREVIEW_ACTION = "ontology.preview_action"
 # separate two-completion protocol (`agent_initial` decides at most one
 # governed query tool call; `agent_final` answers using that tool's result),
 # not a drop-in swap of the generic loop's model caller.
+#
+# Both schemas carry `description` text on every field the downstream chain
+# depends on, and both completions are additionally addressed with a
+# `system` instruction message (`journey_system_instruction`) — a final
+# whole-branch review found that neither existed, so nothing ever told the
+# model that this protocol REQUIRES a tool call on the first completion and
+# an `automatic_action` on the second, nor that `automatic_action.
+# target_fixture_id` must be copied from the tool result's own
+# `instance_id` field (`app.services.ontology_tools._read_instances`
+# returns the target id under that name, and nothing else in the payload
+# carries it). Both are instruction content on the two calls that already
+# exist — no third completion, no extra HTTP attempt.
+_TARGET_FIXTURE_ID_DESCRIPTION = (
+    "The id of the tool result row this recommendation concerns. Copy it VERBATIM from that "
+    "row's `instance_id` field in the tool result JSON — never from `entity_id`, never from "
+    "any `row_data` field, never invented, reformatted, or shortened."
+)
 AGENT_INITIAL_RESPONSE_SCHEMA: dict = {
     "type": "object",
     "required": ["tool_call"],
     "properties": {
         "tool_call": {
             "type": ["object", "null"],
+            "description": (
+                "REQUIRED for a data question: always request the governed ontology query tool "
+                "here instead of answering from memory. Use null only if the question needs no "
+                "data at all."
+            ),
             "properties": {
-                "descriptor_id": {"type": "string"},
-                "query": {"type": "string"},
+                "descriptor_id": {
+                    "type": "string",
+                    "description": "The governed query tool descriptor to call.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Keywords to match against the ontology's instance data.",
+                },
             },
         },
-        "answer": {"type": ["string", "null"]},
+        "answer": {
+            "type": ["string", "null"],
+            "description": "Leave null on this completion; the answer is produced after the tool result.",
+        },
     },
 }
 AGENT_FINAL_RESPONSE_SCHEMA: dict = {
@@ -100,9 +131,14 @@ AGENT_FINAL_RESPONSE_SCHEMA: dict = {
         # it is the only party that has seen those real ids.
         "automatic_action": {
             "type": ["object", "null"],
+            "description": (
+                "REQUIRED whenever the tool result contains at least one row: name the one "
+                "low-risk action this turn applies automatically, and the tool result row it "
+                "applies to. Use null only when the tool result contains no rows at all."
+            ),
             "properties": {
-                "target_fixture_id": {"type": "string"},
-                "action": {"type": "string"},
+                "target_fixture_id": {"type": "string", "description": _TARGET_FIXTURE_ID_DESCRIPTION},
+                "action": {"type": "string", "description": "The journey's one low-risk action name."},
             },
         },
     },
@@ -127,8 +163,70 @@ def _agent_final_response_schema(expected_low_risk_action: str) -> dict:
     provider; it does not replace the validation."""
     schema = copy.deepcopy(AGENT_FINAL_RESPONSE_SCHEMA)
     if expected_low_risk_action:
-        schema["properties"]["automatic_action"]["properties"]["action"]["enum"] = [expected_low_risk_action]
+        action_property = schema["properties"]["automatic_action"]["properties"]["action"]
+        action_property["enum"] = [expected_low_risk_action]
+        action_property["description"] = (
+            f"Must be exactly {expected_low_risk_action!r} — the one low-risk action this journey "
+            "applies automatically."
+        )
     return schema
+
+
+def journey_system_instruction(call_kind: str, expected_low_risk_action: str) -> str:
+    """The `system` message that tells the model what THIS business-journey
+    completion is required to produce.
+
+    A final whole-branch review found the journey protocol sent no system
+    prompt at all (`_prepare`'s `self._system_prompt` is only ever consumed
+    by the generic `_build_messages_and_tools` path), so `automatic_action`
+    and `tool_call` — both nullable/optional by schema — had nothing asking
+    the model to populate them. An absent `automatic_action` makes
+    `_execute_journey_automatic_action` return `None`, which drops
+    `sandbox_receipt_id`/`receipt_id`/`audit_event_id` from the
+    `final_response` payload that both the browser assertions and
+    `verify_journey` require, so this instruction is load-bearing, not
+    cosmetic.
+
+    Returned as instruction content on the two completions that already
+    exist — it never adds a model call or an HTTP attempt, so the
+    `logical_model_calls == 3` / `max_http_attempts: 6` / `tool_rounds == 1`
+    budget contract is unchanged.
+    """
+    header = (
+        "You are the Agent runtime for one governed business-journey turn. Answer strictly from "
+        "the governed ontology data you are given; never invent identifiers or figures."
+    )
+    if call_kind == "agent_initial":
+        return "\n".join([
+            header,
+            "This is the FIRST of two completions and it may not answer the question.",
+            "The question always concerns data held in the connected ontology, so you MUST "
+            "propose exactly one tool call: put the governed query tool's descriptor in "
+            "`tool_call.descriptor_id` and the keywords to look up in `tool_call.query`. "
+            "Do not return `tool_call: null` and do not answer from memory.",
+            "Leave `answer` null — the next completion answers, using the tool result.",
+        ])
+    if call_kind == "agent_final":
+        lines = [
+            header,
+            "This is the SECOND of two completions. You are given the original question and, "
+            "when a tool call was made, that tool's JSON result.",
+            "Answer using ONLY that tool result, and populate every required field.",
+        ]
+        if expected_low_risk_action:
+            lines.extend([
+                "When the tool result contains at least one row you MUST also populate "
+                "`automatic_action` — this turn applies one low-risk action automatically and "
+                "the run fails if you omit it:",
+                f"  - `automatic_action.action` must be exactly {expected_low_risk_action!r}.",
+                "  - `automatic_action.target_fixture_id` must be copied VERBATIM from the "
+                "`instance_id` field of the tool result row your recommendation concerns "
+                "(the tool result returns each row's id under the name `instance_id`; never "
+                "use `entity_id`, a `row_data` field, or an id of your own).",
+                "Return `automatic_action: null` only when the tool result contains no rows.",
+            ])
+        return "\n".join(lines)
+    raise ValueError(f"UNKNOWN_JOURNEY_CALL_KIND: {call_kind!r}")
 
 
 class RuntimeModelError(Exception):
@@ -504,6 +602,8 @@ class LangGraphRuntime:
             initial = caller.complete(
                 self._journey_context(context, call_kind="agent_initial", logical_call_index=2),
                 [question_part], response_schema=AGENT_INITIAL_RESPONSE_SCHEMA,
+                system_instruction=journey_system_instruction(
+                    "agent_initial", self._journey_low_risk_action or ""),
             )
         except BusinessJourneyModelError as exc:
             raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
@@ -525,6 +625,8 @@ class LangGraphRuntime:
             final = caller.complete(
                 self._journey_context(context, call_kind="agent_final", logical_call_index=3),
                 final_parts, response_schema=_agent_final_response_schema(self._journey_low_risk_action or ""),
+                system_instruction=journey_system_instruction(
+                    "agent_final", self._journey_low_risk_action or ""),
             )
         except BusinessJourneyModelError as exc:
             raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
@@ -610,6 +712,19 @@ class LangGraphRuntime:
             "retry_count": response.retry_count,
         })
 
+    def _published_query_descriptor_id(self, ontology_id: str) -> str:
+        """The real MCP descriptor id the ontology exposes for its governed
+        instance-read tool, read from the SAME catalog `GET /api/v1/
+        ontologies/{id}/tools` serves — which is exactly where
+        `evals.business_journeys.api_client.publish_mcp_descriptors` reads
+        the descriptor ids `prepare_journey` grants the Agent."""
+        catalog = ontology_tool_catalog(self.db, ontology_id)
+        for tool in catalog.get("tools") or []:
+            if tool.get("capability") == "read_instances" and tool.get("descriptor_id"):
+                return str(tool["descriptor_id"])
+        raise RuntimeModelError(
+            "TOOL_UNSUPPORTED", f"ontology {ontology_id} exposes no read_instances descriptor")
+
     def _execute_journey_tool_call(self, context: TurnRuntimeContext, events: list[RuntimeEvent],
                                    tool_call: dict) -> dict:
         """The one governed MCP/query call/result a business-journey turn is
@@ -623,12 +738,25 @@ class LangGraphRuntime:
         reads this table, not the ephemeral `tool_executed` event — has a
         real row to find. A query-category call needs no approval, so this
         writes the row directly in its terminal ('succeeded'/'failed')
-        status rather than 'proposed'."""
-        descriptor_id = str(tool_call.get("descriptor_id") or _READ_INSTANCES)
+        status rather than 'proposed'.
+
+        The `descriptor_id` reported on the `tool_executed` event (and
+        hashed into `parameters_hash`) is the ontology's OWN published MCP
+        query descriptor, resolved server-side from the release catalog —
+        never the model's free-text `tool_call.descriptor_id` and never the
+        internal gateway descriptor name `_READ_INSTANCES`. A final
+        whole-branch review found this event echoed the model's string,
+        which silently changed what `mcp_descriptor_ids` (collected from
+        exactly this field by `evals.business_journeys.api_client.
+        read_journey_evidence`) means: a model-authored label rather than a
+        real granted descriptor. It is also the value the browser spec's
+        `journey-tool-trace` assertion compares against the descriptors
+        `prepare_journey` actually published."""
         if not self._bindings:
             raise RuntimeModelError("TOOL_UNSUPPORTED", "turn has no bound ontology")
         binding = self._bindings[0]
         ontology_id = binding["ontology_id"]
+        descriptor_id = self._published_query_descriptor_id(ontology_id)
         release_id = self._release_by_ontology.get(ontology_id)
         query_text = str(tool_call.get("query") or "")
         parameters = {

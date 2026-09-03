@@ -107,6 +107,14 @@ def _plan_branch_payload(run_id: str, journey_id: str, branch: str) -> dict[str,
     }
 
 
+def _granted_query_descriptor_id(journey_id: str) -> str:
+    """The query descriptor id this fake application publishes for the
+    journey's ontology (see `_create_ontology`/`_ontology_tools`) — the one
+    `prepare_journey` records in the staging run manifest and the one a real
+    turn's `tool_executed` event therefore has to carry."""
+    return f"query:{_uuid_for(f'{journey_id}:ontology')}"
+
+
 def browser_evidence_document(run_id: str, journey_id: str) -> dict[str, Any]:
     """The document Task 4's browser run writes into ``output_dir`` — the
     only place ``verify_journey`` learns which persisted records to read."""
@@ -119,7 +127,7 @@ def browser_evidence_document(run_id: str, journey_id: str) -> dict[str, Any]:
         "session_id": _uuid_for(f"{run_id}:{journey_id}:session"),
         "turn_id": _uuid_for(f"{run_id}:{journey_id}:turn"),
         "ontology_release_id": _uuid_for(f"{run_id}:{journey_id}:release"),
-        "mcp_descriptor_ids": [f"query:{_uuid_for(f'{run_id}:{journey_id}:ontology')}"],
+        "mcp_descriptor_ids": [_granted_query_descriptor_id(journey_id)],
         "model_config_version_id": _uuid_for(f"{run_id}:{journey_id}:model-version"),
         "plan_branches": [
             _plan_branch_payload(run_id, journey_id, branch)
@@ -385,8 +393,16 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
             "model_config_version_id": _uuid_for(f"{run_id}:{journey_id}:model-version"),
             "http_attempts": 1, "retry_count": 0,
         }},
+        # The REAL published query descriptor of the SAME ontology this fake
+        # application creates and publishes for the journey (`_create_ontology`
+        # and `_ontology_tools` both key off `_uuid_for(f"{journey_id}:
+        # ontology")`) — `LangGraphRuntime._execute_journey_tool_call` resolves
+        # this id from the ontology's own published catalog, so a trace using a
+        # run-scoped id here would describe something the real application can
+        # never emit, and `_require_granted_mcp_descriptors` would (correctly)
+        # reject it.
         {"sequence": 4, "event_type": "tool_executed", "payload": {
-            "descriptor_id": f"query:{_uuid_for(f'{run_id}:{journey_id}:ontology')}",
+            "descriptor_id": _granted_query_descriptor_id(journey_id),
             "outcome": "allowed", "correlation_id": f"tool:{turn_id}",
         }},
         {"sequence": 5, "event_type": "model_call", "payload": {
@@ -514,11 +530,51 @@ def _satisfying_value(predicate: Mapping) -> float:
     }.get(op, value)
 
 
+def write_staging_run_manifest(
+    output_dir: Path, run_id: str, journey_id: str, *, mcp_descriptor_ids: list[str] | None = None,
+) -> Path:
+    """Stand in for the staging run manifest ``prepare_journey`` writes.
+
+    ``verify_journey`` reads this file back to cross-check the descriptor
+    ids the turn actually executed against the ones preparation really
+    published and granted (``_require_granted_mcp_descriptors``), so a
+    verify-only test needs one on disk. ``test_verify_cross_checks_
+    descriptors_against_a_real_prepared_run_manifest`` covers the same
+    check against a manifest written by the REAL ``prepare_all_journeys``.
+    """
+    if mcp_descriptor_ids is None:
+        mcp_descriptor_ids = [_granted_query_descriptor_id(journey_id)]
+    path = Path(output_dir) / "business_journeys" / "staging" / "run.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document: dict[str, Any] = {
+        "schema_version": 1, "run_id": run_id, "model_caller": "DeepSeekVisionCaller",
+        "model_origin": OFFICIAL_ORIGIN, "requested_model_id": MODEL_ID, "preparations": [],
+    }
+    if path.exists():
+        document = json.loads(path.read_text(encoding="utf-8"))
+    document["preparations"] = [
+        entry for entry in document.get("preparations") or []
+        if entry.get("journey_id") != journey_id
+    ] + [{
+        "journey_id": journey_id,
+        "ontology_id": _uuid_for(f"{journey_id}:ontology"),
+        "ontology_release_id": _uuid_for(f"{run_id}:{journey_id}:release"),
+        "mcp_descriptor_ids": list(mcp_descriptor_ids),
+        "status": "passed",
+    }]
+    path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def write_browser_evidence(
     output_dir: Path, run_id: str, journey_id: str, document: Mapping[str, Any] | None = None,
+    *, staging_manifest: bool = True,
 ) -> dict:
     """Materialize the browser evidence document ``verify_journey`` reads,
-    and register its records with the read-only fake routes."""
+    and register its records with the read-only fake routes.
+
+    ``staging_manifest=False`` leaves the staging run manifest alone, for a
+    test that wrote a real one with ``prepare_all_journeys`` first."""
     base = browser_evidence_document(run_id, journey_id)
     if document is not None:
         base.update(document)
@@ -530,6 +586,8 @@ def write_browser_evidence(
     target = Path(output_dir) / "business_journeys" / "browser" / f"{run_id}.{journey_id}.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    if staging_manifest:
+        write_staging_run_manifest(output_dir, run_id, journey_id)
     return document
 
 
@@ -742,6 +800,52 @@ def test_run_manifest_never_carries_agent_ids_prompts_or_credentials(prepared_jo
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
+
+
+def test_verify_cross_checks_descriptors_against_a_real_prepared_run_manifest(
+    prepared_journeys, fake_api,
+):
+    """Final whole-branch review: `mcp_descriptor_ids` was the ONE identity
+    field with no cross-check against a second source, so the value collected
+    from `tool_executed.descriptor_id` could be anything at all. Here the
+    staging run manifest is written by the REAL `prepare_all_journeys` (not a
+    stub), and the persisted trace's descriptor is only accepted because it
+    genuinely is one of the descriptors preparation published and granted."""
+    prepare_all_journeys(
+        api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-granted-descriptors",
+        before_journey=prepared_journeys,
+    )
+    granted = {
+        entry["journey_id"]: entry["mcp_descriptor_ids"]
+        for entry in read_run_manifest(Path("artifacts"))["preparations"]
+    }
+    assert _granted_query_descriptor_id("credit") in granted["credit"]
+
+    write_browser_evidence(
+        Path("artifacts"), "journey-granted-descriptors", "credit", staging_manifest=False,
+    )
+    verification = verify_journey(
+        "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+        run_id="journey-granted-descriptors",
+    )
+    assert verification.mcp_descriptor_ids == (_granted_query_descriptor_id("credit"),)
+
+
+def test_verify_rejects_a_descriptor_the_preparation_never_granted(fake_api):
+    """The negative half of the same cross-check: a turn that executed a
+    descriptor outside the granted set must fail closed, not be recorded as
+    passing evidence."""
+    write_browser_evidence(Path("artifacts"), "journey-ungranted", "credit")
+    write_staging_run_manifest(
+        Path("artifacts"), "journey-ungranted", "credit",
+        mcp_descriptor_ids=["query:some-other-ontology"],
+    )
+    with pytest.raises(JourneyAcceptanceError, match="MCP_DESCRIPTOR_NOT_GRANTED"):
+        verify_journey(
+            "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+            run_id="journey-ungranted",
+        )
 
 
 def test_verify_reads_only_persisted_evidence(fake_api):

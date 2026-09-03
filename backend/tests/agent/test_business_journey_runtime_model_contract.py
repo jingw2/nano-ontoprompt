@@ -292,6 +292,25 @@ def test_business_journey_turn_requires_the_deepseek_api_key_env_var(
     assert failed.payload["error_code"] == "DEEPSEEK_API_KEY_REQUIRED"
 
 
+def _published_projection(entity_id: str, ontology_id: str) -> dict:
+    """A release `manifest_projection` shaped like the real publication
+    compiler's output (`app.services.publication.compiler._tool_descriptors`):
+    entities PLUS the built-in query tool descriptor. The runtime resolves
+    the governed query descriptor id it reports from exactly this catalog,
+    so a projection without `tool_descriptors` describes a release the real
+    compiler can never produce."""
+    return {
+        "entities": [{"id": entity_id}],
+        "tool_descriptors": [{
+            "descriptor_id": f"query:{ontology_id}",
+            "version": 1,
+            "source_kind": "builtin",
+            "source_id": "query",
+            "capability": "read_instances",
+        }],
+    }
+
+
 def _sha256_json(value) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -338,7 +357,7 @@ def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creatio
         "VALUES (:id, :oid, 1, 'v1', :mb, :proj, :sh, 'published', :cb, CURRENT_TIMESTAMP)"
     ), {
         "id": release_id, "oid": project.id, "mb": b"manifest",
-        "proj": json.dumps({"entities": [{"id": entity.id}]}),
+        "proj": json.dumps(_published_projection(entity.id, project.id)),
         "sh": b"schema-hash-0000000000000000000000", "cb": user.id,
     })
     project.latest_published_release_id = release_id
@@ -373,7 +392,10 @@ def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creatio
     db.commit()
 
     deepseek_transport.queue.append({
-        "tool_call": {"descriptor_id": f"query:{project.id}", "query": "below safety stock"},
+        # Deliberately NOT the ontology's real published descriptor: the
+        # runtime resolves the reported descriptor server-side from the
+        # published catalog and must ignore whatever the model names here.
+        "tool_call": {"descriptor_id": "whatever-the-model-said", "query": "below safety stock"},
         "answer": None,
     })
     response_content = "Supplier MAT001 is below safety stock."
@@ -407,6 +429,11 @@ def test_business_journey_turn_persists_real_tool_evidence_governed_plan_creatio
 
     tool_events = [e for e in events if e.event_type == "tool_executed"]
     assert len(tool_events) == 1
+    # Final whole-branch review, Finding 3: the descriptor id this event
+    # carries (the one `read_journey_evidence` collects into
+    # `mcp_descriptor_ids`) is the ontology's OWN published MCP descriptor,
+    # resolved server-side — never the model's free-text request above.
+    assert tool_events[0].payload["descriptor_id"] == f"query:{project.id}"
     tool_execution_id = tool_events[0].payload["tool_execution_id"]
 
     # Confirm the row is REAL — read it back independently of the runtime.
