@@ -66,10 +66,22 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     await page.getByTestId('agent-model-version').selectOption(journey.model_config_version_id)
     await page.getByTestId('agent-ontology-release-picker').click()
     await page.getByRole('option', { name: journey.ontology_release_id, exact: true }).click()
+    // Binding an ontology (the release click above) auto-selects every one
+    // of its published tool descriptors (`useOntologyToolSelection.
+    // bindOntology` enables every category, and the `loadTools` response
+    // that follows seeds `selected_tools` with every matching descriptor)
+    // -- and `journey.mcp_descriptor_ids` IS that same ontology's full
+    // published catalog (`JourneyApiClient.publish_mcp_descriptors` reads
+    // the identical `GET .../tools` list), so every descriptor is already
+    // selected by the time this picker opens. This only confirms that
+    // default state; it must never click an already-selected option, since
+    // this picker toggles a click on a selected option OFF -- clicking here
+    // would deselect the very descriptors this test goes on to verify.
     await page.getByTestId('agent-mcp-tool-picker').click()
     for (const descriptorId of journey.mcp_descriptor_ids) {
-      await page.getByRole('option', { name: descriptorId, exact: true }).click()
+      await expect(page.getByRole('option', { name: descriptorId, exact: true })).toHaveAttribute('aria-selected', 'true')
     }
+    await page.getByTestId('agent-mcp-tool-picker').click()
     await page.getByTestId('agent-create-submit').click()
     await expect(page.getByTestId('journey-agent-binding')).toContainText(journey.ontology_release_id)
     await expect(page.getByTestId('journey-agent-binding')).toContainText(journey.model_config_version_id)
@@ -79,15 +91,29 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     const agentIdMatch = /\/agents\/([^/?#]+)/.exec(page.url())
     if (!agentIdMatch) throw new Error(`could not read agent id from URL: ${page.url()}`)
     const agentId = agentIdMatch[1]
-    // Real, persisted MCP-descriptor-binding evidence: `ToolConfigTab`
-    // renders the active version's own `ontology_bindings[0].selected_
-    // tools[0]` from a fresh `agentDetailApi.versions(id)` round trip taken
-    // on this page's own mount -- not the wizard's in-memory selection --
-    // so this proves the descriptor picked in the wizard above actually
-    // persisted server-side, not just that the wizard's own UI state still
-    // held it after submit.
-    await page.getByRole('button', { name: /Tools|工具/ }).click()
-    await expect(page.getByTestId('journey-mcp-tool')).toContainText(journey.mcp_descriptor_ids[0])
+    // Real, persisted MCP-descriptor-binding evidence, read from the exact
+    // server response rather than the DOM: `ToolConfigTab` re-derives
+    // `selected_tools` from a fresh tool-catalog fetch on every mount
+    // whenever `enabled_categories` is set (which it always is), so it
+    // ALWAYS displays "first tool in the catalog" regardless of what was
+    // actually persisted -- no DOM assertion on that tab can prove
+    // persistence. Reloading and intercepting the real, authenticated
+    // `GET /api/v1/agents/{id}/versions` the page itself issues on mount
+    // (`agentDetailApi.versions`, the same call `ToolConfigTab` also reads
+    // from) reads the true stored row before any client-side recompute.
+    const [versionsResponse] = await Promise.all([
+      page.waitForResponse(response =>
+        new URL(response.url()).pathname === `/api/v1/agents/${agentId}/versions`
+        && response.request().method() === 'GET'),
+      page.reload(),
+    ])
+    const versionsBody = await versionsResponse.json() as {
+      items?: { ontology_bindings?: { selected_tools?: string[] }[] }[]
+    }
+    const persistedSelectedTools = versionsBody.items?.[0]?.ontology_bindings?.[0]?.selected_tools ?? []
+    for (const descriptorId of journey.mcp_descriptor_ids) {
+      expect(persistedSelectedTools).toContain(descriptorId)
+    }
     await page.getByRole('button', { name: /Agent Application|智能体应用/ }).click()
     await page.getByTestId('session-new').click()
     await page.getByTestId('conversation-input').fill(journey.dialogues.governed_turn.question)
