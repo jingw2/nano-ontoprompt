@@ -15,6 +15,7 @@ import pytest
 from evals.business_journeys.artifacts import (
     REPO_ROOT,
     ArtifactAllowlist,
+    _check_deterministic_report,
     build_fixture_forbidden_values,
     sanitize_browser_artifacts,
     scan_and_materialize,
@@ -188,3 +189,51 @@ def test_allowlist_rejects_unknown_fields():
     payload["raw_prompt"] = "leaked prompt text"
     with pytest.raises(Exception):
         ArtifactAllowlist.model_validate(payload)
+
+
+def _clean_deterministic_report() -> dict:
+    return {
+        "model_calls": 0,
+        "missing": [],
+        "duplicates": [],
+        "results": [
+            {"case_id": "supply-chain-normal-pipeline-release", "status": "passed", "skipped": False},
+            {"case_id": "finance-normal-pipeline-release", "status": "passed", "skipped": False},
+        ],
+    }
+
+
+def test_check_deterministic_report_passes_none_through_unchecked():
+    """The CI workflow's `if: always()` scan step ran with no
+    `--deterministic-report` flag until this fix -- confirming ``None``
+    (the flag's own default) is treated as "not supplied, skip the check"
+    documents the exact gap the flag closes, not a new behavior."""
+    assert _check_deterministic_report(None) is None
+
+
+def test_check_deterministic_report_fails_closed_when_the_file_is_missing(tmp_path):
+    assert _check_deterministic_report(tmp_path / "does-not-exist.json") == "DETERMINISTIC_REPORT_NOT_CLEAN"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda report: report.__setitem__("missing", ["some-case"]),
+        lambda report: report.__setitem__("duplicates", ["some-case"]),
+        lambda report: report.__setitem__("model_calls", 1),
+        lambda report: report["results"][0].__setitem__("status", "failed"),
+        lambda report: report["results"][0].__setitem__("skipped", True),
+    ],
+)
+def test_check_deterministic_report_fails_closed_on_a_dirty_report(tmp_path, mutate):
+    report = _clean_deterministic_report()
+    mutate(report)
+    path = tmp_path / "deterministic-cases.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    assert _check_deterministic_report(path) == "DETERMINISTIC_REPORT_NOT_CLEAN"
+
+
+def test_check_deterministic_report_passes_a_clean_report(tmp_path):
+    path = tmp_path / "deterministic-cases.json"
+    path.write_text(json.dumps(_clean_deterministic_report()), encoding="utf-8")
+    assert _check_deterministic_report(path) is None

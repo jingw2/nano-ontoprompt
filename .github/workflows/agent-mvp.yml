@@ -153,7 +153,13 @@ jobs:
           # so the command's own relative artifact paths still resolve
           # against the repo root exactly as written.
           PYTHONPATH: backend
-        run: python -m evals.business_journeys.artifacts scan --staging artifacts/business_journeys/staging --sanitized-output artifacts/business_journeys/sanitized --failure-summary artifacts/business_journeys/scanner-failure-summary.json >> "$GITHUB_OUTPUT"
+        # --deterministic-report: without it, `_check_deterministic_report`
+        # is a no-op (path is None), so this `if: always()` failure-path scan
+        # could report scan_safe=true and upload evidence even if phase 2
+        # (the deterministic registry, zero model calls) never ran or did
+        # not come back clean -- pointed at the exact path phase 2 of
+        # scripts/run_business_journey_gate.sh writes to.
+        run: python -m evals.business_journeys.artifacts scan --staging artifacts/business_journeys/staging --sanitized-output artifacts/business_journeys/sanitized --failure-summary artifacts/business_journeys/scanner-failure-summary.json --deterministic-report artifacts/runtime/deterministic-cases.json >> "$GITHUB_OUTPUT"
       - name: Upload sanitized journey evidence
         if: steps.scan.outputs.scan_safe == 'true'
         uses: actions/upload-artifact@v4
