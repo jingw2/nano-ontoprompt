@@ -675,6 +675,21 @@ def _ontology_call_from_manifest(*, output_dir: Path, run_id: str, journey_id: s
         raise JourneyAcceptanceError(
             f"CORRELATION_ID_INVALID: preparation recorded {correlation_id!r}"
         )
+    # `or 0` would silently turn a MISSING counter into a clean "zero
+    # attempts, zero retries" reading — the same class of "invent a number
+    # instead of reading the real one" bug this whole function exists to
+    # fix. A well-formed preparation entry always has both keys
+    # (`JourneyPreparation.to_dict()` writes them unconditionally); their
+    # absence means the manifest itself is malformed, which must fail
+    # closed rather than quietly report a suspiciously perfect budget.
+    if preparation.get("http_attempts") is None:
+        raise JourneyAcceptanceError(
+            f"RUN_MANIFEST_PREPARATION_INCOMPLETE: {journey_id} preparation has no http_attempts"
+        )
+    if preparation.get("retry_count") is None:
+        raise JourneyAcceptanceError(
+            f"RUN_MANIFEST_PREPARATION_INCOMPLETE: {journey_id} preparation has no retry_count"
+        )
     return ModelCallRecord(
         call_kind="ontology",
         logical_call_index=1,
@@ -684,8 +699,8 @@ def _ontology_call_from_manifest(*, output_dir: Path, run_id: str, journey_id: s
         requested_model=str(preparation.get("requested_model_id") or ""),
         observed_model=str(preparation.get("observed_model_id") or ""),
         preflight_model_id=str(preparation.get("preflight_model_id") or ""),
-        http_attempts=int(preparation.get("http_attempts") or 0),
-        retry_count=int(preparation.get("retry_count") or 0),
+        http_attempts=int(preparation["http_attempts"]),
+        retry_count=int(preparation["retry_count"]),
     )
 
 

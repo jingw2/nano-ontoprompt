@@ -759,6 +759,7 @@ class JourneyApiClient:
             raise JourneyAcceptanceError("ONTOLOGY_ENTITY_WRITE_FAILED: extraction named no entities")
 
         relation_ids: list[str] = []
+        created_relation_names: set[str] = set()
         for edge in structured.get("relation_edges") or ():
             if not isinstance(edge, Mapping):
                 raise JourneyAcceptanceError(f"ONTOLOGY_RELATION_WRITE_FAILED: malformed edge {edge!r}")
@@ -772,19 +773,40 @@ class JourneyApiClient:
                     f"ONTOLOGY_RELATION_WRITE_FAILED: edge {edge.get('name')!r} names an "
                     "endpoint the extraction never listed as an entity"
                 )
+            edge_name = str(edge.get("name") or _EXTRACTED_RELATION_TYPE_FALLBACK)
             body = self._post(
                 f"/api/v1/ontologies/{ontology_id}/graph/relations",
                 reason_code="ONTOLOGY_RELATION_WRITE_FAILED",
                 json={
                     "source_entity": source,
                     "target_entity": target,
-                    "type": str(edge.get("name") or _EXTRACTED_RELATION_TYPE_FALLBACK),
+                    "type": edge_name,
                 },
             )
             relation_id = _dig(body, "data", "id") or _dig(body, "id")
             if not relation_id:
                 raise JourneyAcceptanceError("ONTOLOGY_RELATION_WRITE_FAILED: returned no id")
             relation_ids.append(str(relation_id))
+            created_relation_names.add(edge_name.strip().casefold())
+
+        # `relations` (the flat name array the semantic-minimum check reads)
+        # and `relation_edges` (what actually gets written) are two separate
+        # fields on the SAME response — a live model can satisfy the
+        # semantic minimum by naming every required relation while leaving
+        # `relation_edges` empty or incomplete, and nothing above catches
+        # that: the loop above simply does nothing when there are no edges,
+        # silently producing a relation-free ontology. Mirror the entity
+        # guard: every relation name the extraction claims must actually
+        # have been connected into a real edge.
+        required_relation_names = {
+            n.strip().casefold() for n in _unique_names(structured.get("relations"))
+        }
+        missing_relations = required_relation_names - created_relation_names
+        if missing_relations:
+            raise JourneyAcceptanceError(
+                f"ONTOLOGY_RELATION_WRITE_FAILED: extraction named relations "
+                f"{sorted(missing_relations)!r} but never connected them via relation_edges"
+            )
 
         rule_ids: list[str] = []
         for name in _unique_names(structured.get("rules")):

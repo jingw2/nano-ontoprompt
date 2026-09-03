@@ -961,6 +961,42 @@ def test_prepare_rejects_a_relation_edge_whose_endpoints_were_never_extracted(fa
         )
 
 
+def test_prepare_rejects_relations_named_but_never_connected_via_edges(fake_api):
+    """`relations` (the flat name array `validate_semantic_minimum` reads)
+    and `relation_edges` (what `persist_extraction` actually writes) are two
+    separate fields on the same response. A live model can satisfy the
+    semantic minimum by naming every required relation while returning an
+    empty or incomplete `relation_edges` array — before this guard existed,
+    `persist_extraction`'s edge loop would then simply do nothing, silently
+    publishing a relation-free ontology that still passed every other check.
+    """
+    answer = structured_answer("supply_chain")
+    assert answer["relations"], "fixture must require at least one relation for this test to mean anything"
+    answer["relation_edges"] = []
+    _STRUCTURED_RESPONSE[0] = answer
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELATION_WRITE_FAILED"):
+        prepare_journey(
+            "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+            output_dir=Path("artifacts"), run_id="journey-missing-edges",
+        )
+
+
+def test_prepare_rejects_a_relation_name_the_edges_never_cover(fake_api):
+    """The stronger half of the same guard: even when `relation_edges` is
+    non-empty, every name in `relations` must actually have been connected —
+    a response naming two required relations but only wiring up one must
+    still fail closed, not publish a partially-connected ontology."""
+    answer = structured_answer("supply_chain")
+    assert len(answer["relations"]) >= 1
+    answer["relations"] = list(answer["relations"]) + ["AN_UNCONNECTED_RELATION"]
+    _STRUCTURED_RESPONSE[0] = answer
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELATION_WRITE_FAILED"):
+        prepare_journey(
+            "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+            output_dir=Path("artifacts"), run_id="journey-partial-edges",
+        )
+
+
 def test_prepare_approves_this_runs_own_curated_dataset_not_the_newest_one(fake_api):
     """`GET /api/v2/curated` lists EVERY curated dataset ever created, newest
     first. Taking `items[0]` approved whatever happened to be newest — a
@@ -1172,6 +1208,29 @@ def test_verify_fails_closed_when_the_manifest_has_no_preparation_for_the_journe
         verify_journey(
             "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
             run_id="journey-missing-prep",
+        )
+
+
+@pytest.mark.parametrize("missing_field", ["http_attempts", "retry_count"])
+def test_verify_fails_closed_when_the_preparation_is_missing_a_budget_counter(fake_api, missing_field):
+    """`int(preparation.get("http_attempts") or 0)` used to turn a MISSING
+    counter into a clean "zero attempts" reading — the same "invent a number
+    instead of reading the real one" bug the rest of this function exists to
+    fix, just for the absent-key case instead of the wrong-value case. A
+    well-formed preparation entry always has both keys
+    (`JourneyPreparation.to_dict()` writes them unconditionally); their
+    absence must fail closed, not silently report a suspiciously perfect
+    budget."""
+    write_browser_evidence(Path("artifacts"), "journey-missing-counter", "credit")
+    write_staging_run_manifest(Path("artifacts"), "journey-missing-counter", "credit")
+    path = Path("artifacts") / "business_journeys" / "staging" / "run.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    del document["preparations"][0][missing_field]
+    path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    with pytest.raises(JourneyAcceptanceError, match="RUN_MANIFEST_PREPARATION_INCOMPLETE"):
+        verify_journey(
+            "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+            run_id="journey-missing-counter",
         )
 
 
