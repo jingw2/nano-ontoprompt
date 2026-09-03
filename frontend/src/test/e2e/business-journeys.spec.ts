@@ -79,6 +79,15 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     const agentIdMatch = /\/agents\/([^/?#]+)/.exec(page.url())
     if (!agentIdMatch) throw new Error(`could not read agent id from URL: ${page.url()}`)
     const agentId = agentIdMatch[1]
+    // Real, persisted MCP-descriptor-binding evidence: `ToolConfigTab`
+    // renders the active version's own `ontology_bindings[0].selected_
+    // tools[0]` from a fresh `agentDetailApi.versions(id)` round trip taken
+    // on this page's own mount -- not the wizard's in-memory selection --
+    // so this proves the descriptor picked in the wizard above actually
+    // persisted server-side, not just that the wizard's own UI state still
+    // held it after submit.
+    await page.getByRole('button', { name: /Tools|工具/ }).click()
+    await expect(page.getByTestId('journey-mcp-tool')).toContainText(journey.mcp_descriptor_ids[0])
     await page.getByRole('button', { name: /Agent Application|智能体应用/ }).click()
     await page.getByTestId('session-new').click()
     await page.getByTestId('conversation-input').fill(journey.dialogues.governed_turn.question)
