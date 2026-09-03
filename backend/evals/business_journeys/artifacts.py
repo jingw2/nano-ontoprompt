@@ -564,8 +564,9 @@ def assemble_journey_evidence(
     ``verify_journey`` (``orchestrator.py``) already reconstructs the FULL
     per-journey totals into ``JourneyVerification`` -- ``logical_model_calls``,
     ``http_attempts``, ``retry_count``, and ``call_kinds`` there already cover
-    all three logical calls (the synthetic ontology call plus the two
-    browser-driven calls; see ``_synthetic_ontology_call``/`` calls = (
+    all three logical calls (the preparation-phase ontology call, replayed
+    from the staging run manifest's real recorded counters, plus the two
+    browser-driven calls; see ``_ontology_call_from_manifest``/`` calls = (
     ontology_call,) + evidence.model_calls`` in that module), as do
     ``model_caller``/``model_origin``/``preflight_model_id``/
     ``requested_model_id``/``observed_model_ids``. Only ``preparation`` is

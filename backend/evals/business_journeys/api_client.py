@@ -18,7 +18,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 import httpx
@@ -39,20 +39,55 @@ from .contracts import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# The response contract the ontology completion is asked for. Deliberately
-# the same shape `semantic_validators.validate_semantic_minimum` reads.
+# The response contract the ontology completion is asked for. The flat
+# name arrays are deliberately the same shape
+# `semantic_validators.validate_semantic_minimum` reads.
+#
+# `relation_edges` is the one field that exists purely so the extraction can
+# actually be WRITTEN BACK into the ontology: `POST /api/v1/ontologies/{id}/
+# graph/relations` stores `source_entity`/`target_entity` as real
+# `entities.id` foreign keys, and the publication compiler's
+# `preflight_ontology` rejects the whole release with
+# `UNRESOLVED_RELATION_ENDPOINT` if either endpoint does not resolve. A bare
+# relation NAME ("SUPPLIES") carries no endpoints, so it is fundamentally
+# insufficient to build a valid `Relation` row from — the model has to name
+# the two entities each edge connects, and those names must be entities it
+# also listed in `entities`.
 ONTOLOGY_RESPONSE_SCHEMA: Mapping[str, object] = {
     "type": "object",
-    "required": ["answer", "entities", "relations", "rules", "actions", "citations"],
+    "required": [
+        "answer", "entities", "relations", "relation_edges", "rules", "actions", "citations",
+    ],
     "properties": {
         "answer": {"type": "string"},
         "entities": {"type": "array", "items": {"type": "string"}},
         "relations": {"type": "array", "items": {"type": "string"}},
+        "relation_edges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "source", "target"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "source": {"type": "string"},
+                    "target": {"type": "string"},
+                },
+            },
+        },
         "rules": {"type": "array", "items": {"type": "string"}},
         "actions": {"type": "array", "items": {"type": "string"}},
         "citations": {"type": "array", "items": {"type": "string"}},
     },
 }
+
+# Defaults for the creation fields the real write endpoints require but the
+# model's flat extraction does not carry. Deliberately generic: the point is
+# a real, non-empty ontology whose content traces back to the model's own
+# extraction, not a full-fidelity authoring pipeline.
+_EXTRACTED_ENTITY_TYPE = "concept"
+_EXTRACTED_RELATION_TYPE_FALLBACK = "关联"
+_EXTRACTED_LOGIC_TYPE = "validation"
+_EXTRACTED_ACTION_CATEGORY = "crud"
 
 GRANT_CAPABILITIES = ("investigate", "propose_action")
 
@@ -90,6 +125,12 @@ class PipelineEvidence:
     row_count: int | None
     input_fixture_ids: tuple[str, ...]
     input_hashes: Mapping[str, str]
+    # The curated dataset THIS run produced, read from the run's own
+    # `stats.curated_dataset_id` (written by
+    # `app.tasks.v2.pipeline_run.pipeline_run_task`) — the real binding
+    # between a pipeline run and its curated output, so `approve_curated`
+    # never has to guess from list order.
+    curated_dataset_id: str
 
 
 @dataclass(frozen=True)
@@ -100,12 +141,40 @@ class CuratedEvidence:
 
 
 @dataclass(frozen=True)
+class OntologyContentEvidence:
+    """The rows the model's own extraction actually created in the ontology.
+
+    Every id here is a primary key the application returned from a real
+    create endpoint — `POST .../entities`, `POST .../graph/relations`,
+    `POST /api/v2/ontologies/{id}/logic`, `POST /api/v2/ontologies/{id}/
+    actions` — so a non-empty tuple is proof the release that follows has
+    real content, not merely that the model produced some JSON.
+    """
+
+    entity_ids: tuple[str, ...]
+    relation_ids: tuple[str, ...]
+    rule_ids: tuple[str, ...]
+    action_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class OntologyReleaseEvidence:
     ontology_id: str
     release_id: str
     release_status: str
     schema_hash: str
-    semantic_snapshot_id: str
+    # NOT a real `SemanticSnapshot` row id. No production API endpoint
+    # anywhere in the application creates a `SemanticSnapshot`:
+    # `app.services.runtime.snapshots.materialize_snapshot` (the only place
+    # `SemanticSnapshot(...)` is ever constructed) and its
+    # `materialize_refresh_snapshot` wrapper have zero callers outside
+    # `tests/runtime/`, so there is nothing this client could call to obtain
+    # one. This is a synthetic placeholder derived from the release id,
+    # recorded for traceability only; nothing may treat it as an
+    # independently-verifiable snapshot identity. See
+    # `_semantic_snapshot_placeholder`.
+    semantic_snapshot_placeholder: str
+    content: OntologyContentEvidence
     structured: Mapping[str, Any]
     model_response: ModelResponse
 
@@ -488,6 +557,16 @@ class JourneyApiClient:
         if not dataset_version_id:
             raise JourneyAcceptanceError("DATASET_VERSION_MISSING: run has no dataset version")
         stats = run.get("stats") or {}
+        # `pipeline_run_task` records the curated dataset(s) it produced on
+        # the run's own `stats` before it marks the run successful, so a
+        # successful run that names no curated dataset is a real failure of
+        # this baseline, not something to paper over by picking the newest
+        # curated dataset in the system.
+        curated_dataset_id = stats.get("curated_dataset_id")
+        if not curated_dataset_id:
+            raise JourneyAcceptanceError(
+                f"CURATED_DATASET_MISSING: run {run_id} recorded no curated output"
+            )
         return PipelineEvidence(
             pipeline_id=str(pipeline_id),
             pipeline_run_id=str(run_id),
@@ -496,20 +575,35 @@ class JourneyApiClient:
             row_count=stats.get("rows_out"),
             input_fixture_ids=tuple(str(entry["fixture_id"]) for entry in manifest.inputs),
             input_hashes=dict(manifest.input_hashes),
+            curated_dataset_id=str(curated_dataset_id),
         )
 
     # -- curated -----------------------------------------------------------
-    def approve_curated(self, run_id: str) -> CuratedEvidence:
-        """Start and approve a review for the most recently produced curated
-        dataset. ``GET /api/v2/curated`` lists every curated dataset ever
-        created (not scoped to one pipeline run), ordered newest-first, so
-        the most recent entry is the one this journey's pipeline run just
-        produced when this is called immediately afterward."""
+    def approve_curated(self, pipeline: PipelineEvidence) -> CuratedEvidence:
+        """Start and approve a review for the curated dataset THIS journey's
+        pipeline run produced.
+
+        The dataset is identified by ``pipeline.curated_dataset_id``, which
+        `start_pipeline` read from this run's own
+        ``stats.curated_dataset_id`` — a real run-to-output binding written
+        by `app.tasks.v2.pipeline_run.pipeline_run_task`. ``GET
+        /api/v2/curated`` lists every curated dataset ever created, not just
+        this run's, so taking ``items[0]`` (newest first, as this previously
+        did) would approve some other journey's — or a stale failed run's —
+        dataset whenever anything else produced one in between. The list is
+        still read, but only to require that this run's own dataset really is
+        a listed, reviewable curated dataset.
+        """
+        run_id = pipeline.pipeline_run_id
         datasets = self._get("/api/v2/curated", reason_code="CURATED_DATASET_MISSING")
         items = datasets if isinstance(datasets, list) else (_dig(datasets, "data") or [])
         if not items:
             raise JourneyAcceptanceError(f"CURATED_DATASET_MISSING: no curated dataset for run {run_id}")
-        dataset_id = str(items[0]["id"])
+        dataset_id = pipeline.curated_dataset_id
+        if dataset_id not in {str(item.get("id")) for item in items}:
+            raise JourneyAcceptanceError(
+                f"CURATED_DATASET_MISSING: run {run_id}'s curated dataset is not listed"
+            )
         review = self._post(
             f"/api/v2/curated/{dataset_id}/reviews", reason_code="CURATED_REVIEW_MISSING",
         )
@@ -527,12 +621,27 @@ class JourneyApiClient:
         )
 
     # -- ontology ----------------------------------------------------------
-    def create_or_complete_ontology(self, manifest: Any, model_version_id: str) -> OntologyReleaseEvidence:
-        """Create the ontology, make the ONE ontology completion, and require
-        an explicitly published release.
+    def create_or_complete_ontology(
+        self,
+        manifest: Any,
+        model_version_id: str,
+        *,
+        validate_structured: Callable[[Mapping[str, Any]], None],
+    ) -> OntologyReleaseEvidence:
+        """Create the ontology, make the ONE ontology completion, write the
+        model's extraction into the ontology, and require an explicitly
+        published release.
 
         This is the only place in the whole preparation phase that calls a
         model, and it calls it exactly once (`logical_call_index=1`).
+
+        ``validate_structured`` is the caller's semantic-minimum check
+        (`orchestrator.prepare_journey`, which owns the journey manifest's
+        expected minima). It runs BEFORE the extraction is written back, so
+        an extraction that does not meet the journey's contract never
+        becomes real ontology content — and the caller's own reason code
+        (``SEMANTIC_MINIMUM_FAILED``) is what a CI log shows, not a
+        downstream write failure.
         """
         if self._model_caller is None:
             raise JourneyAcceptanceError("MODEL_CALLER_MISSING: preparation requires a DeepSeekVisionCaller")
@@ -576,6 +685,13 @@ class JourneyApiClient:
         except BusinessJourneyModelError as exc:
             raise JourneyAcceptanceError(f"{exc}") from exc
 
+        validate_structured(response.structured)
+
+        # Write the model's extraction into the ontology BEFORE publishing,
+        # so the release the rest of the journey is grounded in has real
+        # content traceable to this completion.
+        content = self.persist_extraction(str(ontology_id), response.structured)
+
         published = self._post(
             f"/api/v1/ontologies/{ontology_id}/publish", reason_code="ONTOLOGY_RELEASE_MISSING",
             json={"changelog": f"business journey {manifest.journey_id} {self._run_id}"},
@@ -594,9 +710,122 @@ class JourneyApiClient:
             release_id=str(release_id),
             release_status=status,
             schema_hash=str(release.get("schema_hash") or ""),
-            semantic_snapshot_id=f"snapshot:{release_id}",
+            semantic_snapshot_placeholder=_semantic_snapshot_placeholder(str(release_id)),
+            content=content,
             structured=dict(response.structured),
             model_response=response,
+        )
+
+    # -- ontology content --------------------------------------------------
+    def persist_extraction(
+        self, ontology_id: str, structured: Mapping[str, Any],
+    ) -> OntologyContentEvidence:
+        """Create real Entity/Relation/logic-rule/action-type rows from the
+        model's own extraction, through the application's real write
+        endpoints.
+
+        Before this existed, the ontology completion's output was validated
+        in memory (`semantic_validators.validate_semantic_minimum`, a
+        self-consistency check on the model's own JSON) and then thrown
+        away: `publish` compiled a release from an EMPTY ontology, so the
+        release the Agent later resolved had no relationship at all to what
+        the model extracted.
+
+        Each name is mapped to the minimum valid creation payload the real
+        endpoint accepts (`app.schemas.entity.EntityCreate`,
+        `app.routers.graph.create_relation`'s body,
+        `app.routers.v2.logic_actions.LogicRuleCreate`/`ActionTypeCreate`);
+        fields the flat extraction cannot supply take the generic
+        `_EXTRACTED_*` defaults above. Duplicate names are collapsed because
+        the publication compiler rejects a release with colliding entity
+        display labels (`LABEL_COLLISION`).
+        """
+        entity_ids: dict[str, str] = {}
+        for name in _unique_names(structured.get("entities")):
+            body = self._post(
+                f"/api/v1/ontologies/{ontology_id}/entities", reason_code="ONTOLOGY_ENTITY_WRITE_FAILED",
+                json={
+                    "name_cn": name,
+                    "name_en": name,
+                    "type": _EXTRACTED_ENTITY_TYPE,
+                    "description": f"extracted by the ontology completion for {ontology_id}",
+                },
+            )
+            entity_id = _dig(body, "data", "id") or _dig(body, "id")
+            if not entity_id:
+                raise JourneyAcceptanceError(f"ONTOLOGY_ENTITY_WRITE_FAILED: {name!r} returned no id")
+            entity_ids[name.strip().casefold()] = str(entity_id)
+        if not entity_ids:
+            raise JourneyAcceptanceError("ONTOLOGY_ENTITY_WRITE_FAILED: extraction named no entities")
+
+        relation_ids: list[str] = []
+        for edge in structured.get("relation_edges") or ():
+            if not isinstance(edge, Mapping):
+                raise JourneyAcceptanceError(f"ONTOLOGY_RELATION_WRITE_FAILED: malformed edge {edge!r}")
+            source = entity_ids.get(str(edge.get("source", "")).strip().casefold())
+            target = entity_ids.get(str(edge.get("target", "")).strip().casefold())
+            if not source or not target:
+                # The publication compiler would reject the whole release
+                # with UNRESOLVED_RELATION_ENDPOINT anyway; failing here
+                # names the actual cause instead.
+                raise JourneyAcceptanceError(
+                    f"ONTOLOGY_RELATION_WRITE_FAILED: edge {edge.get('name')!r} names an "
+                    "endpoint the extraction never listed as an entity"
+                )
+            body = self._post(
+                f"/api/v1/ontologies/{ontology_id}/graph/relations",
+                reason_code="ONTOLOGY_RELATION_WRITE_FAILED",
+                json={
+                    "source_entity": source,
+                    "target_entity": target,
+                    "type": str(edge.get("name") or _EXTRACTED_RELATION_TYPE_FALLBACK),
+                },
+            )
+            relation_id = _dig(body, "data", "id") or _dig(body, "id")
+            if not relation_id:
+                raise JourneyAcceptanceError("ONTOLOGY_RELATION_WRITE_FAILED: returned no id")
+            relation_ids.append(str(relation_id))
+
+        rule_ids: list[str] = []
+        for name in _unique_names(structured.get("rules")):
+            body = self._post(
+                f"/api/v2/ontologies/{ontology_id}/logic", reason_code="ONTOLOGY_RULE_WRITE_FAILED",
+                json={
+                    "name": name,
+                    "logic_type": _EXTRACTED_LOGIC_TYPE,
+                    "description": f"extracted by the ontology completion for {ontology_id}",
+                    "expression": {},
+                    "enabled": True,
+                },
+            )
+            rule_id = _dig(body, "id") or _dig(body, "data", "id")
+            if not rule_id:
+                raise JourneyAcceptanceError(f"ONTOLOGY_RULE_WRITE_FAILED: {name!r} returned no id")
+            rule_ids.append(str(rule_id))
+
+        action_ids: list[str] = []
+        for name in _unique_names(structured.get("actions")):
+            body = self._post(
+                f"/api/v2/ontologies/{ontology_id}/actions", reason_code="ONTOLOGY_ACTION_WRITE_FAILED",
+                json={
+                    "name": name,
+                    "action_category": _EXTRACTED_ACTION_CATEGORY,
+                    "description": f"extracted by the ontology completion for {ontology_id}",
+                    "parameters": [],
+                    "effects": [],
+                    "enabled": True,
+                },
+            )
+            action_id = _dig(body, "id") or _dig(body, "data", "id")
+            if not action_id:
+                raise JourneyAcceptanceError(f"ONTOLOGY_ACTION_WRITE_FAILED: {name!r} returned no id")
+            action_ids.append(str(action_id))
+
+        return OntologyContentEvidence(
+            entity_ids=tuple(entity_ids.values()),
+            relation_ids=tuple(relation_ids),
+            rule_ids=tuple(rule_ids),
+            action_ids=tuple(action_ids),
         )
 
     def preflight_model(self, manifest: Any, model_version_id: str) -> ModelProbe:
@@ -889,6 +1118,41 @@ def build_input_parts(manifest: Any) -> tuple[InputPart, ...]:
     return tuple(parts)
 
 
+def _unique_names(value: Any) -> tuple[str, ...]:
+    """Non-empty names from a flat extraction array, first occurrence wins.
+
+    Case-insensitive de-duplication: the publication compiler rejects a
+    release whose entities share a display label (`LABEL_COLLISION`).
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in value or ():
+        name = str(item).strip()
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return tuple(names)
+
+
+def _semantic_snapshot_placeholder(release_id: str) -> str:
+    """A deliberately, visibly synthetic stand-in for a snapshot id.
+
+    There is NO production endpoint that creates a `SemanticSnapshot`:
+    `app.services.runtime.snapshots.materialize_snapshot` is the only
+    constructor of that row anywhere, and neither it nor
+    `materialize_refresh_snapshot` has a single caller outside
+    `tests/runtime/` — no router, no service, no task. So the preparation
+    phase cannot obtain a real snapshot id today, and this value must never
+    be read as one. The `PLACEHOLDER` prefix keeps that obvious in the
+    staging run manifest and in any artifact that echoes it; nothing
+    downstream (`verify_journey`, the Playwright evidence, the artifact
+    allowlist) consumes it.
+    """
+    return f"PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:{release_id}"
+
+
 def _as_text(data: bytes, media_type: str) -> str:
     """Text-decodable inputs go as text; anything binary goes as base64 so a
     decode error can never silently truncate an input."""
@@ -948,6 +1212,7 @@ __all__ = [
     "ModelCallRecord",
     "ModelConfigEvidence",
     "ONTOLOGY_RESPONSE_SCHEMA",
+    "OntologyContentEvidence",
     "OntologyReleaseEvidence",
     "PersistedJourneyEvidence",
     "PipelineEvidence",

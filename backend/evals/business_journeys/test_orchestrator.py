@@ -74,6 +74,19 @@ class _FakeState:
         self.requests: list[str] = []
         self.upload_calls = 0
         self.url = ""
+        # Ontology content the fake application actually stores, keyed by
+        # ontology id — so a test can assert the model's extraction really
+        # was written back through the real create endpoints rather than
+        # discarded (Critical Finding: the extraction was never persisted).
+        self.entities: dict[str, list[dict]] = {}
+        self.relations: dict[str, list[dict]] = {}
+        self.logic_rules: dict[str, list[dict]] = {}
+        self.action_types: dict[str, list[dict]] = {}
+        # The one curated dataset this fake's pipeline run produced, plus
+        # any unrelated curated datasets that exist alongside it.
+        self.curated_reviews: list[str] = []
+        self.curated_datasets: list[dict] = []
+        self.extra_curated: list[dict] = []
 
     def drop(self, resource: str) -> None:
         self.dropped.add(resource)
@@ -264,18 +277,38 @@ def _create_pipeline(state: _FakeState, _match: "re.Match[str]", body: dict) -> 
 
 def _run_pipeline(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     pipeline_id = match.group("pipeline_id")
-    return 200, {"run_id": _uuid_for(f"{pipeline_id}:run"), "status": "success"}
+    run_id = _uuid_for(f"{pipeline_id}:run")
+    if "curated_dataset" not in state.dropped:
+        state.curated_datasets.append({
+            "id": _curated_dataset_id(run_id),
+            "name": f"curated-{run_id}",
+            "status": "pending_review",
+            "row_count": 12,
+            "quality_score": 0.99,
+        })
+    return 200, {"run_id": run_id, "status": "success"}
+
+
+def _curated_dataset_id(run_id: str) -> str:
+    """The curated dataset a given pipeline run produced — the real
+    `pipeline_run_task` records exactly this binding on the run's own
+    `stats.curated_dataset_id`."""
+    return _uuid_for(f"{run_id}:curated-dataset")
 
 
 def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     run_id = match.group("run_id")
     if "pipeline_run" in state.dropped:
         raise _FakeNotFound("Run not found")
+    stats: dict[str, Any] = {"row_count": 12, "quality_score": 0.99}
+    if "curated_dataset" not in state.dropped:
+        stats["curated_dataset_id"] = _curated_dataset_id(run_id)
+        stats["curated_dataset_ids"] = [_curated_dataset_id(run_id)]
     return 200, {
         "id": run_id,
         "status": "success",
         "dataset_version_id": _uuid_for(f"{run_id}:dataset-version"),
-        "stats": {"row_count": 12, "quality_score": 0.99},
+        "stats": stats,
         "error_log": None,
         "started_at": "2026-08-27T00:00:00+00:00",
         "finished_at": "2026-08-27T00:00:05+00:00",
@@ -283,19 +316,19 @@ def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[in
 
 
 def _list_curated(state: _FakeState, _match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    """`GET /api/v2/curated` lists EVERY curated dataset ever created,
+    newest first — never scoped to one pipeline run (see
+    `app.routers.v2.curated.list_curated`). `state.extra_curated` lets a
+    test put an unrelated, newer dataset at the head of that list."""
     if "curated_dataset" in state.dropped:
         return 200, []
-    return 200, [{
-        "id": _uuid_for("curated-dataset"),
-        "name": "curated",
-        "status": "pending_review",
-        "row_count": 12,
-        "quality_score": 0.99,
-    }]
+    return 200, list(state.extra_curated) + list(reversed(state.curated_datasets))
 
 
 def _start_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
-    return 200, {"review_id": _uuid_for(f"{match.group('dataset_id')}:review"), "status": "in_review"}
+    dataset_id = match.group("dataset_id")
+    state.curated_reviews.append(dataset_id)
+    return 200, {"review_id": _uuid_for(f"{dataset_id}:review"), "status": "in_review"}
 
 
 def _approve_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
@@ -315,6 +348,59 @@ def _create_ontology(state: _FakeState, _match: "re.Match[str]", body: dict) -> 
 def _mark_created_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     ontology_id = match.group("ontology_id")
     return 200, {"data": {"ontology_id": ontology_id, "status": "created"}}
+
+
+def _create_entity(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    """`POST /api/v1/ontologies/{id}/entities` — the real
+    `app.routers.entities.create_entity` shape: an `EntityCreate` body whose
+    only required field is `name_cn`, answered with `{"data": {...}}`."""
+    ontology_id = match.group("ontology_id")
+    if not body.get("name_cn"):
+        return 422, {"detail": "name_cn is required"}
+    entity_id = _uuid_for(f"{ontology_id}:entity:{body['name_cn']}")
+    state.entities.setdefault(ontology_id, []).append({**body, "id": entity_id})
+    return 201, {"data": {"id": entity_id, "ontology_id": ontology_id, **body}}
+
+
+def _create_relation(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    """`POST /api/v1/ontologies/{id}/graph/relations` — the real
+    `app.routers.graph.create_relation` requires `source_entity`/
+    `target_entity` to be REAL `entities.id` values (they are foreign keys,
+    and the publication compiler rejects a release whose relation endpoints
+    do not resolve), so this fake enforces the same thing."""
+    ontology_id = match.group("ontology_id")
+    known = {e["id"] for e in state.entities.get(ontology_id, [])}
+    if body.get("source_entity") not in known or body.get("target_entity") not in known:
+        return 422, {"detail": "UNRESOLVED_RELATION_ENDPOINT"}
+    relation_id = _uuid_for(f"{ontology_id}:relation:{body.get('type')}")
+    state.relations.setdefault(ontology_id, []).append({**body, "id": relation_id})
+    return 200, {"data": {
+        "id": relation_id, "source": body["source_entity"],
+        "target": body["target_entity"], "type": body.get("type"),
+    }}
+
+
+def _create_logic_rule(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    """`POST /api/v2/ontologies/{id}/logic` — `app.routers.v2.logic_actions.
+    create_logic_rule` requires `name` and `logic_type` and answers with a
+    FLAT `{"id", "name", "status"}` body (no `data` envelope)."""
+    ontology_id = match.group("ontology_id")
+    if not body.get("name") or not body.get("logic_type"):
+        return 422, {"detail": "name and logic_type are required"}
+    rule_id = _uuid_for(f"{ontology_id}:logic:{body['name']}")
+    state.logic_rules.setdefault(ontology_id, []).append({**body, "id": rule_id})
+    return 201, {"id": rule_id, "name": body["name"], "status": "draft"}
+
+
+def _create_action_type(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    """`POST /api/v2/ontologies/{id}/actions` — `create_action_type` requires
+    `name` and `action_category`, and answers flat like the logic route."""
+    ontology_id = match.group("ontology_id")
+    if not body.get("name") or not body.get("action_category"):
+        return 422, {"detail": "name and action_category are required"}
+    action_id = _uuid_for(f"{ontology_id}:action:{body['name']}")
+    state.action_types.setdefault(ontology_id, []).append({**body, "id": action_id})
+    return 201, {"id": action_id, "name": body["name"], "status": "draft"}
 
 
 def _publish_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
@@ -450,6 +536,10 @@ _ROUTES: list[tuple[str, str, Handler]] = [
     (r"/api/v2/curated/(?P<dataset_id>[^/]+)/reviews", "POST", _start_review),
     (r"/api/v2/curated/reviews/(?P<review_id>[^/]+)/approve", "POST", _approve_review),
     (r"/api/v1/ontologies", "POST", _create_ontology),
+    (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/entities", "POST", _create_entity),
+    (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/graph/relations", "POST", _create_relation),
+    (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/logic", "POST", _create_logic_rule),
+    (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/actions", "POST", _create_action_type),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/mark-created", "POST", _mark_created_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/publish", "POST", _publish_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/tools", "GET", _ontology_tools),
@@ -494,10 +584,25 @@ def structured_answer(journey_id: str) -> dict:
     minima = manifest.semantic_minima
     keywords = list(minima.get("keywords") or [])
     answer = " ".join(keywords) + " analysis complete."
+    entities = list(minima.get("entities") or [])
+    relations = list(minima.get("relations") or [])
     payload: dict[str, Any] = {
         "answer": answer,
-        "entities": list(minima.get("entities") or []),
-        "relations": list(minima.get("relations") or []),
+        "entities": entities,
+        "relations": relations,
+        # `ONTOLOGY_RESPONSE_SCHEMA` asks the model to name each relation's
+        # two endpoints, because `POST .../graph/relations` stores them as
+        # real `entities.id` foreign keys — a bare relation name can never
+        # be written back. Each edge here connects two entities the same
+        # response also lists, which is exactly what the write-back requires.
+        "relation_edges": [
+            {
+                "name": name,
+                "source": entities[index % len(entities)],
+                "target": entities[(index + 1) % len(entities)],
+            }
+            for index, name in enumerate(relations)
+        ] if entities else [],
         "rules": list(minima.get("rules") or []),
         "actions": list(minima.get("actions") or []),
         "citations": list(minima.get("source_citation_ids") or []),
@@ -532,15 +637,19 @@ def _satisfying_value(predicate: Mapping) -> float:
 
 def write_staging_run_manifest(
     output_dir: Path, run_id: str, journey_id: str, *, mcp_descriptor_ids: list[str] | None = None,
+    http_attempts: int = 1, retry_count: int = 0,
 ) -> Path:
     """Stand in for the staging run manifest ``prepare_journey`` writes.
 
-    ``verify_journey`` reads this file back to cross-check the descriptor
-    ids the turn actually executed against the ones preparation really
-    published and granted (``_require_granted_mcp_descriptors``), so a
-    verify-only test needs one on disk. ``test_verify_cross_checks_
-    descriptors_against_a_real_prepared_run_manifest`` covers the same
-    check against a manifest written by the REAL ``prepare_all_journeys``.
+    ``verify_journey`` reads this file back for two things: to cross-check
+    the descriptor ids the turn actually executed against the ones
+    preparation really published and granted
+    (``_require_granted_mcp_descriptors``), and to rebuild logical call 1's
+    real ``http_attempts``/``retry_count``/``observed_model_id``
+    (``_ontology_call_from_manifest``) — so a verify-only test needs one on
+    disk carrying both. ``test_verify_cross_checks_descriptors_against_a_
+    real_prepared_run_manifest`` covers the same checks against a manifest
+    written by the REAL ``prepare_all_journeys``.
     """
     if mcp_descriptor_ids is None:
         mcp_descriptor_ids = [_granted_query_descriptor_id(journey_id)]
@@ -560,6 +669,14 @@ def write_staging_run_manifest(
         "ontology_id": _uuid_for(f"{journey_id}:ontology"),
         "ontology_release_id": _uuid_for(f"{run_id}:{journey_id}:release"),
         "mcp_descriptor_ids": list(mcp_descriptor_ids),
+        "model_caller": "DeepSeekVisionCaller",
+        "model_origin": OFFICIAL_ORIGIN,
+        "preflight_model_id": MODEL_ID,
+        "requested_model_id": MODEL_ID,
+        "observed_model_id": MODEL_ID,
+        "correlation_id": f"{run_id}:{journey_id}:ontology:1",
+        "http_attempts": http_attempts,
+        "retry_count": retry_count,
         "status": "passed",
     }]
     path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
@@ -785,6 +902,116 @@ def test_prepare_all_journeys_returns_three_in_fixed_order_and_writes_run_manife
     assert read_run_manifest(Path("artifacts"))["run_id"] == "journey-all"
 
 
+def test_prepare_writes_the_models_extraction_into_the_ontology_before_publishing(fake_api):
+    """The ontology completion is the ONE real model-grounded step in the
+    whole plan, and its extraction used to be thrown away: `prepare_journey`
+    validated `response.structured` in memory and went straight to
+    `publish`, so the release the Agent later resolved was compiled from an
+    EMPTY ontology. Assert real rows exist, that their names come from the
+    model's own extraction, and that every write landed before the publish."""
+    manifest = load_journey_manifest("supply_chain", _RUNTIME_DATA_DIR)
+    minima = manifest.semantic_minima
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-extraction",
+    )
+    ontology_id = preparation.ontology_id
+
+    assert [e["name_cn"] for e in fake_api.entities[ontology_id]] == list(minima["entities"])
+    assert [r["type"] for r in fake_api.relations[ontology_id]] == list(minima["relations"])
+    assert [r["name"] for r in fake_api.logic_rules[ontology_id]] == list(minima["rules"])
+    assert [a["name"] for a in fake_api.action_types[ontology_id]] == list(minima["actions"])
+
+    # Every relation endpoint is a REAL entity id this same write-back just
+    # created — not a name, and not a fabricated identifier.
+    created_entity_ids = {e["id"] for e in fake_api.entities[ontology_id]}
+    for relation in fake_api.relations[ontology_id]:
+        assert relation["source_entity"] in created_entity_ids
+        assert relation["target_entity"] in created_entity_ids
+
+    # The preparation record carries the very ids the application returned.
+    assert set(preparation.ontology_entity_ids) == created_entity_ids
+    assert len(preparation.ontology_relation_ids) == len(minima["relations"])
+    assert len(preparation.ontology_rule_ids) == len(minima["rules"])
+    assert len(preparation.ontology_action_ids) == len(minima["actions"])
+
+    publish_index = fake_api.requests.index(f"POST /api/v1/ontologies/{ontology_id}/publish")
+    write_indexes = [
+        index for index, request in enumerate(fake_api.requests)
+        if request.startswith(f"POST /api/v1/ontologies/{ontology_id}/entities")
+        or request.startswith(f"POST /api/v1/ontologies/{ontology_id}/graph/relations")
+        or request.startswith(f"POST /api/v2/ontologies/{ontology_id}/")
+    ]
+    assert write_indexes, "no ontology content was written at all"
+    assert max(write_indexes) < publish_index
+
+
+def test_prepare_rejects_a_relation_edge_whose_endpoints_were_never_extracted(fake_api):
+    """A relation row's endpoints are real `entities.id` foreign keys and the
+    publication compiler rejects a release whose relation endpoints do not
+    resolve (`UNRESOLVED_RELATION_ENDPOINT`), so an edge naming an entity the
+    extraction never listed must fail closed here rather than at publish."""
+    answer = structured_answer("supply_chain")
+    answer["relation_edges"][0]["target"] = "AnEntityThatWasNeverExtracted"
+    _STRUCTURED_RESPONSE[0] = answer
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELATION_WRITE_FAILED"):
+        prepare_journey(
+            "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+            output_dir=Path("artifacts"), run_id="journey-bad-edge",
+        )
+
+
+def test_prepare_approves_this_runs_own_curated_dataset_not_the_newest_one(fake_api):
+    """`GET /api/v2/curated` lists EVERY curated dataset ever created, newest
+    first. Taking `items[0]` approved whatever happened to be newest — a
+    concurrent journey's dataset, or a stale one from a failed run. The
+    pipeline run records the dataset it produced on its own
+    `stats.curated_dataset_id`; that is what must be approved."""
+    fake_api.extra_curated = [{
+        "id": _uuid_for("someone-elses-newer-curated-dataset"),
+        "name": "unrelated", "status": "pending_review", "row_count": 3, "quality_score": 0.5,
+    }]
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-curated-binding",
+    )
+    own = _curated_dataset_id(preparation.pipeline.pipeline_run_id)
+    assert preparation.curated.curated_dataset_id == own
+    assert fake_api.curated_reviews == [own]
+    assert fake_api.extra_curated[0]["id"] not in fake_api.curated_reviews
+
+
+def test_prepare_fails_closed_when_the_run_records_no_curated_output(fake_api):
+    fake_api.drop("curated_dataset")
+    with pytest.raises(JourneyAcceptanceError, match="CURATED_DATASET_MISSING"):
+        prepare_journey(
+            "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+            output_dir=Path("artifacts"), run_id="journey-no-curated-output",
+        )
+
+
+def test_semantic_snapshot_value_is_recorded_as_an_obvious_placeholder(prepared_journeys, fake_api):
+    """No production endpoint anywhere creates a `SemanticSnapshot`
+    (`materialize_snapshot`/`materialize_refresh_snapshot` have zero callers
+    outside `tests/runtime/`), so this value cannot be a real row id today.
+    It must therefore not be recorded under a name that reads like one."""
+    preparations = prepare_all_journeys(
+        api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-snapshot-placeholder",
+        before_journey=prepared_journeys,
+    )
+    for preparation in preparations:
+        assert preparation.semantic_snapshot_placeholder.startswith(
+            "PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:"
+        )
+    document = read_run_manifest(Path("artifacts"))
+    for entry in document["preparations"]:
+        assert "semantic_snapshot_id" not in entry
+        assert entry["semantic_snapshot_placeholder"].startswith(
+            "PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:"
+        )
+
+
 def test_run_manifest_never_carries_agent_ids_prompts_or_credentials(prepared_journeys, fake_api):
     prepare_all_journeys(
         api_base=fake_api.url, api_key="runtime/runtime",
@@ -878,6 +1105,74 @@ def test_verify_reads_only_persisted_evidence(fake_api):
     assert verification.plan_branches_by_name["expired"].target_before_hash == verification.plan_branches_by_name["expired"].target_after_hash
     assert fake_api.model_calls == 0
     assert fake_api.mutations == []
+
+
+def test_verify_reports_the_preparations_real_http_attempts_not_a_hardcoded_one(fake_api):
+    """The ontology call's budget row used to be fabricated
+    (`http_attempts=1, retry_count=0`, hardcoded), so a preparation whose
+    real completion RETRIED — consuming two HTTP attempts of the run's
+    budget — was reported as a clean single attempt. The real numbers are
+    already recorded, durably, in the staging run manifest
+    (`JourneyPreparation.http_attempts`/`retry_count`, both sourced from the
+    real `ModelCallLedger`/`ModelResponse`); verification must read them."""
+    write_browser_evidence(Path("artifacts"), "journey-real-attempts", "credit")
+    write_staging_run_manifest(
+        Path("artifacts"), "journey-real-attempts", "credit", http_attempts=2, retry_count=1,
+    )
+    verification = verify_journey(
+        "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+        run_id="journey-real-attempts",
+    )
+    # 2 (the retried ontology call) + 1 + 1 (the two browser-driven calls).
+    assert verification.http_attempts == 4
+    assert verification.retry_count == 1
+
+
+def test_verify_ontology_call_counters_come_from_a_real_prepared_run_manifest(
+    prepared_journeys, fake_api,
+):
+    """The same read, but against a manifest written by the REAL
+    `prepare_all_journeys` rather than a stub — proving the field names
+    `_ontology_call_from_manifest` reads really are the ones
+    `JourneyPreparation.to_dict()` writes."""
+    preparations = prepare_all_journeys(
+        api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-real-manifest-counters",
+        before_journey=prepared_journeys,
+    )
+    prepared = {p.journey_id: p for p in preparations}["credit"]
+    write_browser_evidence(
+        Path("artifacts"), "journey-real-manifest-counters", "credit", staging_manifest=False,
+    )
+    verification = verify_journey(
+        "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+        run_id="journey-real-manifest-counters",
+    )
+    assert verification.http_attempts == prepared.http_attempts + 2
+    assert verification.retry_count == prepared.retry_count
+    assert verification.observed_model_ids[0] == prepared.observed_model_id
+    assert verification.correlation_ids[0] == prepared.correlation_id
+
+
+def test_verify_fails_closed_when_the_manifest_has_no_preparation_for_the_journey(fake_api):
+    """Both manifest readers (`_require_granted_mcp_descriptors` and
+    `_ontology_call_from_manifest`) go through the same `_preparation_entry`
+    helper, so both fail closed on the same reason code — the ontology
+    call's counters may never be invented when the durable record they come
+    from is absent."""
+    write_browser_evidence(Path("artifacts"), "journey-missing-prep", "credit")
+    write_staging_run_manifest(Path("artifacts"), "journey-missing-prep", "finance")
+    path = Path("artifacts") / "business_journeys" / "staging" / "run.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["preparations"] = [
+        entry for entry in document["preparations"] if entry["journey_id"] != "credit"
+    ]
+    path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    with pytest.raises(JourneyAcceptanceError, match="RUN_MANIFEST_PREPARATION_MISSING"):
+        verify_journey(
+            "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
+            run_id="journey-missing-prep",
+        )
 
 
 def test_verify_rejects_shared_plan_identity_across_branches(fake_api):

@@ -104,7 +104,19 @@ class JourneyPreparation:
     ontology_id: str
     ontology_release_id: str
     release_status: str
-    semantic_snapshot_id: str
+    # NOT a persisted `SemanticSnapshot` row id — a synthetic placeholder
+    # derived from the release id, because no production endpoint anywhere
+    # in the application creates a `SemanticSnapshot`
+    # (`app.services.runtime.snapshots.materialize_snapshot` and
+    # `materialize_refresh_snapshot` have zero callers outside
+    # `tests/runtime/`). Recorded for traceability only; nothing downstream
+    # verifies or resolves it. See
+    # `api_client._semantic_snapshot_placeholder`.
+    semantic_snapshot_placeholder: str
+    ontology_entity_ids: tuple[str, ...]
+    ontology_relation_ids: tuple[str, ...]
+    ontology_rule_ids: tuple[str, ...]
+    ontology_action_ids: tuple[str, ...]
     mcp_descriptors: tuple[McpDescriptor, ...]
     grant: GrantEvidence
     model_config: ModelConfigEvidence
@@ -142,7 +154,11 @@ class JourneyPreparation:
             "ontology_id": self.ontology_id,
             "ontology_release_id": self.ontology_release_id,
             "release_status": self.release_status,
-            "semantic_snapshot_id": self.semantic_snapshot_id,
+            "semantic_snapshot_placeholder": self.semantic_snapshot_placeholder,
+            "ontology_entity_ids": list(self.ontology_entity_ids),
+            "ontology_relation_ids": list(self.ontology_relation_ids),
+            "ontology_rule_ids": list(self.ontology_rule_ids),
+            "ontology_action_ids": list(self.ontology_action_ids),
             "mcp_descriptor_ids": [d.descriptor_id for d in self.mcp_descriptors],
             "grant_id": self.grant.grant_id,
             "grant_status": self.grant.status,
@@ -337,17 +353,27 @@ def prepare_journey(
 
             # 3. Pipeline + Curated approval (no model involvement).
             pipeline = client_with_model.start_pipeline(manifest)
-            curated = client_with_model.approve_curated(pipeline.pipeline_run_id)
+            curated = client_with_model.approve_curated(pipeline)
 
-            # 4. The single ontology completion + explicit publish.
+            # 4. The single ontology completion, then the extraction written
+            #    back as real ontology content, then an explicit publish.
+            #    The semantic minimum is checked between the completion and
+            #    the write-back, so a non-conforming extraction never becomes
+            #    ontology content.
+            validations: list[Any] = []
+
+            def _validate(structured: Mapping[str, Any]) -> None:
+                validation = validate_semantic_minimum(structured, _semantic_minimum(manifest))
+                validations.append(validation)
+                if not validation.passed:
+                    raise JourneyAcceptanceError(
+                        f"SEMANTIC_MINIMUM_FAILED: {','.join(validation.reason_codes)}"
+                    )
+
             release = client_with_model.create_or_complete_ontology(
-                manifest, model_config.model_config_version_id,
+                manifest, model_config.model_config_version_id, validate_structured=_validate,
             )
-            validation = validate_semantic_minimum(release.structured, _semantic_minimum(manifest))
-            if not validation.passed:
-                raise JourneyAcceptanceError(
-                    f"SEMANTIC_MINIMUM_FAILED: {','.join(validation.reason_codes)}"
-                )
+            validation = validations[0]
 
             # 5. Descriptors from that release, then an active data grant.
             descriptors = client_with_model.publish_mcp_descriptors(
@@ -387,7 +413,11 @@ def prepare_journey(
         ontology_id=release.ontology_id,
         ontology_release_id=release.release_id,
         release_status=release.release_status,
-        semantic_snapshot_id=release.semantic_snapshot_id,
+        semantic_snapshot_placeholder=release.semantic_snapshot_placeholder,
+        ontology_entity_ids=release.content.entity_ids,
+        ontology_relation_ids=release.content.relation_ids,
+        ontology_rule_ids=release.content.rule_ids,
+        ontology_action_ids=release.content.action_ids,
         mcp_descriptors=descriptors,
         grant=grant,
         model_config=model_config,
@@ -574,7 +604,9 @@ def verify_journey(
             f"persisted {evidence.automatic_action!r}"
         )
 
-    ontology_call = _synthetic_ontology_call(run_id, journey_id)
+    ontology_call = _ontology_call_from_manifest(
+        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
+    )
     calls = (ontology_call,) + evidence.model_calls
     http_attempts = sum(call.http_attempts for call in calls)
     retry_count = sum(call.retry_count for call in calls)
@@ -615,25 +647,64 @@ def verify_journey(
     )
 
 
-def _synthetic_ontology_call(run_id: str, journey_id: str):
-    """The ontology call is made (and budgeted) by the preparation phase, so
-    the browser turn's persisted trace only carries calls 2 and 3. Its
-    correlation id is fully determined by run/journey, so it is reconstructed
-    here rather than read from a mutable source."""
+def _ontology_call_from_manifest(*, output_dir: Path, run_id: str, journey_id: str):
+    """Rebuild logical call 1 (the ontology completion) from what the
+    preparation phase ACTUALLY recorded.
+
+    The browser turn's persisted trace only carries calls 2 and 3, so this
+    call's record has to come from somewhere else — but "somewhere else" was
+    a hardcoded ``http_attempts=1, retry_count=0``, which silently reported a
+    clean single attempt even when the real completion had retried and
+    consumed twice the HTTP budget. `prepare_journey` sources both counters
+    from the real `ModelCallLedger`/`ModelResponse`
+    (``totals["http_attempts"]`` / ``release.model_response.retry_count``),
+    `write_run_manifest` serializes them into the durable staging
+    ``run.json``, and this function reads them straight back — the same
+    manifest, read the same way, as `_require_granted_mcp_descriptors`.
+    Fails closed (`RUN_MANIFEST_PREPARATION_MISSING`) if this journey has no
+    preparation entry, exactly like that check does.
+    """
     from .api_client import ModelCallRecord
 
+    preparation = _preparation_entry(
+        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
+    )
+    correlation_id = str(preparation.get("correlation_id") or "")
+    expected_correlation_id = f"{run_id}:{journey_id}:ontology:1"
+    if correlation_id != expected_correlation_id:
+        raise JourneyAcceptanceError(
+            f"CORRELATION_ID_INVALID: preparation recorded {correlation_id!r}"
+        )
     return ModelCallRecord(
         call_kind="ontology",
         logical_call_index=1,
-        correlation_id=f"{run_id}:{journey_id}:ontology:1",
-        model_caller="DeepSeekVisionCaller",
-        model_origin=OFFICIAL_ORIGIN,
-        requested_model=MODEL_ID,
-        observed_model=MODEL_ID,
-        preflight_model_id=MODEL_ID,
-        http_attempts=1,
-        retry_count=0,
+        correlation_id=correlation_id,
+        model_caller=str(preparation.get("model_caller") or ""),
+        model_origin=str(preparation.get("model_origin") or ""),
+        requested_model=str(preparation.get("requested_model_id") or ""),
+        observed_model=str(preparation.get("observed_model_id") or ""),
+        preflight_model_id=str(preparation.get("preflight_model_id") or ""),
+        http_attempts=int(preparation.get("http_attempts") or 0),
+        retry_count=int(preparation.get("retry_count") or 0),
     )
+
+
+def _preparation_entry(
+    *, output_dir: Path, run_id: str, journey_id: str,
+) -> Mapping[str, Any]:
+    """This journey's own entry in the staging run manifest, or fail closed."""
+    manifest = read_run_manifest(output_dir)
+    if manifest.get("run_id") != run_id:
+        raise JourneyAcceptanceError(
+            f"RUN_MANIFEST_MISLABELLED: {manifest.get('run_id')!r} != {run_id!r}"
+        )
+    preparations = [
+        p for p in (manifest.get("preparations") or [])
+        if isinstance(p, Mapping) and p.get("journey_id") == journey_id
+    ]
+    if not preparations:
+        raise JourneyAcceptanceError(f"RUN_MANIFEST_PREPARATION_MISSING: {journey_id}")
+    return preparations[0]
 
 
 def _require_model_call_chain(
@@ -677,18 +748,10 @@ def _require_granted_mcp_descriptors(
     catalog (`publish_mcp_descriptors`), read from the SAME `output_dir`
     this phase already reads the browser evidence from.
     """
-    manifest = read_run_manifest(output_dir)
-    if manifest.get("run_id") != run_id:
-        raise JourneyAcceptanceError(
-            f"RUN_MANIFEST_MISLABELLED: {manifest.get('run_id')!r} != {run_id!r}"
-        )
-    preparations = [
-        p for p in (manifest.get("preparations") or [])
-        if isinstance(p, Mapping) and p.get("journey_id") == journey_id
-    ]
-    if not preparations:
-        raise JourneyAcceptanceError(f"RUN_MANIFEST_PREPARATION_MISSING: {journey_id}")
-    granted = {str(d) for d in (preparations[0].get("mcp_descriptor_ids") or ())}
+    preparation = _preparation_entry(
+        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
+    )
+    granted = {str(d) for d in (preparation.get("mcp_descriptor_ids") or ())}
     if not granted:
         raise JourneyAcceptanceError(f"MCP_DESCRIPTOR_MISSING: no granted descriptors for {journey_id}")
     if not evidence.mcp_descriptor_ids:
