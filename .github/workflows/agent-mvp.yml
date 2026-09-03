@@ -90,6 +90,77 @@ jobs:
           name: refresh-checkpoint-compose-logs
           path: /tmp/refresh-checkpoint-compose.log
 
+  # Task 5 (plan 2026-08-27): the blocking real-model business-journey gate.
+  # Trusted, same-repository pull requests only -- the privileged
+  # fork-exposing trigger event is never used here, and neither is a fork
+  # or a plain push. Its own first two steps independently reject any
+  # non-PR/untrusted-fork invocation and a missing DEEPSEEK_API_KEY before
+  # any dependency install or model call could happen.
+  business-journey-real-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require a trusted, same-repository pull request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "TRUSTED_BRANCH_REQUIRED: this gate only runs on pull_request events" >&2
+            exit 1
+          fi
+          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "TRUSTED_BRANCH_REQUIRED: cross-repository (untrusted fork) pull requests are refused" >&2
+            exit 1
+          fi
+      - name: Require DEEPSEEK_API_KEY
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "DEEPSEEK_API_KEY_REQUIRED: configure the repository secret before this gate can run" >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Guarded dependency install
+        run: cd backend && python scripts/bootstrap_backend.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Pin npm 11.2.0
+        run: |
+          npm install -g npm@11.2.0
+          test "$(npm --version)" = "11.2.0"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run the business-journey real gate (deepseek-v4-flash-vision-exp)
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: bash scripts/run_business_journey_gate.sh
+      - id: scan
+        if: always()
+        run: python -m evals.business_journeys.artifacts scan --staging artifacts/business_journeys/staging --sanitized-output artifacts/business_journeys/sanitized --failure-summary artifacts/business_journeys/scanner-failure-summary.json >> "$GITHUB_OUTPUT"
+      - name: Upload sanitized journey evidence
+        if: steps.scan.outputs.scan_safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-journey-sanitized-evidence
+          path: artifacts/business_journeys/sanitized/**
+      - name: Upload safe scanner failure summary
+        if: failure() && steps.scan.outputs.scan_safe != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-journey-scanner-failure-summary
+          path: artifacts/business_journeys/scanner-failure-summary.json
+
   backend-matrix:
     strategy:
       fail-fast: false

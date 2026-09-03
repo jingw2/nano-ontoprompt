@@ -138,6 +138,17 @@ Compose refresh profile、合成数据初始化、签名 webhook 和轮询流程
 worker 拓扑。浏览器治理覆盖使用 `cd frontend && npx playwright test
 src/test/e2e/runtime-governance.spec.ts`；它依赖该套件配置的服务，不能宣称为模型测试。
 
+### 真实业务旅程门禁(仅 CI)
+
+`.github/workflows/agent-mvp.yml` 中的 `business-journey-real-gate` 是一个
+阻断式、仅对可信同仓库 Pull Request 生效的任务，针对三条企业业务旅程(供应链、
+财务、信贷)使用真实 DeepSeek 模型和真实的 Agent 创建浏览器流程进行验收——
+确切的阶段顺序见 `test_data/runtime/README.md#the-real-gate-task-5` 与
+`scripts/run_business_journey_gate.sh`。它需要仓库密钥 `DEEPSEEK_API_KEY`，
+绝不在 `pull_request_target` 或 fork 上运行；只有经扫描器批准的脱敏证据才会
+被上传。该门禁需要真实密钥和一次性 Compose 技术栈，因此无法像上面的发布门禁
+那样在纯本地检出环境中运行。
+
 ---
 
 ## 使用流程(Pipeline Mapping 路径)

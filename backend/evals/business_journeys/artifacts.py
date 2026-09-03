@@ -37,7 +37,7 @@ _RUNTIME_DATA_DIR = REPO_ROOT / "test_data" / "runtime"
 if str(_RUNTIME_DATA_DIR) not in sys.path:
     sys.path.insert(0, str(_RUNTIME_DATA_DIR))
 
-from journey_registry import JourneyManifest, load_journey_manifest  # noqa: E402
+from journey_registry import JOURNEY_IDS, JourneyManifest, load_journey_manifest  # noqa: E402
 
 SCANNER_VERSION = "1"
 
@@ -94,7 +94,14 @@ class ScannerFailureSummary(BaseModel):
 
     schema_version: int
     run_id: str
-    status: Literal["failed"]
+    # Task 5's own CI contract test constructs this class directly with
+    # `status="scanner_failed"` (distinguishing "the scanner itself refused
+    # to pass this run" from `ScanResult.status`'s generic "failed", which
+    # is a different, non-uploaded type). Renamed from the original
+    # `Literal["failed"]` for that reason; nothing else keys off this exact
+    # string (`test_artifacts.py` only checks the on-disk key set, never the
+    # `status` value).
+    status: Literal["scanner_failed"]
     reason_codes: tuple[str, ...]
     category_counts: Mapping[str, int]
     scanner_version: str
@@ -374,6 +381,18 @@ def scan_artifact(path: Path, *, forbidden_values: frozenset[str]) -> None:
         raise ArtifactSafetyError(",".join(sorted(reasons)))
 
 
+# `run.json` (`orchestrator.STAGING_RELATIVE_PATH`) lives in the SAME
+# staging directory the CI scan reads (Task 3's prepare phase writes it
+# there for the browser to read) but is not `ArtifactAllowlist`-shaped --
+# it is its own, already-allowlisted staging-manifest schema (`orchestrator.
+# _reject_forbidden_manifest_content`). It is still scanned for forbidden
+# values/PII/secrets like every other staged file; it is just exempt from
+# the (different) `ArtifactAllowlist` schema check and never copied into the
+# sanitized upload directory, which only ever carries per-journey CI
+# evidence.
+NON_ALLOWLIST_STAGING_FILENAMES = frozenset({"run.json"})
+
+
 def _validate_allowlist_schema(payload: Mapping[str, object]) -> None:
     try:
         ArtifactAllowlist.model_validate(payload)
@@ -386,7 +405,8 @@ def scan_and_materialize(
     *,
     output_dir: Path,
     failure_summary_path: Path,
-    manifest: JourneyManifest,
+    manifest: JourneyManifest | None = None,
+    forbidden_values: frozenset[str] | None = None,
     run_id: str,
 ) -> ScanResult:
     """Scan every file under ``staging_dir`` and materialize the outcome.
@@ -396,8 +416,17 @@ def scan_and_materialize(
     ``output_dir``. On failure: writes only a fixed-schema
     ``ScannerFailureSummary`` to ``failure_summary_path`` and creates no
     output directory.
+
+    Exactly one of ``manifest`` (single-journey forbidden values, the
+    original per-journey call shape every existing test in this module
+    uses) or ``forbidden_values`` (an already-unioned set, used by the CI
+    ``scan`` subcommand below, which scans all three journeys' staged
+    evidence in one pass) must be supplied.
     """
-    forbidden_values = build_fixture_forbidden_values(manifest)
+    if forbidden_values is None:
+        if manifest is None:
+            raise ValueError("scan_and_materialize requires either manifest or forbidden_values")
+        forbidden_values = build_fixture_forbidden_values(manifest)
     staged_files = sorted(p for p in staging_dir.rglob("*") if p.is_file())
 
     counts = {"scanned": 0, "failed": 0}
@@ -411,11 +440,12 @@ def scan_and_materialize(
         except ArtifactSafetyError as exc:
             reason_codes.update(str(exc).split(","))
             failed_this_file = True
-        try:
-            _validate_allowlist_schema(json.loads(path.read_text(encoding="utf-8", errors="replace")))
-        except (ArtifactSafetyError, ValueError):
-            reason_codes.add("ARTIFACT_SCHEMA_VIOLATION")
-            failed_this_file = True
+        if path.name not in NON_ALLOWLIST_STAGING_FILENAMES:
+            try:
+                _validate_allowlist_schema(json.loads(path.read_text(encoding="utf-8", errors="replace")))
+            except (ArtifactSafetyError, ValueError):
+                reason_codes.add("ARTIFACT_SCHEMA_VIOLATION")
+                failed_this_file = True
         if failed_this_file:
             counts["failed"] += 1
 
@@ -423,7 +453,7 @@ def scan_and_materialize(
         summary = ScannerFailureSummary(
             schema_version=1,
             run_id=run_id,
-            status="failed",
+            status="scanner_failed",
             reason_codes=tuple(sorted(reason_codes)),
             category_counts={code: 1 for code in reason_codes},
             scanner_version=SCANNER_VERSION,
@@ -439,8 +469,15 @@ def scan_and_materialize(
             counts=counts,
         )
 
-    output_dir.mkdir(parents=True, exist_ok=False)
+    # `exist_ok=True`: the CI gate script's own final phase and the
+    # workflow's separate `id: scan` step (which captures `scan_safe` into
+    # `$GITHUB_OUTPUT`) both invoke this scan over the same staging
+    # directory in the same run -- the second call is a harmless, idempotent
+    # re-scan/re-write, not a collision.
+    output_dir.mkdir(parents=True, exist_ok=True)
     for path in staged_files:
+        if path.name in NON_ALLOWLIST_STAGING_FILENAMES:
+            continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         allowed = ArtifactAllowlist.model_validate(payload)
         target = output_dir / path.relative_to(staging_dir)
@@ -457,12 +494,15 @@ def scan_and_materialize(
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Scan and materialize business-journey CI evidence.")
+def scan_one_journey(argv: Sequence[str] | None = None) -> int:
+    """The original single-journey CLI (kept for direct/manual use; the CI
+    gate itself calls the ``scan`` subcommand in ``main`` below, which scans
+    all three journeys' staged evidence in one pass)."""
+    parser = argparse.ArgumentParser(description="Scan and materialize one journey's staged CI evidence.")
     parser.add_argument("staging_dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--failure-summary", type=Path, required=True)
-    parser.add_argument("--journey-id", required=True, choices=("supply_chain", "finance", "credit"))
+    parser.add_argument("--journey-id", required=True, choices=JOURNEY_IDS)
     parser.add_argument(
         "--runtime-root",
         type=Path,
@@ -482,6 +522,177 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"scan_safe={'true' if result.scan_safe else 'false'}")
     return 0 if result.scan_safe else 1
+
+
+# ---------------------------------------------------------------------------
+# All-journeys CI scan (the real gate's own entrypoint).
+# ---------------------------------------------------------------------------
+
+
+def build_all_journeys_forbidden_values(runtime_root: Path) -> frozenset[str]:
+    """Union every journey's own forbidden values -- the CI staging
+    directory holds all three journeys' evidence side by side, so no single
+    journey's manifest is enough to scan it."""
+    values: set[str] = set()
+    for journey_id in JOURNEY_IDS:
+        manifest = load_journey_manifest(journey_id, runtime_root)
+        values.update(build_fixture_forbidden_values(manifest))
+    return frozenset(values)
+
+
+def assemble_journey_evidence(
+    *,
+    run_id: str,
+    journey_id: str,
+    preparation: Mapping[str, object],
+    verification: Mapping[str, object],
+) -> ArtifactAllowlist:
+    """Project one journey's real, persisted prepare+verify records
+    (``JourneyPreparation.to_dict()`` / ``JourneyVerification.to_dict()``,
+    Task 3) into the closed ``ArtifactAllowlist`` schema for CI staging.
+
+    Disclosed, honest gap: neither record tracks a per-call wall-clock
+    timestamp or a dedicated backend trace id today, so ``call_timestamps``
+    and ``backend_trace_ids`` are always empty here -- never a fabricated
+    placeholder. ``semantic_outcomes`` is not a separately-measured field
+    either; it is safe to mark every logical call "passed" here because this
+    function is only ever called after `prepare_journey`'s semantic-minimum
+    validation and `verify_journey`'s structural checks have both already
+    raised on any failure -- by the time a preparation/verification record
+    reaches here, every one of its calls passed.
+    """
+    logical_model_calls = int(preparation["logical_model_calls"]) + int(verification["logical_model_calls"])
+    return ArtifactAllowlist(
+        schema_version=1,
+        run_id=run_id,
+        journey_id=journey_id,
+        fixture_manifest_sha256=str(preparation["fixture_manifest_sha256"]),
+        model_requested=str(preparation["requested_model_id"]),
+        model_observed=str(preparation["observed_model_id"]),
+        model_origin=str(preparation["model_origin"]),
+        model_caller=str(preparation["model_caller"]),
+        model_config_version_id=str(preparation["model_config_version_id"]),
+        preflight_model_id=str(preparation["preflight_model_id"]),
+        logical_model_calls=logical_model_calls,
+        http_attempts=int(preparation["http_attempts"]) + int(verification["http_attempts"]),
+        retry_count=int(preparation["retry_count"]) + int(verification["retry_count"]),
+        call_timestamps=(),
+        call_kinds=tuple(preparation["call_kinds"]) + tuple(verification["call_kinds"]),
+        semantic_outcomes=("passed",) * logical_model_calls,
+        state_transitions=tuple(branch["branch"] for branch in verification["plan_branches"]),
+        citation_ids=tuple(verification["citation_ids"]),
+        tool_trace_ids=tuple(verification["tool_trace_ids"]),
+        audit_event_ids=tuple(verification["audit_event_ids"]),
+        backend_trace_ids=(),
+    )
+
+
+_DETERMINISTIC_REPORT_REASON = "DETERMINISTIC_REPORT_NOT_CLEAN"
+
+
+def _check_deterministic_report(path: Path | None) -> str | None:
+    """Return a reason code if ``path`` (``run_registered_cases.py``'s own
+    report) does not show a clean, zero-model-call deterministic run;
+    ``None`` if the report is clean or was not supplied."""
+    if path is None:
+        return None
+    if not path.exists():
+        return _DETERMINISTIC_REPORT_REASON
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return _DETERMINISTIC_REPORT_REASON
+    if report.get("missing") or report.get("duplicates") or report.get("model_calls", 0) != 0:
+        return _DETERMINISTIC_REPORT_REASON
+    for result in report.get("results", []):
+        if result.get("status") != "passed" or result.get("skipped"):
+            return _DETERMINISTIC_REPORT_REASON
+    return None
+
+
+def _resolve_run_id(explicit: str | None, staging_dir: Path) -> str:
+    if explicit:
+        return explicit
+    run_manifest = staging_dir / "run.json"
+    if run_manifest.exists():
+        document = json.loads(run_manifest.read_text(encoding="utf-8"))
+        run_id = document.get("run_id")
+        if run_id:
+            return str(run_id)
+    raise SystemExit("RUN_ID_REQUIRED: pass --run-id or ensure <staging>/run.json exists")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m evals.business_journeys.artifacts")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    scan = subparsers.add_parser(
+        "scan", help="Scan all three journeys' staged CI evidence and materialize the sanitized/failure output.",
+    )
+    scan.add_argument("--staging", type=Path, required=True)
+    scan.add_argument("--sanitized-output", type=Path, required=True)
+    scan.add_argument("--failure-summary", type=Path, required=True)
+    scan.add_argument(
+        "--manifest", type=Path, default=None,
+        help="test_data/runtime/manifest.json; its parent directory is the runtime root "
+        "the three per-journey manifests load from (defaults to test_data/runtime).",
+    )
+    scan.add_argument(
+        "--deterministic-report", type=Path, default=None,
+        help="run_registered_cases.py's own report; if given, the scan only passes when it "
+        "shows zero missing/duplicate/failed/skipped cases and zero model calls.",
+    )
+    scan.add_argument("--run-id", default=None, help="defaults to <staging>/run.json's run_id")
+    return parser
+
+
+def _run_scan(args: argparse.Namespace) -> int:
+    runtime_root = args.manifest.parent if args.manifest else _RUNTIME_DATA_DIR
+    run_id = _resolve_run_id(args.run_id, args.staging)
+    forbidden_values = build_all_journeys_forbidden_values(runtime_root)
+
+    deterministic_reason = _check_deterministic_report(args.deterministic_report)
+
+    result = scan_and_materialize(
+        args.staging,
+        output_dir=args.sanitized_output,
+        failure_summary_path=args.failure_summary,
+        forbidden_values=forbidden_values,
+        run_id=run_id,
+    )
+
+    if deterministic_reason is not None and result.scan_safe:
+        # The evidence itself was safe, but the deterministic registry run
+        # this gate depends on was not clean -- fail closed the same way a
+        # forbidden-value hit would, with the same fixed-schema summary.
+        import shutil
+
+        if result.safe_evidence_dir is not None:
+            shutil.rmtree(result.safe_evidence_dir, ignore_errors=True)
+        summary = ScannerFailureSummary(
+            schema_version=1,
+            run_id=run_id,
+            status="scanner_failed",
+            reason_codes=(deterministic_reason,),
+            category_counts={deterministic_reason: 1},
+            scanner_version=SCANNER_VERSION,
+        )
+        args.failure_summary.parent.mkdir(parents=True, exist_ok=True)
+        args.failure_summary.write_text(json.dumps(summary.to_json(), indent=2, sort_keys=True))
+        print("scan_safe=false")
+        return 1
+
+    print(f"scan_safe={'true' if result.scan_safe else 'false'}")
+    return 0 if result.scan_safe else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "scan":
+        return _run_scan(args)
+    parser.error(f"unknown command {args.command!r}")
+    return 2
 
 
 if __name__ == "__main__":

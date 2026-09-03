@@ -145,6 +145,19 @@ Celery worker topology. Browser governance coverage is `cd frontend && npx
 playwright test src/test/e2e/runtime-governance.spec.ts`; it requires the
 services configured by that suite and must not be represented as a model test.
 
+### Real business-journey gate (CI only)
+
+`business-journey-real-gate` in `.github/workflows/agent-mvp.yml` is a
+blocking, trusted-pull-request-only job that exercises the three enterprise
+journeys (supply chain, finance, credit) against a real DeepSeek model and
+the real Agent-creation browser flow — see
+`test_data/runtime/README.md#the-real-gate-task-5` and
+`scripts/run_business_journey_gate.sh` for the exact phase order. It requires
+the repository secret `DEEPSEEK_API_KEY` and never runs on `pull_request_target`
+or a fork; only sanitized, scanner-approved evidence is ever uploaded. This
+gate needs a live key and a disposable Compose stack, so it cannot be run
+from a plain local checkout the way the release gate above can.
+
 ---
 
 ## Usage (Pipeline Mapping path)

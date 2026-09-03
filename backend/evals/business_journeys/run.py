@@ -33,17 +33,48 @@ import os
 import sys
 from pathlib import Path
 
+from .artifacts import assemble_journey_evidence
 from .contracts import MODEL_ID
 from .orchestrator import (
     APPLICATION_API_KEY_ENV_VAR,
     JourneyAcceptanceError,
     prepare_all_journeys,
     prepare_journey,
+    read_run_manifest,
     verify_all_journeys,
     verify_journey,
 )
 
 JOURNEY_CHOICES = ("supply_chain", "finance", "credit", "all")
+
+# Where the CI gate's scanner (`evals.business_journeys.artifacts scan
+# --staging ...`) expects one closed-schema `ArtifactAllowlist` JSON file per
+# journey, written only after `--phase verify --journey all` has itself
+# passed (`orchestrator.STAGING_RELATIVE_PATH`'s own parent directory).
+_STAGING_RELATIVE_DIR = Path("business_journeys") / "staging"
+
+
+def _write_staging_evidence(output_dir: Path, run_id: str, verifications: list) -> None:
+    """Assemble and write the scanner's real input: one `ArtifactAllowlist`
+    per journey, projected from the persisted prepare (`run.json`) and the
+    just-computed verify records. Never touches `run.json` itself -- this is
+    an additive write next to it."""
+    run_manifest = read_run_manifest(output_dir)
+    preparations_by_journey = {p["journey_id"]: p for p in run_manifest["preparations"]}
+    staging_dir = Path(output_dir) / _STAGING_RELATIVE_DIR
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    for verification in verifications:
+        journey_id = verification.journey_id
+        preparation = preparations_by_journey.get(journey_id)
+        if preparation is None:
+            raise JourneyAcceptanceError(f"PREPARATION_MISSING_FOR_VERIFICATION: {journey_id}")
+        evidence = assemble_journey_evidence(
+            run_id=run_id, journey_id=journey_id,
+            preparation=preparation, verification=verification.to_dict(),
+        )
+        (staging_dir / f"{journey_id}.json").write_text(
+            evidence.model_dump_json(indent=2), encoding="utf-8",
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -101,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
                 verifications = verify_all_journeys(
                     api_base=args.api_base, output_dir=args.output, run_id=args.run_id,
                 )
+                _write_staging_evidence(args.output, args.run_id, verifications)
                 document = {"verifications": [v.to_dict() for v in verifications]}
             else:
                 verification = verify_journey(

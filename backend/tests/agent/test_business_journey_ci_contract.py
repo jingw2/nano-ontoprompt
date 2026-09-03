@@ -1,0 +1,141 @@
+"""Task 5: static contract tests for the blocking real business-journey gate.
+
+These tests never execute the gate script, never call DeepSeek, and never
+start a live stack -- they parse `.github/workflows/agent-mvp.yml` and
+`scripts/run_business_journey_gate.sh` as text/YAML and assert the structural
+properties the plan requires: the job is trusted-PR-only, the model id and
+trust guard are exact, the six phases run in the exact order, the scanner
+runs before any upload, and the upload allowlist is exactly the two sanitized
+paths.
+
+One deliberate deviation from the plan's literal test sketch, disclosed here
+rather than silently: `test_gate_order_and_sanitized_upload_are_explicit`
+below anchors the final phase on the literal string
+``"evals.business_journeys.artifacts"`` (the scanner's own qualified module
+name) rather than the bare substring ``"artifacts"``. The bare substring
+already occurs earlier in the required script text -- inside
+`run_registered_cases`'s own required `--report
+$REPO_ROOT/artifacts/runtime/deterministic-cases.json` path -- so an ordering
+check keyed on the bare word could never pass for any script that also
+contains that required, pre-existing path. The qualified module name is
+unique to the final scan command and preserves the same property under test
+(the scanner runs last).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from evals.business_journeys.artifacts import ScannerFailureSummary
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "agent-mvp.yml"
+SCRIPT_PATH = REPO_ROOT / "scripts" / "run_business_journey_gate.sh"
+SPEC_PATH = REPO_ROOT / "frontend" / "src" / "test" / "e2e" / "business-journeys.spec.ts"
+
+JOB_NAME = "business-journey-real-gate"
+
+
+def _workflow() -> dict:
+    return yaml.safe_load(WORKFLOW_PATH.read_text())
+
+
+def test_real_gate_is_blocking_and_exact_model():
+    workflow = _workflow()
+    job = workflow["jobs"][JOB_NAME]
+    text = yaml.safe_dump(job)
+    assert "continue-on-error" not in text
+    assert "DEEPSEEK_API_KEY" in text
+    assert "deepseek-v4-flash-vision-exp" in text
+    workflow_text = WORKFLOW_PATH.read_text()
+    assert "pull_request_target" not in workflow_text
+    assert "github.event.pull_request.head.repo.full_name" in workflow_text
+    assert "github.repository" in workflow_text
+    assert "DEEPSEEK_API_BASE" not in workflow_text
+    assert "base_url" not in workflow_text
+
+
+def test_gate_order_and_sanitized_upload_are_explicit():
+    script = SCRIPT_PATH.read_text()
+    ordered = [
+        "run_registered_cases",
+        "--phase prepare",
+        "business-journeys.spec.ts",
+        "--phase verify",
+        "evals.business_journeys.artifacts",
+    ]
+    positions = [script.index(value) for value in ordered]
+    assert positions == sorted(positions)
+    assert "frontend/test-results" not in script
+    assert "--staging" in script
+    assert "artifacts/business_journeys/staging" in script
+    assert "--sanitized-output" in script
+    assert "artifacts/business_journeys/sanitized" in script
+
+
+def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
+    workflow = _workflow()
+    steps = workflow["jobs"][JOB_NAME]["steps"]
+    scan = next(step for step in steps if step.get("id") == "scan")
+    safe_upload = next(step for step in steps if step.get("name") == "Upload sanitized journey evidence")
+    failure_upload = next(step for step in steps if step.get("name") == "Upload safe scanner failure summary")
+    assert scan["if"] == "always()"
+    assert safe_upload["if"] == "steps.scan.outputs.scan_safe == 'true'"
+    assert failure_upload["if"] == "failure() && steps.scan.outputs.scan_safe != 'true'"
+    assert safe_upload["with"]["path"] == "artifacts/business_journeys/sanitized/**"
+    assert failure_upload["with"]["path"] == "artifacts/business_journeys/scanner-failure-summary.json"
+    assert "always()" not in safe_upload["if"]
+    assert "always()" not in failure_upload["if"]
+    # No other artifact upload step exists in this job.
+    upload_steps = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact")]
+    assert len(upload_steps) == 2
+
+
+def test_failure_summary_is_closed_and_raw_browser_paths_are_forbidden():
+    summary = ScannerFailureSummary(
+        schema_version="1", run_id="run-1", status="scanner_failed",
+        reason_codes=("FIXTURE_VALUE_FOUND",), category_counts={"fixture": 1},
+        scanner_version="1",
+    )
+    assert set(summary.to_json()) == {
+        "schema_version", "run_id", "status", "reason_codes",
+        "category_counts", "scanner_version",
+    }
+    workflow_text = WORKFLOW_PATH.read_text()
+    assert "frontend/test-results" not in workflow_text
+    assert "trace.zip" not in workflow_text
+    assert "raw logs" not in workflow_text
+    assert "artifacts/" + "evals/business_journeys" not in workflow_text
+
+
+def test_new_browser_spec_has_no_soft_skip():
+    text = SPEC_PATH.read_text()
+    assert "test.skip" not in text
+    assert "test.fixme" not in text
+
+
+def test_job_triggers_on_pull_request_only_and_rejects_non_pr_first():
+    workflow = _workflow()
+    job = workflow["jobs"][JOB_NAME]
+    steps = job["steps"]
+    script = SCRIPT_PATH.read_text()
+    # The workflow's own trigger list still includes pull_request (shared
+    # with other jobs); the job's own first real command must independently
+    # reject a non-PR/untrusted-fork invocation before anything else runs.
+    # YAML 1.1 parses the bare `on:` key as the boolean True, not the string
+    # "on" -- read both to be robust to that well-known GitHub Actions quirk.
+    triggers = workflow.get("on") or workflow.get(True) or {}
+    assert "pull_request" in triggers
+    first_run_step = next(step for step in steps if "run" in step)
+    assert "TRUSTED_BRANCH_REQUIRED" in first_run_step["run"]
+    assert "DEEPSEEK_API_KEY_REQUIRED" in script or "DEEPSEEK_API_KEY_REQUIRED" in yaml.safe_dump(job)
+
+
+def test_script_is_strict_and_syntactically_valid():
+    script = SCRIPT_PATH.read_text()
+    assert "set -euo pipefail" in script
+    assert "continue-on-error" not in script
+    assert "down -v --remove-orphans" in script
+    assert "BUSINESS_JOURNEY_ACCEPTANCE_ENABLED" in script
+    assert "BUSINESS_JOURNEY_RUN_MANIFEST" in script
