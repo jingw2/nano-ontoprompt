@@ -141,8 +141,62 @@ def test_dataset_pipeline_and_curated_review_run_against_the_real_application(jo
     assert pipeline.dataset_version_id
     assert pipeline.pipeline_id
     assert pipeline.pipeline_run_id
+    assert pipeline.curated_dataset_id
 
-    curated = journey_client.approve_curated(pipeline.pipeline_run_id)
+    curated = journey_client.approve_curated(pipeline)
     assert curated.status == "approved"
-    assert curated.curated_dataset_id
+    assert curated.curated_dataset_id == pipeline.curated_dataset_id
     assert curated.review_id
+
+
+def test_persist_extraction_writes_real_entity_relation_logic_action_rows(journey_client):
+    """`persist_extraction` (Critical Finding: the ontology completion's
+    extraction used to be validated in memory and then thrown away) maps
+    the model's flat name/edge extraction onto the real write endpoints:
+    `POST .../entities`, `POST .../graph/relations`, `POST /api/v2/
+    ontologies/{id}/logic`, `POST /api/v2/ontologies/{id}/actions`. This
+    drives all four against the REAL FastAPI app/database (not the fake
+    HTTP server `test_orchestrator.py` uses) to prove the request/response
+    shapes `api_client.py` assumes — envelope vs. flat body, required
+    fields, and that a relation's `source_entity`/`target_entity` really
+    are accepted as the entity ids `persist_extraction` just created — are
+    real, not merely internally consistent with a hand-rolled fake.
+    """
+    from evals.business_journeys.api_client import JourneyAcceptanceError
+
+    created = journey_client._post(
+        "/api/v1/ontologies", reason_code="ONTOLOGY_MISSING",
+        json={"name": "persist-extraction-test", "domain": "供应链", "build_mode": "simple_llm"},
+    )
+    ontology_id = created["data"]["id"]
+
+    structured = {
+        "answer": "ignored here",
+        "entities": ["Supplier", "Warehouse"],
+        "relations": ["SUPPLIES"],
+        "relation_edges": [{"name": "SUPPLIES", "source": "Supplier", "target": "Warehouse"}],
+        "rules": ["inventory_below_safety_stock"],
+        "actions": ["risk_label"],
+        "citations": [],
+    }
+    content = journey_client.persist_extraction(ontology_id, structured)
+
+    assert len(content.entity_ids) == 2
+    assert len(content.relation_ids) == 1
+    assert len(content.rule_ids) == 1
+    assert len(content.action_ids) == 1
+
+    entities = journey_client._get(
+        f"/api/v1/ontologies/{ontology_id}/entities", reason_code="CHECK_ENTITIES",
+    )
+    assert {e["id"] for e in entities["data"]} == set(content.entity_ids)
+    assert {e["name_cn"] for e in entities["data"]} == {"Supplier", "Warehouse"}
+
+    # An edge naming an entity the extraction never listed must fail closed
+    # against the real relation endpoint's real foreign-key constraint, not
+    # merely against a hand-rolled fake's imitation of one.
+    bad_structured = dict(structured, relation_edges=[
+        {"name": "SUPPLIES", "source": "Supplier", "target": "NeverExtracted"},
+    ])
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELATION_WRITE_FAILED"):
+        journey_client.persist_extraction(ontology_id, bad_structured)
