@@ -974,3 +974,28 @@ def test_verification_record_never_carries_raw_inputs_or_credentials(fake_api):
     serialized = json.dumps(verification.to_dict(), sort_keys=True)
     for forbidden in ("api_key", "Authorization", "test-deepseek-key", "runtime/runtime", "prompt"):
         assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://evil.example.invalid",
+        "http://169.254.169.254",  # cloud metadata endpoint
+        "http://10.0.0.5:8000",
+        "http://api-base.attacker.example:8000",
+    ],
+)
+def test_create_model_config_refuses_a_non_loopback_api_base(api_base):
+    """`BUSINESS_JOURNEY_API_BASE` is a caller-configurable override with no
+    validation upstream of this client -- `create_model_config` is the one
+    call that embeds the real `DEEPSEEK_API_KEY` in a request body, so it
+    must refuse to send that body anywhere but the disposable local stack
+    this gate is designed to talk to. This client is never given a real
+    server to talk to, so if the guard did not fire first the test would
+    instead fail on a connection error -- the `pytest.raises` match proves
+    it fires first, not just that *some* exception happened."""
+    from evals.business_journeys.api_client import JourneyApiClient
+
+    client = JourneyApiClient(api_base, run_id="journey-loopback-guard")
+    with pytest.raises(JourneyAcceptanceError, match="API_BASE_NOT_LOOPBACK"):
+        client.create_model_config("supply_chain", "sk-should-never-be-sent")

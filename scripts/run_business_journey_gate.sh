@@ -17,7 +17,11 @@
 #                             talks to the one official DeepSeek origin.
 #   BUSINESS_JOURNEY_API_BASE  optional -- the application-under-test base
 #                             URL only. Defaults to the disposable stack
-#                             this script itself starts.
+#                             this script itself starts. Must resolve to a
+#                             loopback address (127.0.0.1/localhost/::1):
+#                             the prepare phase sends DEEPSEEK_API_KEY in a
+#                             request body to this URL, so anything else is
+#                             refused before the gate starts.
 #
 # Creates exactly one uniquely-named disposable Compose project and tears
 # down only that project (`down -v --remove-orphans`), on success or
@@ -40,6 +44,19 @@ fi
 RUN_ID="business-journey-$(date +%s)-$$"
 PROJECT="business-journey-gate-$$"
 API_BASE="${BUSINESS_JOURNEY_API_BASE:-http://127.0.0.1:8000}"
+# The prepare phase includes DEEPSEEK_API_KEY in a request body sent to
+# API_BASE (the application under test needs the credential to configure its
+# own model config). Fail fast, before anything starts, if this caller-
+# configurable override could send that credential anywhere but the
+# disposable local stack this gate is designed to talk to -- the Python
+# client enforces the same restriction independently (defense in depth).
+case "$API_BASE" in
+  http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
+  *)
+    echo "API_BASE_NOT_LOOPBACK: BUSINESS_JOURNEY_API_BASE must be a loopback address (127.0.0.1/localhost/::1) -- refusing to risk sending DEEPSEEK_API_KEY to $API_BASE" >&2
+    exit 2
+    ;;
+esac
 ARTIFACTS_DIR="$REPO_ROOT/artifacts"
 STAGING_DIR="$REPO_ROOT/artifacts/business_journeys/staging"
 
