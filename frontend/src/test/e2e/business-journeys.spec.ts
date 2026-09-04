@@ -108,9 +108,11 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
       page.reload(),
     ])
     const versionsBody = await versionsResponse.json() as {
-      items?: { ontology_bindings?: { selected_tools?: string[] }[] }[]
+      data?: { items?: { ontology_bindings?: { selected_tools?: string[] }[] }[] }
     }
-    const persistedSelectedTools = versionsBody.items?.[0]?.ontology_bindings?.[0]?.selected_tools ?? []
+    const persistedVersion = versionsBody.data?.items?.[0]
+    if (!persistedVersion) throw new Error(`GET .../versions response missing data.items[0]: ${JSON.stringify(versionsBody)}`)
+    const persistedSelectedTools = persistedVersion.ontology_bindings?.[0]?.selected_tools ?? []
     for (const descriptorId of journey.mcp_descriptor_ids) {
       expect(persistedSelectedTools).toContain(descriptorId)
     }
