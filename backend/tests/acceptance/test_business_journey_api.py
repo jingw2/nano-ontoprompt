@@ -32,6 +32,7 @@ import uvicorn
 
 from app.main import app
 from evals.business_journeys.api_client import JourneyApiClient
+from evals.business_journeys.api_client import JourneyAcceptanceError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNTIME_DATA_DIR = REPO_ROOT / "test_data" / "runtime"
@@ -146,3 +147,20 @@ def test_dataset_pipeline_and_curated_review_run_against_the_real_application(jo
     assert curated.status == "approved"
     assert curated.curated_dataset_id
     assert curated.review_id
+
+
+def test_legacy_curated_approval_is_unbound_and_cannot_be_used_as_run_evidence(journey_client):
+    """The legacy approval route intentionally cannot mint a journey binding."""
+    manifest = load_journey_manifest(JOURNEY_ID, _RUNTIME_DATA_DIR)
+    journey_client._run_id = "journey-legacy-approval"
+    pipeline = journey_client.start_pipeline(manifest)
+    legacy = journey_client._post(
+        f"/api/v2/curated/{pipeline.curated_dataset_id}/review?action=approve",
+        reason_code="LEGACY_APPROVAL_FAILED",
+    )
+    review = journey_client._get(
+        f"/api/v2/curated/reviews/{legacy['review_id']}", reason_code="REVIEW_MISSING",
+    )
+    assert review["pipeline_run_id"] is None
+    with pytest.raises(JourneyAcceptanceError, match="PIPELINE_RUN_MISSING"):
+        journey_client.approve_curated("not-the-producing-run")

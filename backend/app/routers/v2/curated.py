@@ -271,6 +271,8 @@ def start_review(dataset_id: str, body: PipelineRunBinding, db: Session = Depend
     _ensure_curated_dataset_row(db, dataset_id)
     svc = ReviewService(db)
     review = svc.start_review(dataset_id)
+    review.pipeline_run_id = body.pipeline_run_id
+    db.commit()
     return {"review_id": review.id, "status": review.status}
 
 
@@ -284,6 +286,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
     return {
         "id": review.id,
         "curated_dataset_id": review.curated_dataset_id,
+        "pipeline_run_id": review.pipeline_run_id,
         "status": review.status,
         "notes": review.notes,
         "decided_at": review.decided_at,
@@ -308,6 +311,8 @@ def approve_review(review_id: str, body: PipelineRunBinding, notes: str = "", db
     if review_row is None:
         raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
     _require_run_curated_dataset(db, body.pipeline_run_id, review_row.curated_dataset_id)
+    if review_row.pipeline_run_id != body.pipeline_run_id:
+        raise HTTPException(status_code=422, detail="CURATED_REVIEW_RUN_MISMATCH")
     svc = ReviewService(db)
     review = svc.approve(review_id, notes)
     return {"review_id": review.id, "status": review.status}

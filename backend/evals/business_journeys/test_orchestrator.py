@@ -1048,6 +1048,29 @@ def test_verify_requires_exact_persisted_snapshot_lineage_and_release(fake_api):
         verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
 
 
+def test_verify_rejects_same_release_with_wrong_snapshot_input_tuple(fake_api):
+    run_id = "journey-wrong-snapshot-input"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    release_id = _uuid_for(f"{run_id}:credit:release")
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit", "ontology_release_id": release_id,
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "snapshot_inputs": [],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    document = browser_evidence_document(run_id, "credit")
+    document["ontology_release_id"] = release_id
+    write_browser_evidence(Path("artifacts"), run_id, "credit", document)
+    with pytest.raises(JourneyAcceptanceError, match="PREPARATION_SNAPSHOT_LINEAGE_MISSING"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+
 def test_verify_rejects_shared_plan_identity_across_branches(fake_api):
     """A real `action_plan_id` is a database-generated primary key, so two
     genuinely distinct governed plans can never physically share one — the

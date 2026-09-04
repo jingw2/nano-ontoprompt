@@ -72,7 +72,8 @@ def create_preparation(
     if body.curated_dataset_id != curated_dataset_id:
         raise HTTPException(status_code=422, detail="CURATED_DATASET_RUN_MISMATCH")
     review = db.get(CuratedReview, body.curated_review_id)
-    if review is None or review.curated_dataset_id != curated_dataset_id or review.status != "approved":
+    if (review is None or review.curated_dataset_id != curated_dataset_id or review.status != "approved"
+            or review.pipeline_run_id != body.pipeline_run_id):
         raise HTTPException(status_code=422, detail="CURATED_APPROVAL_RUN_MISMATCH")
     inputs = db.query(PipelineRunInput).filter_by(pipeline_run_id=body.pipeline_run_id).all()
     if body.dataset_version_id not in {item.dataset_version_id for item in inputs}:
