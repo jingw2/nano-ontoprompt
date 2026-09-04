@@ -114,13 +114,12 @@ authoritative loader/validator (`load_journey_manifest`,
 corpus; case IDs like `edge-empty-result` repeat once per journey in each
 journey's own `case_matrix.json` by design. Only each journey's
 `normal-pipeline-release` case is `execution_mode: "real_model_browser"`;
-the other 14 are deterministic and reuse the closest already-passing pytest
-node that proves the same governed-runtime property (see `registry.py`'s
-`JOURNEY_DETERMINISTIC_TARGET_DEFS` for the full, disclosed mapping -- eight
-fully prove their case's claim, and six are marked
-`target_status: "provisional"` with a `proves` string naming the narrower
-property their target actually proves, pending real journey-specific
-coverage from Task 2/3). Every one of these 42 deterministic cases (14 x 3
+the other 14 are deterministic (see `registry.py`'s
+`JOURNEY_DETERMINISTIC_TARGET_DEFS` for the full mapping -- eight reuse the
+closest already-passing pytest node that proves the same governed-runtime
+property, and six have dedicated, journey-specific tests in
+`test_journey_case_contracts.py` that each prove exactly their case's
+claim). Every one of these 42 deterministic cases (14 x 3
 journeys) is ALSO merged into this shared `manifest.json`'s own `cases`
 array under the globally-unique id ``"<journey-with-hyphens>-<case_id>"``
 (e.g. `supply-chain-edge-empty-result`) -- see

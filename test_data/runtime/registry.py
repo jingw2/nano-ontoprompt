@@ -254,12 +254,10 @@ JOURNEY_BROWSER_TARGETS = {
 # registered above under a different case_id (identity/snapshot/execution/
 # risk-policy/mcp-client), because the governed-runtime property those cases
 # claim is generic, not journey-specific -- reusing them is intentional, not
-# a copy-paste accident. The other six are marked `target_status:
-# "provisional"` with a `proves` string describing the narrower property
-# their current target actually proves, because no existing test (in this
-# codebase, as of this plan) proves the case's full claimed assertion --
-# they are TODOs for Task 2/3 to replace with real journey-specific
-# coverage, not silent overclaims.
+# a copy-paste accident. The other six have dedicated, journey-specific
+# tests in test_journey_case_contracts.py, each proving exactly the
+# property its case_id claims (no `target_status`/`proves` marker: none of
+# these targets are provisional).
 JOURNEY_DETERMINISTIC_CASE_IDS = (
     "edge-empty-result",
     "edge-duplicate-or-missing",
