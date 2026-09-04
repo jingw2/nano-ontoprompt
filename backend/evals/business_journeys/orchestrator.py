@@ -356,6 +356,13 @@ def prepare_journey(
             grant = client_with_model.grant_ontology_data(
                 release.ontology_id, user_id, release.release_id,
             )
+            persisted_preparation = client_with_model.persist_preparation_evidence(
+                manifest=manifest, pipeline=pipeline, curated=curated,
+                release=release, model_config=model_config, probe=probe,
+            )
+            semantic_snapshot_id = str(persisted_preparation.get("semantic_snapshot_id") or "")
+            if not semantic_snapshot_id:
+                raise JourneyAcceptanceError("SEMANTIC_SNAPSHOT_MISSING: preparation was not materialized")
             binding_options = client_with_model.prepare_browser_agent_binding(
                 manifest, release.release_id, descriptors, model_config.model_config_version_id,
             )
@@ -387,7 +394,7 @@ def prepare_journey(
         ontology_id=release.ontology_id,
         ontology_release_id=release.release_id,
         release_status=release.release_status,
-        semantic_snapshot_id=release.semantic_snapshot_id,
+        semantic_snapshot_id=semantic_snapshot_id,
         mcp_descriptors=descriptors,
         grant=grant,
         model_config=model_config,
@@ -536,6 +543,7 @@ def verify_journey(
     client = JourneyApiClient(api_base, api_key, run_id=run_id)
     try:
         client.authenticate()
+        preparation_evidence = client.read_preparation_evidence(run_id, journey_id)
         evidence = client.read_journey_evidence(run_id, browser_evidence=browser_evidence)
     finally:
         client.close()
@@ -574,7 +582,8 @@ def verify_journey(
             f"persisted {evidence.automatic_action!r}"
         )
 
-    ontology_call = _synthetic_ontology_call(run_id, journey_id)
+    ontology_call = _persisted_ontology_call(preparation_evidence, run_id=run_id, journey_id=journey_id)
+    _require_persisted_ontology_call(ontology_call, run_id=run_id, journey_id=journey_id)
     calls = (ontology_call,) + evidence.model_calls
     http_attempts = sum(call.http_attempts for call in calls)
     retry_count = sum(call.retry_count for call in calls)
@@ -615,25 +624,42 @@ def verify_journey(
     )
 
 
-def _synthetic_ontology_call(run_id: str, journey_id: str):
-    """The ontology call is made (and budgeted) by the preparation phase, so
-    the browser turn's persisted trace only carries calls 2 and 3. Its
-    correlation id is fully determined by run/journey, so it is reconstructed
-    here rather than read from a mutable source."""
+def _persisted_ontology_call(preparation: Mapping[str, Any], *, run_id: str, journey_id: str):
+    """Read the preparation call from durable application evidence."""
     from .api_client import ModelCallRecord
-
+    if not preparation.get("semantic_snapshot_id") or not preparation.get("pipeline_run_id") or not preparation.get("dataset_version_id"):
+        raise JourneyAcceptanceError("PREPARATION_LINEAGE_MISSING")
+    probe = preparation.get("model_probe") or {}
+    calls = preparation.get("model_calls") or []
+    if len(calls) != 1:
+        raise JourneyAcceptanceError("PREPARATION_MODEL_EVIDENCE_MISSING")
+    call = calls[0]
     return ModelCallRecord(
-        call_kind="ontology",
-        logical_call_index=1,
-        correlation_id=f"{run_id}:{journey_id}:ontology:1",
+        call_kind=str(call.get("call_kind") or ""),
+        logical_call_index=int(call.get("logical_call_index") or 0),
+        correlation_id=str(call.get("correlation_id") or ""),
         model_caller="DeepSeekVisionCaller",
         model_origin=OFFICIAL_ORIGIN,
-        requested_model=MODEL_ID,
-        observed_model=MODEL_ID,
-        preflight_model_id=MODEL_ID,
-        http_attempts=1,
-        retry_count=0,
+        requested_model=str(call.get("requested_model") or ""),
+        observed_model=str(call.get("observed_model") or ""),
+        preflight_model_id=str(probe.get("observed_model") or ""),
+        http_attempts=int(call.get("http_attempts") or 0),
+        retry_count=int(call.get("retry_count") or 0),
     )
+
+
+def _require_persisted_ontology_call(call: Any, *, run_id: str, journey_id: str) -> None:
+    expected = f"{run_id}:{journey_id}:ontology:1"
+    if call.call_kind != "ontology" or call.logical_call_index != 1:
+        raise JourneyAcceptanceError("PREPARATION_MODEL_EVIDENCE_INVALID")
+    if call.correlation_id != expected:
+        raise JourneyAcceptanceError(f"CORRELATION_ID_INVALID: {call.correlation_id!r}")
+    if call.requested_model != MODEL_ID or call.observed_model != MODEL_ID:
+        raise JourneyAcceptanceError(f"MODEL_ID_MISMATCH: observed {call.observed_model!r}")
+    if call.preflight_model_id != MODEL_ID:
+        raise JourneyAcceptanceError(f"MODEL_PROBE_MISSING: {call.preflight_model_id!r}")
+    if call.http_attempts not in (1, 2):
+        raise JourneyAcceptanceError("PREPARATION_HTTP_ATTEMPTS_INVALID")
 
 
 def _require_model_call_chain(

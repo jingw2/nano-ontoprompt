@@ -74,9 +74,17 @@ class _FakeState:
         self.requests: list[str] = []
         self.upload_calls = 0
         self.url = ""
+        self.preparations: dict[tuple[str, str], dict[str, Any]] = {}
+        self.ontology_completions: dict[str, dict[str, list[str]]] = {}
+        self.curated_approvals: list[dict[str, str]] = []
+        self.unrelated_curated_dataset = False
+        self.implicit_preparation_evidence = True
 
     def drop(self, resource: str) -> None:
         self.dropped.add(resource)
+
+    def add_unrelated_curated_dataset(self) -> None:
+        self.unrelated_curated_dataset = True
 
 
 def _journey_of(name: str) -> str:
@@ -271,11 +279,15 @@ def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[in
     run_id = match.group("run_id")
     if "pipeline_run" in state.dropped:
         raise _FakeNotFound("Run not found")
+    stats = {"row_count": 12, "quality_score": 0.99,
+             "curated_dataset_id": _uuid_for(f"{run_id}:curated-dataset")}
+    if "curated_dataset" in state.dropped:
+        stats.pop("curated_dataset_id")
     return 200, {
         "id": run_id,
         "status": "success",
         "dataset_version_id": _uuid_for(f"{run_id}:dataset-version"),
-        "stats": {"row_count": 12, "quality_score": 0.99},
+        "stats": stats,
         "error_log": None,
         "started_at": "2026-08-27T00:00:00+00:00",
         "finished_at": "2026-08-27T00:00:05+00:00",
@@ -285,31 +297,91 @@ def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[in
 def _list_curated(state: _FakeState, _match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     if "curated_dataset" in state.dropped:
         return 200, []
-    return 200, [{
+    items = [{
         "id": _uuid_for("curated-dataset"),
         "name": "curated",
         "status": "pending_review",
         "row_count": 12,
         "quality_score": 0.99,
     }]
+    if state.unrelated_curated_dataset:
+        items.insert(0, {
+            "id": _uuid_for("unrelated-curated-dataset"),
+            "name": "unrelated", "status": "pending_review",
+            "pipeline_run_id": _uuid_for("unrelated-pipeline-run"),
+        })
+    return 200, items
 
 
-def _start_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
-    return 200, {"review_id": _uuid_for(f"{match.group('dataset_id')}:review"), "status": "in_review"}
+def _start_review(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    return 200, {"review_id": _uuid_for(f"{match.group('dataset_id')}:review"), "status": "in_review",
+                 "pipeline_run_id": body.get("pipeline_run_id")}
 
 
-def _approve_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+def _approve_review(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    state.curated_approvals.append({"review_id": match.group("review_id"), "pipeline_run_id": str(body.get("pipeline_run_id") or "")})
     return 200, {"review_id": match.group("review_id"), "status": "approved"}
+
+
+def _persist_preparation(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    if "preparation_evidence" in state.dropped:
+        raise _FakeNotFound("PREPARATION_EVIDENCE_NOT_PERSISTED")
+    snapshot_id = _uuid_for(f"{body['run_id']}:{body['journey_id']}:snapshot")
+    persisted = dict(body)
+    persisted["semantic_snapshot_id"] = snapshot_id
+    persisted["snapshot_input"] = {
+        "pipeline_run_id": body["pipeline_run_id"],
+        "dataset_version_id": body["dataset_version_id"],
+    }
+    state.preparations[(body["run_id"], body["journey_id"])] = persisted
+    return 201, {"data": persisted}
+
+
+def _get_preparation(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    run_id, journey_id = match.group("run_id"), match.group("journey_id")
+    record = state.preparations.get((run_id, journey_id))
+    if record is None and state.implicit_preparation_evidence:
+        record = {
+            "run_id": run_id, "journey_id": journey_id,
+            "ontology_release_id": _uuid_for(f"{run_id}:{journey_id}:release"),
+            "semantic_snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+            "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                             "correlation_id": f"{run_id}:{journey_id}:ontology:1",
+                             "requested_model": MODEL_ID, "observed_model": MODEL_ID,
+                             "http_attempts": 1, "retry_count": 0}],
+        }
+    if record is None:
+        raise _FakeNotFound("PREPARATION_EVIDENCE_NOT_PERSISTED")
+    return 200, {"data": record}
 
 
 def _create_ontology(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
     journey_id = _journey_of(str(body.get("name", "")))
+    ontology_id = _uuid_for(f"{journey_id}:ontology")
+    state.ontology_completions[ontology_id] = {"entities": [], "relations": []}
     return 201, {"data": {
-        "id": _uuid_for(f"{journey_id}:ontology"),
+        "id": ontology_id,
         "name": body.get("name"),
         "domain": body.get("domain"),
         "status": "draft",
     }}
+
+
+def _create_entity(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    ontology_id = match.group("ontology_id")
+    name = str(body.get("name_cn") or "")
+    state.ontology_completions.setdefault(ontology_id, {"entities": [], "relations": []})["entities"].append(name)
+    return 201, {"data": {"id": _uuid_for(f"{ontology_id}:entity:{name}")}}
+
+
+def _create_relation(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    ontology_id = match.group("ontology_id")
+    relation = str(body.get("type") or "")
+    state.ontology_completions.setdefault(ontology_id, {"entities": [], "relations": []})["relations"].append(relation)
+    return 200, {"data": {"id": _uuid_for(f"{ontology_id}:relation:{relation}")}}
 
 
 def _mark_created_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
@@ -449,7 +521,11 @@ _ROUTES: list[tuple[str, str, Handler]] = [
     (r"/api/v2/curated", "GET", _list_curated),
     (r"/api/v2/curated/(?P<dataset_id>[^/]+)/reviews", "POST", _start_review),
     (r"/api/v2/curated/reviews/(?P<review_id>[^/]+)/approve", "POST", _approve_review),
+    (r"/api/v1/business-journeys/preparations", "POST", _persist_preparation),
+    (r"/api/v1/business-journeys/preparations/(?P<run_id>[^/]+)/(?P<journey_id>[^/]+)", "GET", _get_preparation),
     (r"/api/v1/ontologies", "POST", _create_ontology),
+    (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/entities", "POST", _create_entity),
+    (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/graph/relations", "POST", _create_relation),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/mark-created", "POST", _mark_created_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/publish", "POST", _publish_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/tools", "GET", _ontology_tools),
@@ -712,6 +788,37 @@ def test_prepare_uses_exactly_one_deepseek_completion_and_official_origin(fake_a
     assert JourneyPreparationBudget().max_http_attempts == 2
 
 
+def test_prepare_persists_completion_snapshot_lineage_and_model_evidence(fake_api):
+    """Preparation evidence must be application-owned, not a local report."""
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-durable-preparation",
+    )
+
+    persisted = fake_api.preparations[("journey-durable-preparation", "supply_chain")]
+    assert fake_api.ontology_completions[preparation.ontology_id] == {
+        "entities": structured_answer("supply_chain")["entities"],
+        "relations": structured_answer("supply_chain")["relations"],
+    }
+    assert persisted["structured"] == structured_answer("supply_chain")
+    assert persisted["semantic_snapshot_id"] == preparation.semantic_snapshot_id
+    assert persisted["snapshot_input"] == {
+        "pipeline_run_id": preparation.pipeline.pipeline_run_id,
+        "dataset_version_id": preparation.pipeline.dataset_version_id,
+    }
+    assert persisted["model_probe"]["observed_model"] == MODEL_ID
+    assert persisted["model_calls"][0]["correlation_id"] == preparation.correlation_id
+
+
+def test_prepare_scopes_curated_approval_to_the_pipeline_run(fake_api):
+    fake_api.add_unrelated_curated_dataset()
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-curated-scope",
+    )
+    assert fake_api.curated_approvals[-1]["pipeline_run_id"] == preparation.pipeline.pipeline_run_id
+
+
 def test_prepare_fails_closed_on_missing_pipeline_run(fake_api):
     fake_api.drop("pipeline_run")
     with pytest.raises(JourneyAcceptanceError, match="PIPELINE_RUN_MISSING"):
@@ -878,6 +985,28 @@ def test_verify_reads_only_persisted_evidence(fake_api):
     assert verification.plan_branches_by_name["expired"].target_before_hash == verification.plan_branches_by_name["expired"].target_after_hash
     assert fake_api.model_calls == 0
     assert fake_api.mutations == []
+
+
+def test_verify_fails_when_preparation_model_evidence_is_missing_or_mismatched(fake_api):
+    run_id = "journey-missing-preparation-model-evidence"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    with pytest.raises(JourneyAcceptanceError, match="PREPARATION_EVIDENCE_NOT_PERSISTED"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for(f"{run_id}:credit:release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for("credit:pipeline-run"),
+        "dataset_version_id": _uuid_for("credit:dataset-version"),
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": "wrong", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="CORRELATION_ID_INVALID"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
 
 
 def test_verify_rejects_shared_plan_identity_across_branches(fake_api):

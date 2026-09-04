@@ -89,6 +89,7 @@ class PipelineEvidence:
     row_count: int | None
     input_fixture_ids: tuple[str, ...]
     input_hashes: Mapping[str, str]
+    curated_dataset_id: str
 
 
 @dataclass(frozen=True)
@@ -466,6 +467,9 @@ class JourneyApiClient:
         if not dataset_version_id:
             raise JourneyAcceptanceError("DATASET_VERSION_MISSING: run has no dataset version")
         stats = run.get("stats") or {}
+        curated_dataset_id = str(stats.get("curated_dataset_id") or "")
+        if not curated_dataset_id:
+            raise JourneyAcceptanceError("CURATED_DATASET_MISSING: pipeline run has no curated output")
         return PipelineEvidence(
             pipeline_id=str(pipeline_id),
             pipeline_run_id=str(run_id),
@@ -474,28 +478,30 @@ class JourneyApiClient:
             row_count=stats.get("rows_out"),
             input_fixture_ids=tuple(str(entry["fixture_id"]) for entry in manifest.inputs),
             input_hashes=dict(manifest.input_hashes),
+            curated_dataset_id=curated_dataset_id,
         )
 
     # -- curated -----------------------------------------------------------
     def approve_curated(self, run_id: str) -> CuratedEvidence:
-        """Start and approve a review for the most recently produced curated
-        dataset. ``GET /api/v2/curated`` lists every curated dataset ever
-        created (not scoped to one pipeline run), ordered newest-first, so
-        the most recent entry is the one this journey's pipeline run just
-        produced when this is called immediately afterward."""
-        datasets = self._get("/api/v2/curated", reason_code="CURATED_DATASET_MISSING")
-        items = datasets if isinstance(datasets, list) else (_dig(datasets, "data") or [])
-        if not items:
+        """Approve only the curated dataset emitted by ``run_id``.
+
+        The pipeline-run projection is the authoritative run-to-output
+        binding; the global curated list is deliberately never consulted.
+        """
+        run = self._get(f"/api/v2/pipelines/runs/{run_id}", reason_code="PIPELINE_RUN_MISSING")
+        dataset_id = str((run.get("stats") or {}).get("curated_dataset_id") or "")
+        if not dataset_id:
             raise JourneyAcceptanceError(f"CURATED_DATASET_MISSING: no curated dataset for run {run_id}")
-        dataset_id = str(items[0]["id"])
         review = self._post(
             f"/api/v2/curated/{dataset_id}/reviews", reason_code="CURATED_REVIEW_MISSING",
+            json={"pipeline_run_id": run_id},
         )
         review_id = _dig(review, "review_id") or _dig(review, "data", "review_id")
         if not review_id:
             raise JourneyAcceptanceError("CURATED_REVIEW_MISSING: no review id")
         approved = self._post(
             f"/api/v2/curated/reviews/{review_id}/approve", reason_code="CURATED_APPROVAL_FAILED",
+            json={"pipeline_run_id": run_id},
         )
         status = _dig(approved, "status") or _dig(approved, "data", "status")
         if status != "approved":
@@ -503,6 +509,39 @@ class JourneyApiClient:
         return CuratedEvidence(
             curated_dataset_id=dataset_id, review_id=str(review_id), status=str(status),
         )
+
+    def persist_preparation_evidence(
+        self, *, manifest: Any, pipeline: PipelineEvidence, curated: CuratedEvidence,
+        release: OntologyReleaseEvidence, model_config: ModelConfigEvidence,
+        probe: ModelProbe,
+    ) -> Mapping[str, Any]:
+        """Store the completed ontology and preparation model evidence in the app.
+
+        This narrow endpoint is intentionally the only preparation evidence
+        source verification may read; it also materializes the governed
+        snapshot using the successful run's dataset version.
+        """
+        response = release.model_response
+        body = self._post(
+            "/api/v1/business-journeys/preparations", reason_code="PREPARATION_EVIDENCE_NOT_PERSISTED",
+            json={
+                "run_id": self._run_id, "journey_id": manifest.journey_id,
+                "ontology_id": release.ontology_id, "ontology_release_id": release.release_id,
+                "pipeline_run_id": pipeline.pipeline_run_id,
+                "dataset_version_id": pipeline.dataset_version_id,
+                "curated_dataset_id": curated.curated_dataset_id, "curated_review_id": curated.review_id,
+                "model_config_version_id": model_config.model_config_version_id,
+                "structured": dict(release.structured),
+                "model_probe": {"requested_model": probe.requested_model, "observed_model": probe.observed_model},
+                "model_calls": [{
+                    "call_kind": "ontology", "logical_call_index": 1,
+                    "correlation_id": f"{self._run_id}:{manifest.journey_id}:ontology:1",
+                    "requested_model": MODEL_ID, "observed_model": response.model,
+                    "http_attempts": response.http_attempts, "retry_count": response.retry_count,
+                }],
+            },
+        )
+        return _dig(body, "data") or body
 
     # -- ontology ----------------------------------------------------------
     def create_or_complete_ontology(self, manifest: Any, model_version_id: str) -> OntologyReleaseEvidence:
@@ -527,15 +566,9 @@ class JourneyApiClient:
         if not ontology_id:
             raise JourneyAcceptanceError("ONTOLOGY_MISSING: no ontology id")
 
-        # The lifecycle state machine requires an explicit draft -> created
-        # transition before `publish` will do anything but 404 — confirmed
-        # directly against the real endpoint (`app.services.publication.
-        # lifecycle.mark_created`/`publish`).
-        self._post(
-            f"/api/v1/ontologies/{ontology_id}/mark-created", reason_code="ONTOLOGY_MARK_CREATED_FAILED",
-            json={}, headers={"Idempotency-Key": f"journey-{self._run_id}-{manifest.journey_id}-mark-created"},
-        )
-
+        # The model response becomes schema content before publication.  The
+        # release compiler therefore snapshots real Entity/Relation rows,
+        # instead of a local evaluation-only response document.
         context = JourneyModelContext(
             run_id=self._run_id,
             journey_id=manifest.journey_id,
@@ -553,6 +586,16 @@ class JourneyApiClient:
             raise
         except BusinessJourneyModelError as exc:
             raise JourneyAcceptanceError(f"{exc}") from exc
+        self._persist_structured_ontology(str(ontology_id), response.structured)
+
+        # The lifecycle state machine requires an explicit draft -> created
+        # transition before `publish` will do anything but 404 — confirmed
+        # directly against the real endpoint (`app.services.publication.
+        # lifecycle.mark_created`/`publish`).
+        self._post(
+            f"/api/v1/ontologies/{ontology_id}/mark-created", reason_code="ONTOLOGY_MARK_CREATED_FAILED",
+            json={}, headers={"Idempotency-Key": f"journey-{self._run_id}-{manifest.journey_id}-mark-created"},
+        )
 
         published = self._post(
             f"/api/v1/ontologies/{ontology_id}/publish", reason_code="ONTOLOGY_RELEASE_MISSING",
@@ -576,6 +619,29 @@ class JourneyApiClient:
             structured=dict(response.structured),
             model_response=response,
         )
+
+    def _persist_structured_ontology(self, ontology_id: str, structured: Mapping[str, Any]) -> None:
+        entity_ids: list[str] = []
+        for name in structured.get("entities") or ():
+            body = self._post(
+                f"/api/v1/ontologies/{ontology_id}/entities", reason_code="ONTOLOGY_COMPLETION_NOT_PERSISTED",
+                json={"name_cn": str(name), "name_en": str(name), "type": "model_completion"},
+            )
+            entity_id = _dig(body, "data", "id") or _dig(body, "id")
+            if not entity_id:
+                raise JourneyAcceptanceError("ONTOLOGY_COMPLETION_NOT_PERSISTED: entity id missing")
+            entity_ids.append(str(entity_id))
+        if not entity_ids:
+            raise JourneyAcceptanceError("SEMANTIC_MINIMUM_FAILED: completion has no entities")
+        for index, relation in enumerate(structured.get("relations") or ()):
+            self._post(
+                f"/api/v1/ontologies/{ontology_id}/graph/relations", reason_code="ONTOLOGY_COMPLETION_NOT_PERSISTED",
+                json={
+                    "source_entity": entity_ids[index % len(entity_ids)],
+                    "target_entity": entity_ids[(index + 1) % len(entity_ids)],
+                    "type": str(relation), "properties": {"model_completion": True},
+                },
+            )
 
     def preflight_model(self, manifest: Any, model_version_id: str) -> ModelProbe:
         """Persist one successful ``/models`` probe before anything else."""
@@ -787,6 +853,16 @@ class JourneyApiClient:
             model_calls=tuple(model_calls),
             plan_branches=tuple(branches),
         )
+
+    def read_preparation_evidence(self, run_id: str, journey_id: str) -> Mapping[str, Any]:
+        body = self._get(
+            f"/api/v1/business-journeys/preparations/{run_id}/{journey_id}",
+            reason_code="PREPARATION_EVIDENCE_NOT_PERSISTED",
+        )
+        record = _dig(body, "data") or body
+        if record.get("run_id") != run_id or record.get("journey_id") != journey_id:
+            raise JourneyAcceptanceError("PREPARATION_EVIDENCE_MISMATCH")
+        return record
 
     def _read_plan_branch(self, declared: Mapping[str, Any]) -> PlanBranchEvidence:
         """Read back one governed-turn-plan branch through the single
