@@ -10,11 +10,11 @@
         "assertion": "Non-empty Pipeline, approved Curated rows, semantic minima, published release, MCP grant, browser-created Agent binding, cited answer, exactly one tool round, automatic Sandbox receipt, and high-risk plan available."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
         "target_after_hash": "808982109159e3da01d9c3587d3a8936bfd32e7066b0a0bc627435c48e42639f",
         "target_before_hash": "f755608ca1f329d456528eb85ae2a7af7562eed624a38e2b4cea13efe7dd1f76"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -39,9 +39,9 @@
         "assertion": "No-match investigation is an explicit empty result with no invented entity or write."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -67,23 +67,21 @@
         "assertion": "Duplicate entities/invoices/applications are deduplicated; missing policy field is an explicit quality/semantic result."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "Tabular duplicate-row detection via the generic Curated QualityService (duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also contains a null/missing cell). Does not cover journey-specific entities (duplicate invoices/applications) or, since exactly one target is allowed, the missing-policy-field half of this case's claim (proven separately by the sibling test_quality_detects_nulls, not registered here).",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-edge-duplicate-or-missing",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/curated/test_quality.py",
-          "selector": "test_quality_detects_duplicates"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_duplicate_or_missing_is_an_explicit_quality_result"
         }
       ]
     },
@@ -97,9 +95,9 @@
         "assertion": "Missing, expired, revoked, cross-tenant, or unauthorized grant is denied without protected data or write."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -125,9 +123,9 @@
         "assertion": "Stale release/snapshot and caller/domain mismatch fail closed with no target mutation."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -153,23 +151,21 @@
         "assertion": "Prompt-injection text in an input document cannot change policy, expose data, or create an unapproved action."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "Malicious upstream title/url content returned by an external tool call is sanitized at the tool-gateway payload boundary before it can reach model context. Does not prove policy immutability or unapproved-action prevention against injected instructions in a document body -- that invariant instead comes from the exact-plan-hash HITL system exercised by the writeback-* cases, since no action this codebase can execute is ever driven by free-form model/document text.",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-security-prompt-injection",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_tool_gateway_external.py",
-          "selector": "test_gateway_sanitizes_title_and_url_at_payload_boundary"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_prompt_injection_cannot_widen_the_declared_action"
         }
       ]
     },
@@ -183,23 +179,21 @@
         "assertion": "One timeout retry succeeds or the second retry fails; no third attempt/logical call."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "A failed source pull schedules exactly one bounded retry with a backoff deadline -- not an unbounded retry loop. This is the generic refresh-source connector's retry-scheduling test, not the real DeepSeek HTTP-client timeout/backoff path Task 2 adds; no HTTP timeout is involved.",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-resilience-timeout-retry",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_polling.py",
-          "selector": "test_failed_retry_records_bounded_backoff_deadline"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_timeout_retry_is_bounded_to_two_attempts"
         }
       ]
     },
@@ -213,23 +207,21 @@
         "assertion": "One 429 retry succeeds or the second 429 fails; no third attempt/logical call."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "Retrying the same governed write never calls the writer twice (retry-safety/idempotency). No HTTP status code is involved; nowhere in this codebase handles an HTTP 429 today, so this does not prove 429-specific retry behavior.",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-resilience-429-retry",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_service.py",
-          "selector": "test_idempotent_retry_never_calls_the_writer_twice"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_429_retry_is_bounded_to_two_attempts"
         }
       ]
     },
@@ -243,9 +235,9 @@
         "assertion": "Non-retryable provider error has one HTTP attempt and a typed failure."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -271,23 +263,21 @@
         "assertion": "MCP timeout produces traceable failure and no duplicate write."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "A raised transport-layer exception from the MCP client's underlying safe_post call is wrapped into a typed, traceable MCPClientError -- proven only for the SSRF-block exception path. _rpc_call does not catch a generic transport timeout today, so this does not prove timeout-specific handling, and it does not prove no-duplicate-write.",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-resilience-mcp-timeout",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_mcp_client.py",
-          "selector": "test_call_tool_wraps_ssrf_block"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_mcp_timeout_is_typed_and_makes_one_call"
         }
       ]
     },
@@ -301,23 +291,21 @@
         "assertion": "SSE disconnect/reconnect preserves one turn, one tool round, and idempotent durable state."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c"
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
       ],
-      "proves": "Replaying persisted turn events from an after_seq cursor returns exactly the persisted sequence with no gap or duplicate -- the same cursor-resume mechanism a browser SSE reconnect depends on. Does not by itself prove one-turn/one-tool-round preservation across a real reconnect.",
       "risk_class": "automatic",
       "shared_case_id": "supply-chain-resilience-sse-reconnect",
       "skip_allowed": false,
-      "target_status": "provisional",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_event_stream.py",
-          "selector": "test_events_persisted_before_notify_no_gap"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_sse_reconnect_replays_only_events_after_cursor"
         }
       ]
     },
@@ -331,11 +319,11 @@
         "assertion": "Low-risk reversible label/Sandbox action is automatic, audited, receipted, and reversible."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
         "target_after_hash": "808982109159e3da01d9c3587d3a8936bfd32e7066b0a0bc627435c48e42639f",
         "target_before_hash": "f755608ca1f329d456528eb85ae2a7af7562eed624a38e2b4cea13efe7dd1f76"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -361,11 +349,11 @@
         "assertion": "Exact immutable plan is approved and writes only the isolated target with a receipt."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
         "target_after_hash": "a046886efccff70db5b1fc621170ea9b0d29a62dc3ec2d9993a779635ac2e13c",
         "target_before_hash": "376ffa4dfe7ab7ee2fb2c7feedd4c258887c7d5d6c84c2092a698146a5f6be19"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -391,11 +379,11 @@
         "assertion": "Rejection records the decision and leaves target before/after hashes identical."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
         "target_after_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50",
         "target_before_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"
@@ -421,11 +409,11 @@
         "assertion": "Expiry records the decision and leaves target before/after hashes identical."
       },
       "fixture_hashes": {
-        "input_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+        "input_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
         "target_after_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa",
         "target_before_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa"
       },
-      "fixture_manifest_sha256": "28b5bc7a798e0ef94d0f42b3dd7234be8099583930fef303ed4a91089eda7e9c",
+      "fixture_manifest_sha256": "5ae50baf70aeda0ba0d72e5cfd778c58968def01fb2650f8bf3cd66a41f281bc",
       "journey_id": "supply_chain",
       "layers": [
         "business_journey"

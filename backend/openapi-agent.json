@@ -2246,6 +2246,50 @@
         "title": "MarkCreatedRequest",
         "type": "object"
       },
+      "ModelCallEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "call_kind": {
+            "title": "Call Kind",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "http_attempts": {
+            "title": "Http Attempts",
+            "type": "integer"
+          },
+          "logical_call_index": {
+            "title": "Logical Call Index",
+            "type": "integer"
+          },
+          "observed_model": {
+            "title": "Observed Model",
+            "type": "string"
+          },
+          "requested_model": {
+            "title": "Requested Model",
+            "type": "string"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "call_kind",
+          "logical_call_index",
+          "correlation_id",
+          "requested_model",
+          "observed_model",
+          "http_attempts",
+          "retry_count"
+        ],
+        "title": "ModelCallEvidence",
+        "type": "object"
+      },
       "ModelConfigCreate": {
         "properties": {
           "api_base": {
@@ -3072,6 +3116,23 @@
         "title": "PipelineResponse",
         "type": "object"
       },
+      "PipelineRunBinding": {
+        "properties": {
+          "pipeline_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Run Id"
+          }
+        },
+        "title": "PipelineRunBinding",
+        "type": "object"
+      },
       "PipelineUpdate": {
         "properties": {
           "definition": {
@@ -3164,6 +3225,83 @@
           }
         },
         "title": "PipelineUpdate",
+        "type": "object"
+      },
+      "PreparationEvidenceIn": {
+        "additionalProperties": false,
+        "properties": {
+          "curated_dataset_id": {
+            "title": "Curated Dataset Id",
+            "type": "string"
+          },
+          "curated_review_id": {
+            "title": "Curated Review Id",
+            "type": "string"
+          },
+          "dataset_version_id": {
+            "title": "Dataset Version Id",
+            "type": "string"
+          },
+          "journey_id": {
+            "title": "Journey Id",
+            "type": "string"
+          },
+          "model_calls": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCallEvidence"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Model Calls",
+            "type": "array"
+          },
+          "model_config_version_id": {
+            "title": "Model Config Version Id",
+            "type": "string"
+          },
+          "model_probe": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Model Probe",
+            "type": "object"
+          },
+          "ontology_id": {
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "ontology_release_id": {
+            "title": "Ontology Release Id",
+            "type": "string"
+          },
+          "pipeline_run_id": {
+            "title": "Pipeline Run Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "structured": {
+            "title": "Structured",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run_id",
+          "journey_id",
+          "ontology_id",
+          "ontology_release_id",
+          "pipeline_run_id",
+          "dataset_version_id",
+          "curated_dataset_id",
+          "curated_review_id",
+          "model_config_version_id",
+          "structured",
+          "model_probe",
+          "model_calls"
+        ],
+        "title": "PreparationEvidenceIn",
         "type": "object"
       },
       "PreviewStepBody": {
@@ -8654,6 +8792,104 @@
         ]
       }
     },
+    "/api/v1/business-journeys/preparations": {
+      "post": {
+        "operationId": "create_preparation_api_v1_business_journeys_preparations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreparationEvidenceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Preparation",
+        "tags": [
+          "business-journeys"
+        ]
+      }
+    },
+    "/api/v1/business-journeys/preparations/{run_id}/{journey_id}": {
+      "get": {
+        "operationId": "get_preparation_api_v1_business_journeys_preparations__run_id___journey_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journey_id",
+            "required": true,
+            "schema": {
+              "title": "Journey Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Preparation",
+        "tags": [
+          "business-journeys"
+        ]
+      }
+    },
     "/api/v1/mcp": {
       "post": {
         "operationId": "mcp_rpc_api_v1_mcp_post",
@@ -14073,6 +14309,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PipelineRunBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -14484,6 +14737,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PipelineRunBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

@@ -169,6 +169,11 @@ _PLATFORM_PREFIXES = (
     # classified into `_RUNTIME_OPERATIONS` above and always resolve to
     # "runtime" before this prefix is ever consulted.
     "/api/v2/runtime",
+    # Narrow, internal durable-evidence API for the real-model business-
+    # journey eval harness only (`evals.business_journeys.api_client`) — not
+    # an ontology instance-data operation, so it belongs here rather than in
+    # `_RUNTIME_OPERATIONS`.
+    "/api/v1/business-journeys",
 )
 
 

@@ -47,3 +47,23 @@ def test_admin_can_approve_curated(curated_client, db, admin_user):
     assert r.status_code == 200
     db.refresh(db.query(CuratedDataset).filter(CuratedDataset.id == ds_id).first())
     assert db.query(CuratedDataset).filter(CuratedDataset.id == ds_id).first().status == "approved"
+
+
+def test_review_session_flow_works_with_no_pipeline_run_binding(curated_client, db, editor_user, admin_user):
+    """The real curated-review UI (`frontend/src/api/v2/curated.ts`) sends no
+    body at all to `POST .../reviews` or `.../approve` -- it has no concept
+    of "which pipeline run" and predates that binding, which only the
+    business-journey eval harness ever supplies. `PipelineRunBinding.
+    pipeline_run_id` must stay optional so a plain human review/approve
+    (with a genuinely empty body, not a JSON body missing the key) still
+    works end to end."""
+    ds_id = _make_curated(db)
+    editor_headers = _login(curated_client, "editor", "editor123")
+    started = curated_client.post(f"/api/v2/curated/{ds_id}/reviews", headers=editor_headers)
+    assert started.status_code == 200, started.text
+    review_id = started.json()["review_id"]
+
+    admin_headers = _login(curated_client, "admin", "admin123")
+    approved = curated_client.post(f"/api/v2/curated/reviews/{review_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"

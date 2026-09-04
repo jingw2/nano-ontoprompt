@@ -127,6 +127,51 @@ def test_load_journey_manifest_rejects_non_sha256_hash(tmp_path):
         load_journey_manifest(journey_id, tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("journey_id", "filename", "mutate"),
+    (
+        ("supply_chain", "inputs.json", lambda doc: doc["inputs"][0].__setitem__("sha256", "0" * 64)),
+        ("finance", "inputs.json", lambda doc: doc["source_refs"][0].__setitem__("sha256", "0" * 64)),
+        ("credit", "inputs.json", lambda doc: doc["input_hashes"].__setitem__(next(iter(doc["input_hashes"])), "0" * 64)),
+    ),
+)
+def test_load_journey_manifest_rejects_valid_format_referenced_asset_hash_drift(
+    journey_id, filename, mutate, tmp_path, monkeypatch
+):
+    """A digest-shaped lie must not be accepted merely because it is SHA-256-shaped."""
+    import json
+    import shutil
+
+    shutil.copytree(ROOT / journey_id, tmp_path / journey_id)
+    import journey_registry
+    monkeypatch.setattr(journey_registry, "_repository_root", lambda root: REPO_ROOT)
+    path = tmp_path / journey_id / filename
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    mutate(doc)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash"):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+@pytest.mark.parametrize("journey_id", JOURNEY_IDS)
+def test_load_journey_manifest_rejects_case_matrix_content_drift(journey_id, tmp_path, monkeypatch):
+    """The corpus digest binds case assertions, not only the input documents."""
+    import json
+    import shutil
+
+    shutil.copytree(ROOT / journey_id, tmp_path / journey_id)
+    import journey_registry
+    monkeypatch.setattr(journey_registry, "_repository_root", lambda root: REPO_ROOT)
+    path = tmp_path / journey_id / "case_matrix.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["cases"][1]["expected"]["assertion"] = "tampered but valid"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reproducible"):
+        load_journey_manifest(journey_id, tmp_path)
+
+
 def test_load_journey_manifest_rejects_non_repository_source(tmp_path):
     import json
     import shutil
@@ -250,27 +295,14 @@ def test_every_deterministic_journey_case_is_merged_into_the_shared_registry():
             assert CASE_REGISTRY[shared_id].path == f"{target['path']}::{target['selector']}"
 
 
-def test_provisional_cases_are_exactly_the_six_the_review_flagged():
-    expected_provisional = {
-        "edge-duplicate-or-missing",
-        "security-prompt-injection",
-        "resilience-timeout-retry",
-        "resilience-429-retry",
-        "resilience-mcp-timeout",
-        "resilience-sse-reconnect",
-    }
-    actual_provisional = {
-        case_id for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items()
-        if target_def.target_status is not None
-    }
-    assert actual_provisional == expected_provisional
+def test_every_journey_case_target_is_final_and_has_no_provisional_allowance():
     for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items():
-        if case_id in expected_provisional:
-            assert target_def.target_status == "provisional"
-            assert target_def.proves
-        else:
-            assert target_def.target_status is None
-            assert target_def.proves is None
+        assert target_def.target_status is None, case_id
+        assert target_def.proves is None, case_id
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            assert "target_status" not in case
+            assert "proves" not in case
 
 
 def test_all_deterministic_journey_targets_collect():

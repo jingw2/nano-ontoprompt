@@ -23,7 +23,9 @@ unique to the final scan command and preserves the same property under test
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 
 import yaml
 
@@ -76,6 +78,10 @@ def test_gate_order_and_sanitized_upload_are_explicit():
     # script actually emits, not just that both substrings appear somewhere.
     assert '--staging "$REPO_ROOT/artifacts/business_journeys/staging"' in script
     assert '--sanitized-output "$REPO_ROOT/artifacts/business_journeys/sanitized"' in script
+    assert (
+        '--failure-summary "$ARTIFACTS_DIR/business_journeys/scanner-failure-summary.json" \\\n'
+        '    --deterministic-report "$ARTIFACTS_DIR/runtime/deterministic-cases.json"'
+    ) in script
 
 
 def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
@@ -87,7 +93,8 @@ def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
     assert (
         "scan --staging artifacts/business_journeys/staging "
         "--sanitized-output artifacts/business_journeys/sanitized "
-        "--failure-summary artifacts/business_journeys/scanner-failure-summary.json"
+        "--failure-summary artifacts/business_journeys/scanner-failure-summary.json "
+        "--deterministic-report artifacts/runtime/deterministic-cases.json"
     ) in scan["run"]
     assert scan["if"] == "always()"
     assert safe_upload["if"] == "steps.scan.outputs.scan_safe == 'true'"
@@ -99,6 +106,38 @@ def test_workflow_uploads_only_after_scan_safe_or_safe_scan_failure():
     # No other artifact upload step exists in this job.
     upload_steps = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact")]
     assert len(upload_steps) == 2
+
+
+def test_gate_rejects_a_caller_selected_application_origin_before_running_the_stack(tmp_path):
+    """A supplied non-loopback origin must not receive the provider key."""
+    root = tmp_path / "gate-root"
+    script_dir = root / "scripts"
+    script_dir.mkdir(parents=True)
+    copied_script = script_dir / SCRIPT_PATH.name
+    copied_script.write_text(SCRIPT_PATH.read_text())
+    (root / ".env.example").write_text("")
+
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    (command_dir / "docker").write_text("#!/usr/bin/env bash\nexit 99\n")
+    (command_dir / "docker").chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(copied_script)],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{command_dir}:{os.environ['PATH']}",
+            "DEEPSEEK_API_KEY": "test-provider-key",
+            "BUSINESS_JOURNEY_API_BASE": "https://attacker.example.invalid",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "BUSINESS_JOURNEY_API_BASE_NOT_ALLOWED" in result.stderr
 
 
 def test_failure_summary_is_closed_and_raw_browser_paths_are_forbidden():

@@ -104,15 +104,12 @@ class JourneyPreparation:
     ontology_id: str
     ontology_release_id: str
     release_status: str
-    # NOT a persisted `SemanticSnapshot` row id — a synthetic placeholder
-    # derived from the release id, because no production endpoint anywhere
-    # in the application creates a `SemanticSnapshot`
-    # (`app.services.runtime.snapshots.materialize_snapshot` and
-    # `materialize_refresh_snapshot` have zero callers outside
-    # `tests/runtime/`). Recorded for traceability only; nothing downstream
-    # verifies or resolves it. See
-    # `api_client._semantic_snapshot_placeholder`.
-    semantic_snapshot_placeholder: str
+    # A real, persisted `SemanticSnapshot` row id: `persist_preparation_evidence`
+    # POSTs to `/api/v1/business-journeys/preparations`, which calls
+    # `app.services.runtime.snapshots.materialize_snapshot` and returns the
+    # snapshot it actually created — the first production caller of that
+    # function anywhere in the application.
+    semantic_snapshot_id: str
     ontology_entity_ids: tuple[str, ...]
     ontology_relation_ids: tuple[str, ...]
     ontology_rule_ids: tuple[str, ...]
@@ -154,7 +151,7 @@ class JourneyPreparation:
             "ontology_id": self.ontology_id,
             "ontology_release_id": self.ontology_release_id,
             "release_status": self.release_status,
-            "semantic_snapshot_placeholder": self.semantic_snapshot_placeholder,
+            "semantic_snapshot_id": self.semantic_snapshot_id,
             "ontology_entity_ids": list(self.ontology_entity_ids),
             "ontology_relation_ids": list(self.ontology_relation_ids),
             "ontology_rule_ids": list(self.ontology_rule_ids),
@@ -353,7 +350,7 @@ def prepare_journey(
 
             # 3. Pipeline + Curated approval (no model involvement).
             pipeline = client_with_model.start_pipeline(manifest)
-            curated = client_with_model.approve_curated(pipeline)
+            curated = client_with_model.approve_curated(pipeline.pipeline_run_id)
 
             # 4. The single ontology completion, then the extraction written
             #    back as real ontology content, then an explicit publish.
@@ -382,6 +379,13 @@ def prepare_journey(
             grant = client_with_model.grant_ontology_data(
                 release.ontology_id, user_id, release.release_id,
             )
+            persisted_preparation = client_with_model.persist_preparation_evidence(
+                manifest=manifest, pipeline=pipeline, curated=curated,
+                release=release, model_config=model_config, probe=probe,
+            )
+            semantic_snapshot_id = str(persisted_preparation.get("semantic_snapshot_id") or "")
+            if not semantic_snapshot_id:
+                raise JourneyAcceptanceError("SEMANTIC_SNAPSHOT_MISSING: preparation was not materialized")
             binding_options = client_with_model.prepare_browser_agent_binding(
                 manifest, release.release_id, descriptors, model_config.model_config_version_id,
             )
@@ -390,15 +394,16 @@ def prepare_journey(
     finally:
         client.close()
 
-    totals = ledger.totals(run_id, journey_id)
+    persisted_calls = persisted_preparation.get("model_calls") or []
     budget = JourneyPreparationBudget()
-    if totals["logical_model_calls"] != budget.logical_model_calls:
+    if len(persisted_calls) != budget.logical_model_calls:
         raise JourneyAcceptanceError(
-            f"LOGICAL_CALL_BUDGET_VIOLATED: {totals['logical_model_calls']} != {budget.logical_model_calls}"
+            f"LOGICAL_CALL_BUDGET_VIOLATED: {len(persisted_calls)} != {budget.logical_model_calls}"
         )
-    if totals["http_attempts"] > budget.max_http_attempts:
+    preparation_http_attempts = sum(int(call.get("http_attempts") or 0) for call in persisted_calls)
+    if preparation_http_attempts > budget.max_http_attempts:
         raise JourneyAcceptanceError(
-            f"HTTP_ATTEMPT_BUDGET_VIOLATED: {totals['http_attempts']} > {budget.max_http_attempts}"
+            f"HTTP_ATTEMPT_BUDGET_VIOLATED: {preparation_http_attempts} > {budget.max_http_attempts}"
         )
 
     return JourneyPreparation(
@@ -413,7 +418,7 @@ def prepare_journey(
         ontology_id=release.ontology_id,
         ontology_release_id=release.release_id,
         release_status=release.release_status,
-        semantic_snapshot_placeholder=release.semantic_snapshot_placeholder,
+        semantic_snapshot_id=semantic_snapshot_id,
         ontology_entity_ids=release.content.entity_ids,
         ontology_relation_ids=release.content.relation_ids,
         ontology_rule_ids=release.content.rule_ids,
@@ -429,9 +434,9 @@ def prepare_journey(
         observed_model_id=release.model_response.model,
         call_kinds=["ontology"],
         correlation_id=f"{run_id}:{journey_id}:ontology:1",
-        logical_model_calls=totals["logical_model_calls"],
-        http_attempts=totals["http_attempts"],
-        retry_count=release.model_response.retry_count,
+        logical_model_calls=len(persisted_calls),
+        http_attempts=preparation_http_attempts,
+        retry_count=sum(int(call.get("retry_count") or 0) for call in persisted_calls),
         semantic_reason_codes=validation.reason_codes,
         status="passed",
     )
@@ -566,11 +571,13 @@ def verify_journey(
     client = JourneyApiClient(api_base, api_key, run_id=run_id)
     try:
         client.authenticate()
+        preparation_evidence = client.read_preparation_evidence(run_id, journey_id)
         evidence = client.read_journey_evidence(run_id, browser_evidence=browser_evidence)
     finally:
         client.close()
 
     _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
+    _require_preparation_binding(preparation_evidence, evidence)
     _require_independent_plan_branches(evidence.plan_branches)
     _require_granted_mcp_descriptors(
         evidence, output_dir=output_dir, run_id=run_id, journey_id=journey_id,
@@ -604,9 +611,8 @@ def verify_journey(
             f"persisted {evidence.automatic_action!r}"
         )
 
-    ontology_call = _ontology_call_from_manifest(
-        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
-    )
+    ontology_call = _persisted_ontology_call(preparation_evidence, run_id=run_id, journey_id=journey_id)
+    _require_persisted_ontology_call(ontology_call, run_id=run_id, journey_id=journey_id)
     calls = (ontology_call,) + evidence.model_calls
     http_attempts = sum(call.http_attempts for call in calls)
     retry_count = sum(call.retry_count for call in calls)
@@ -647,63 +653,78 @@ def verify_journey(
     )
 
 
-def _ontology_call_from_manifest(*, output_dir: Path, run_id: str, journey_id: str):
-    """Rebuild logical call 1 (the ontology completion) from what the
-    preparation phase ACTUALLY recorded.
+def _persisted_ontology_call(preparation: Mapping[str, Any], *, run_id: str, journey_id: str):
+    """Read logical call 1 (the ontology completion) from durable
+    application evidence.
 
     The browser turn's persisted trace only carries calls 2 and 3, so this
     call's record has to come from somewhere else — but "somewhere else" was
-    a hardcoded ``http_attempts=1, retry_count=0``, which silently reported a
+    once a hardcoded ``http_attempts=1, retry_count=0``, silently reporting a
     clean single attempt even when the real completion had retried and
-    consumed twice the HTTP budget. `prepare_journey` sources both counters
-    from the real `ModelCallLedger`/`ModelResponse`
-    (``totals["http_attempts"]`` / ``release.model_response.retry_count``),
-    `write_run_manifest` serializes them into the durable staging
-    ``run.json``, and this function reads them straight back — the same
-    manifest, read the same way, as `_require_granted_mcp_descriptors`.
-    Fails closed (`RUN_MANIFEST_PREPARATION_MISSING`) if this journey has no
-    preparation entry, exactly like that check does, and
-    (`RUN_MANIFEST_PREPARATION_INCOMPLETE`) if the entry is missing either
-    counter.
+    consumed twice the HTTP budget. `preparation` here is what
+    `read_preparation_evidence` fetched from `GET .../business-journeys/
+    preparations/{run_id}/{journey_id}` — the same durable app-DB record
+    `persist_preparation_evidence` created, not a local staging file this
+    eval harness wrote about itself.
     """
     from .api_client import ModelCallRecord
-
-    preparation = _preparation_entry(
-        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
-    )
-    correlation_id = str(preparation.get("correlation_id") or "")
-    expected_correlation_id = f"{run_id}:{journey_id}:ontology:1"
-    if correlation_id != expected_correlation_id:
-        raise JourneyAcceptanceError(
-            f"CORRELATION_ID_INVALID: preparation recorded {correlation_id!r}"
-        )
+    if not preparation.get("semantic_snapshot_id") or not preparation.get("pipeline_run_id") or not preparation.get("dataset_version_id"):
+        raise JourneyAcceptanceError("PREPARATION_LINEAGE_MISSING")
+    probe = preparation.get("model_probe") or {}
+    calls = preparation.get("model_calls") or []
+    if len(calls) != 1:
+        raise JourneyAcceptanceError("PREPARATION_MODEL_EVIDENCE_MISSING")
+    call = calls[0]
     # `or 0` would silently turn a MISSING counter into a clean "zero
     # attempts, zero retries" reading — the same class of "invent a number
     # instead of reading the real one" bug this whole function exists to
-    # fix. A well-formed preparation entry always has both keys
-    # (`JourneyPreparation.to_dict()` writes them unconditionally); their
-    # absence means the manifest itself is malformed, which must fail
+    # fix. The router's own `ModelCallEvidence` schema requires all three
+    # fields, so a well-formed persisted call always has them; their absence
+    # means the persisted record itself is malformed, which must fail
     # closed rather than quietly report a suspiciously perfect budget.
-    if preparation.get("http_attempts") is None:
-        raise JourneyAcceptanceError(
-            f"RUN_MANIFEST_PREPARATION_INCOMPLETE: {journey_id} preparation has no http_attempts"
-        )
-    if preparation.get("retry_count") is None:
-        raise JourneyAcceptanceError(
-            f"RUN_MANIFEST_PREPARATION_INCOMPLETE: {journey_id} preparation has no retry_count"
-        )
+    for field in ("logical_call_index", "http_attempts", "retry_count"):
+        if call.get(field) is None:
+            raise JourneyAcceptanceError(
+                f"PREPARATION_MODEL_EVIDENCE_INCOMPLETE: {journey_id} ontology call has no {field}"
+            )
     return ModelCallRecord(
-        call_kind="ontology",
-        logical_call_index=1,
-        correlation_id=correlation_id,
-        model_caller=str(preparation.get("model_caller") or ""),
-        model_origin=str(preparation.get("model_origin") or ""),
-        requested_model=str(preparation.get("requested_model_id") or ""),
-        observed_model=str(preparation.get("observed_model_id") or ""),
-        preflight_model_id=str(preparation.get("preflight_model_id") or ""),
-        http_attempts=int(preparation["http_attempts"]),
-        retry_count=int(preparation["retry_count"]),
+        call_kind=str(call.get("call_kind") or ""),
+        logical_call_index=int(call["logical_call_index"]),
+        correlation_id=str(call.get("correlation_id") or ""),
+        model_caller="DeepSeekVisionCaller",
+        model_origin=OFFICIAL_ORIGIN,
+        requested_model=str(call.get("requested_model") or ""),
+        observed_model=str(call.get("observed_model") or ""),
+        preflight_model_id=str(probe.get("observed_model") or ""),
+        http_attempts=int(call["http_attempts"]),
+        retry_count=int(call["retry_count"]),
     )
+
+
+def _require_preparation_binding(preparation: Mapping[str, Any], evidence: PersistedJourneyEvidence) -> None:
+    if preparation.get("ontology_release_id") != evidence.ontology_release_id:
+        raise JourneyAcceptanceError("PREPARATION_RELEASE_MISMATCH")
+    expected = {
+        "snapshot_id": preparation.get("semantic_snapshot_id"),
+        "dataset_version_id": preparation.get("dataset_version_id"),
+        "pipeline_run_id": preparation.get("pipeline_run_id"),
+    }
+    if not all(expected.values()) or expected not in (preparation.get("snapshot_inputs") or []):
+        raise JourneyAcceptanceError("PREPARATION_SNAPSHOT_LINEAGE_MISSING")
+
+
+def _require_persisted_ontology_call(call: Any, *, run_id: str, journey_id: str) -> None:
+    expected = f"{run_id}:{journey_id}:ontology:1"
+    if call.call_kind != "ontology" or call.logical_call_index != 1:
+        raise JourneyAcceptanceError("PREPARATION_MODEL_EVIDENCE_INVALID")
+    if call.correlation_id != expected:
+        raise JourneyAcceptanceError(f"CORRELATION_ID_INVALID: {call.correlation_id!r}")
+    if call.requested_model != MODEL_ID or call.observed_model != MODEL_ID:
+        raise JourneyAcceptanceError(f"MODEL_ID_MISMATCH: observed {call.observed_model!r}")
+    if call.preflight_model_id != MODEL_ID:
+        raise JourneyAcceptanceError(f"MODEL_PROBE_MISSING: {call.preflight_model_id!r}")
+    if call.http_attempts not in (1, 2):
+        raise JourneyAcceptanceError("PREPARATION_HTTP_ATTEMPTS_INVALID")
 
 
 def _preparation_entry(

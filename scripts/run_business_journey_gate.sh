@@ -15,9 +15,9 @@
 #                             script never accepts or reads a DeepSeek
 #                             endpoint/base-URL override; the client always
 #                             talks to the one official DeepSeek origin.
-#   BUSINESS_JOURNEY_API_BASE  optional -- the application-under-test base
-#                             URL only. Defaults to the disposable stack
-#                             this script itself starts.
+#   The application-under-test URL is owned by this script's disposable
+#   stack and is always the loopback endpoint below. Caller overrides are
+#   rejected before the provider key is used.
 #
 # Creates exactly one uniquely-named disposable Compose project and tears
 # down only that project (`down -v --remove-orphans`), on success or
@@ -32,6 +32,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+if [ -n "${BUSINESS_JOURNEY_API_BASE+x}" ]; then
+  echo "BUSINESS_JOURNEY_API_BASE_NOT_ALLOWED: the gate owns its disposable loopback application endpoint" >&2
+  exit 2
+fi
+
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   echo "DEEPSEEK_API_KEY_REQUIRED: set a real DeepSeek credential before running this gate" >&2
   exit 2
@@ -39,7 +44,7 @@ fi
 
 RUN_ID="business-journey-$(date +%s)-$$"
 PROJECT="business-journey-gate-$$"
-API_BASE="${BUSINESS_JOURNEY_API_BASE:-http://127.0.0.1:8000}"
+API_BASE="http://127.0.0.1:8000"
 ARTIFACTS_DIR="$REPO_ROOT/artifacts"
 STAGING_DIR="$REPO_ROOT/artifacts/business_journeys/staging"
 

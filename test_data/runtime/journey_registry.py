@@ -173,23 +173,38 @@ def browser_target(journey_id: str) -> JourneyTestTarget:
 
 
 def compute_corpus_hash(
+    manifest_doc: Mapping[str, object],
     inputs_doc: Mapping[str, object],
     semantic_minima_doc: Mapping[str, object],
     dialogues_doc: Mapping[str, object],
     governance_doc: Mapping[str, object],
+    case_matrix_doc: Mapping[str, object],
+    reproducibility_doc: Mapping[str, object],
 ) -> str:
-    """Canonical sha256 of one journey's content-bearing fixture files.
+    """Canonical sha256 of all seven journey documents.
 
-    Both the generator and ``load_journey_manifest`` call this so a
-    checked-in corpus and a fresh generation are compared with exactly one
-    hashing formula.
+    The digest is recorded inside ``reproducibility.json`` and echoed by
+    every case, so those self-referential fields are replaced with fixed
+    sentinels before serializing. Everything else, including manifest and
+    case-matrix content, is content-addressed.
     """
 
+    normalized_cases = json.loads(json.dumps(case_matrix_doc))
+    for case in normalized_cases.get("cases", []):
+        case["fixture_manifest_sha256"] = "<corpus-hash>"
+        fixture_hashes = case.get("fixture_hashes")
+        if isinstance(fixture_hashes, dict) and "input_manifest_sha256" in fixture_hashes:
+            fixture_hashes["input_manifest_sha256"] = "<corpus-hash>"
+    normalized_reproducibility = json.loads(json.dumps(reproducibility_doc))
+    normalized_reproducibility["manifest_sha256"] = "<corpus-hash>"
     payload = {
+        "manifest": manifest_doc,
         "inputs": inputs_doc,
         "semantic_minima": semantic_minima_doc,
         "dialogues": dialogues_doc,
         "governance": governance_doc,
+        "case_matrix": normalized_cases,
+        "reproducibility": normalized_reproducibility,
     }
     canonical = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
@@ -356,6 +371,16 @@ def _load_json(path: Path, journey_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _repository_root(root: Path) -> Path:
+    """Resolve the repository root for a runtime corpus root.
+
+    Kept as a narrow seam for copied-corpus contract tests; production roots
+    remain ``<repo>/test_data/runtime``.
+    """
+
+    return Path(root).resolve().parent.parent
+
+
 def _require_fields(journey_id: str, filename: str, doc: Mapping[str, object], fields: tuple[str, ...]) -> None:
     for field in fields:
         if field not in doc:
@@ -397,7 +422,7 @@ def load_journey_manifest(journey_id: str, root: Path) -> JourneyManifest:
     if manifest_doc["model_id"] != _registry.JOURNEY_MODEL_ID:
         raise ValueError(f"{journey_id}: unexpected model_id {manifest_doc['model_id']!r}")
 
-    repo_root = Path(root).resolve().parent.parent
+    repo_root = _repository_root(root)
     has_image = False
     for entry in inputs_doc["inputs"]:
         for field in ("kind", "media_type", "path", "sha256", "fixture_id"):
@@ -412,8 +437,13 @@ def load_journey_manifest(journey_id: str, root: Path) -> JourneyManifest:
         rel_path = str(entry["path"])
         if rel_path.startswith("/") or ".." in Path(rel_path).parts:
             raise ValueError(f"{journey_id}: input path {rel_path!r} is not repository-relative")
-        if not (repo_root / rel_path).exists():
+        source_path = repo_root / rel_path
+        if not source_path.exists():
             raise ValueError(f"{journey_id}: input path {rel_path!r} does not exist in the repository")
+        if hashlib.sha256(source_path.read_bytes()).hexdigest() != entry["sha256"]:
+            raise ValueError(f"{journey_id}: input {entry['fixture_id']!r} hash does not match {rel_path!r}")
+        if inputs_doc["input_hashes"].get(entry["fixture_id"]) != entry["sha256"]:
+            raise ValueError(f"{journey_id}: input_hashes hash does not match {entry['fixture_id']!r}")
     if not has_image:
         raise ValueError(f"{journey_id}: manifest has no visual (image) input")
 
@@ -421,10 +451,22 @@ def load_journey_manifest(journey_id: str, root: Path) -> JourneyManifest:
         if not _SHA256_RE.match(str(ref.get("sha256", ""))):
             raise ValueError(f"{journey_id}: source_ref {ref!r} has a non-sha256 hash")
         rel_path = str(ref["path"])
-        if rel_path.startswith("/") or ".." in Path(rel_path).parts or not (repo_root / rel_path).exists():
+        source_path = repo_root / rel_path
+        if rel_path.startswith("/") or ".." in Path(rel_path).parts or not source_path.exists():
             raise ValueError(f"{journey_id}: source_ref path {rel_path!r} is not a valid repository-relative path")
+        if hashlib.sha256(source_path.read_bytes()).hexdigest() != ref["sha256"]:
+            raise ValueError(f"{journey_id}: source_ref hash does not match {rel_path!r}")
 
-    recomputed = compute_corpus_hash(inputs_doc, minima_doc, dialogues_doc, governance_doc)
+    input_ids = {str(entry["fixture_id"]) for entry in inputs_doc["inputs"]}
+    if set(inputs_doc["input_hashes"]) != input_ids:
+        raise ValueError(f"{journey_id}: input_hashes must contain exactly one entry per input")
+    for fixture_id, digest in inputs_doc["input_hashes"].items():
+        if not _SHA256_RE.match(str(digest)):
+            raise ValueError(f"{journey_id}: input_hashes {fixture_id!r} has a non-sha256 hash")
+
+    recomputed = compute_corpus_hash(
+        manifest_doc, inputs_doc, minima_doc, dialogues_doc, governance_doc, case_matrix_doc, reproducibility_doc
+    )
     if recomputed != reproducibility_doc["manifest_sha256"]:
         raise ValueError(
             f"{journey_id}: manifest is not reproducible "

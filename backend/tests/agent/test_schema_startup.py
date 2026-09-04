@@ -166,6 +166,7 @@ def test_load_all_models_registers_current_milestone_without_database_io():
         "audit_tasks",
         "auth_refresh_families",
         "auth_refresh_tokens",
+        "business_journey_preparations",
         "entities",
         "entity_instance_relations",
         "entity_instances",

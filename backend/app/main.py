@@ -48,6 +48,7 @@ from app.routers import (
     ontology_access_grants,
     ontology_lifecycle,
     ontology_remediations,
+    business_journeys,
     security_domains,
 )
 from app.routers import oauth as oauth_router
@@ -184,6 +185,7 @@ app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(models_admin_router)
 app.include_router(data_grants_router, prefix="/api/v1/ontology-data-grants", tags=["data-grants"])
+app.include_router(business_journeys.router, prefix="/api/v1/business-journeys", tags=["business-journeys"])
 app.include_router(app_state_schemas_router, prefix="/api/v2/application-state-schemas", tags=["application-state-schemas"])
 app.include_router(agents_module.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])

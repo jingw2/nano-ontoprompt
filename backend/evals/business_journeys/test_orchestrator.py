@@ -87,9 +87,16 @@ class _FakeState:
         self.curated_reviews: list[str] = []
         self.curated_datasets: list[dict] = []
         self.extra_curated: list[dict] = []
+        self.preparations: dict[tuple[str, str], dict[str, Any]] = {}
+        self.curated_approvals: list[dict[str, str]] = []
+        self.unrelated_curated_dataset = False
+        self.implicit_preparation_evidence = True
 
     def drop(self, resource: str) -> None:
         self.dropped.add(resource)
+
+    def add_unrelated_curated_dataset(self) -> None:
+        self.unrelated_curated_dataset = True
 
 
 def _journey_of(name: str) -> str:
@@ -325,20 +332,73 @@ def _list_curated(state: _FakeState, _match: "re.Match[str]", _body: dict) -> tu
     return 200, list(state.extra_curated) + list(reversed(state.curated_datasets))
 
 
-def _start_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+def _start_review(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    """`POST /api/v2/curated/{id}/reviews` — the real `start_review` requires
+    a `PipelineRunBinding` body (`pipeline_run_id`, required — see
+    `app.routers.v2.curated.PipelineRunBinding`) and answers with exactly
+    `{"review_id", "status"}`, never echoing the binding back."""
     dataset_id = match.group("dataset_id")
+    if not body.get("pipeline_run_id"):
+        return 422, {"detail": "pipeline_run_id is required"}
     state.curated_reviews.append(dataset_id)
     return 200, {"review_id": _uuid_for(f"{dataset_id}:review"), "status": "in_review"}
 
 
-def _approve_review(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+def _approve_review(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    state.curated_approvals.append({"review_id": match.group("review_id"), "pipeline_run_id": str(body.get("pipeline_run_id") or "")})
     return 200, {"review_id": match.group("review_id"), "status": "approved"}
+
+
+def _persist_preparation(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    if "preparation_evidence" in state.dropped:
+        raise _FakeNotFound("PREPARATION_EVIDENCE_NOT_PERSISTED")
+    snapshot_id = _uuid_for(f"{body['run_id']}:{body['journey_id']}:snapshot")
+    persisted = dict(body)
+    persisted["semantic_snapshot_id"] = snapshot_id
+    persisted["snapshot_input"] = {
+        "pipeline_run_id": body["pipeline_run_id"],
+        "dataset_version_id": body["dataset_version_id"],
+    }
+    persisted["snapshot_inputs"] = [{
+        "snapshot_id": snapshot_id,
+        "pipeline_run_id": body["pipeline_run_id"],
+        "dataset_version_id": body["dataset_version_id"],
+    }]
+    state.preparations[(body["run_id"], body["journey_id"])] = persisted
+    return 201, {"data": persisted}
+
+
+def _get_preparation(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    run_id, journey_id = match.group("run_id"), match.group("journey_id")
+    record = state.preparations.get((run_id, journey_id))
+    if record is None and state.implicit_preparation_evidence:
+        record = {
+            "run_id": run_id, "journey_id": journey_id,
+            "ontology_release_id": _uuid_for(f"{run_id}:{journey_id}:release"),
+            "semantic_snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            "snapshot_inputs": [{
+                "snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
+                "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
+                "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            }],
+            "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+            "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                             "correlation_id": f"{run_id}:{journey_id}:ontology:1",
+                             "requested_model": MODEL_ID, "observed_model": MODEL_ID,
+                             "http_attempts": 1, "retry_count": 0}],
+        }
+    if record is None:
+        raise _FakeNotFound("PREPARATION_EVIDENCE_NOT_PERSISTED")
+    return 200, {"data": record}
 
 
 def _create_ontology(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
     journey_id = _journey_of(str(body.get("name", "")))
+    ontology_id = _uuid_for(f"{journey_id}:ontology")
     return 201, {"data": {
-        "id": _uuid_for(f"{journey_id}:ontology"),
+        "id": ontology_id,
         "name": body.get("name"),
         "domain": body.get("domain"),
         "status": "draft",
@@ -460,6 +520,8 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
     turn_id = match.group("turn_id")
     run_id, journey_id = _RUN_BY_TURN.get(turn_id, ("unknown", "supply_chain"))
     manifest = load_journey_manifest(journey_id, _RUNTIME_DATA_DIR)
+    preparation = state.preparations.get((run_id, journey_id))
+    release_id = (preparation or {}).get("ontology_release_id") or _uuid_for(f"{run_id}:{journey_id}:release")
     minima = manifest.semantic_minima
     citations = list(minima.get("source_citation_ids") or [])
     items = [
@@ -468,7 +530,7 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
             "agent_version_id": _uuid_for(f"{run_id}:{journey_id}:agent-version"),
         }},
         {"sequence": 2, "event_type": "resolve_snapshot", "payload": {
-            "release_id": _uuid_for(f"{run_id}:{journey_id}:release"), "citations": citations,
+            "release_id": release_id, "citations": citations,
         }},
         {"sequence": 3, "event_type": "model_call", "payload": {
             "call_kind": "agent_initial", "logical_call_index": 2,
@@ -535,6 +597,8 @@ _ROUTES: list[tuple[str, str, Handler]] = [
     (r"/api/v2/curated", "GET", _list_curated),
     (r"/api/v2/curated/(?P<dataset_id>[^/]+)/reviews", "POST", _start_review),
     (r"/api/v2/curated/reviews/(?P<review_id>[^/]+)/approve", "POST", _approve_review),
+    (r"/api/v1/business-journeys/preparations", "POST", _persist_preparation),
+    (r"/api/v1/business-journeys/preparations/(?P<run_id>[^/]+)/(?P<journey_id>[^/]+)", "GET", _get_preparation),
     (r"/api/v1/ontologies", "POST", _create_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/entities", "POST", _create_entity),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/graph/relations", "POST", _create_relation),
@@ -641,15 +705,12 @@ def write_staging_run_manifest(
 ) -> Path:
     """Stand in for the staging run manifest ``prepare_journey`` writes.
 
-    ``verify_journey`` reads this file back for two things: to cross-check
-    the descriptor ids the turn actually executed against the ones
-    preparation really published and granted
-    (``_require_granted_mcp_descriptors``), and to rebuild logical call 1's
-    real ``http_attempts``/``retry_count``/``observed_model_id``
-    (``_ontology_call_from_manifest``) — so a verify-only test needs one on
-    disk carrying both. ``test_verify_cross_checks_descriptors_against_a_
-    real_prepared_run_manifest`` covers the same checks against a manifest
-    written by the REAL ``prepare_all_journeys``.
+    ``verify_journey`` reads this file back to cross-check the descriptor
+    ids the turn actually executed against the ones preparation really
+    published and granted (``_require_granted_mcp_descriptors``) — so a
+    verify-only test needs one on disk. ``test_verify_cross_checks_
+    descriptors_against_a_real_prepared_run_manifest`` covers the same check
+    against a manifest written by the REAL ``prepare_all_journeys``.
     """
     if mcp_descriptor_ids is None:
         mcp_descriptor_ids = [_granted_query_descriptor_id(journey_id)]
@@ -827,6 +888,33 @@ def test_prepare_uses_exactly_one_deepseek_completion_and_official_origin(fake_a
     assert preparation.correlation_id == "journey-one-call:supply_chain:ontology:1"
     assert JourneyPreparationBudget().logical_model_calls == 1
     assert JourneyPreparationBudget().max_http_attempts == 2
+
+
+def test_prepare_persists_completion_snapshot_lineage_and_model_evidence(fake_api):
+    """Preparation evidence must be application-owned, not a local report."""
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-durable-preparation",
+    )
+
+    persisted = fake_api.preparations[("journey-durable-preparation", "supply_chain")]
+    assert persisted["structured"] == structured_answer("supply_chain")
+    assert persisted["semantic_snapshot_id"] == preparation.semantic_snapshot_id
+    assert persisted["snapshot_input"] == {
+        "pipeline_run_id": preparation.pipeline.pipeline_run_id,
+        "dataset_version_id": preparation.pipeline.dataset_version_id,
+    }
+    assert persisted["model_probe"]["observed_model"] == MODEL_ID
+    assert persisted["model_calls"][0]["correlation_id"] == preparation.correlation_id
+
+
+def test_prepare_scopes_curated_approval_to_the_pipeline_run(fake_api):
+    fake_api.add_unrelated_curated_dataset()
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-curated-scope",
+    )
+    assert fake_api.curated_approvals[-1]["pipeline_run_id"] == preparation.pipeline.pipeline_run_id
 
 
 def test_prepare_fails_closed_on_missing_pipeline_run(fake_api):
@@ -1026,25 +1114,24 @@ def test_prepare_fails_closed_when_the_run_records_no_curated_output(fake_api):
         )
 
 
-def test_semantic_snapshot_value_is_recorded_as_an_obvious_placeholder(prepared_journeys, fake_api):
-    """No production endpoint anywhere creates a `SemanticSnapshot`
-    (`materialize_snapshot`/`materialize_refresh_snapshot` have zero callers
-    outside `tests/runtime/`), so this value cannot be a real row id today.
-    It must therefore not be recorded under a name that reads like one."""
+def test_semantic_snapshot_id_is_real_and_persisted_in_the_run_manifest(prepared_journeys, fake_api):
+    """`persist_preparation_evidence` POSTs to `/api/v1/business-journeys/
+    preparations`, which calls `materialize_snapshot` and returns the real
+    `SemanticSnapshot` row it created (the first production caller of that
+    function anywhere in the application) — every journey's preparation must
+    carry that real id, and the staging run manifest must record the same
+    value, not a locally-fabricated one."""
     preparations = prepare_all_journeys(
         api_base=fake_api.url, api_key="runtime/runtime",
-        output_dir=Path("artifacts"), run_id="journey-snapshot-placeholder",
+        output_dir=Path("artifacts"), run_id="journey-snapshot-id",
         before_journey=prepared_journeys,
     )
     for preparation in preparations:
-        assert preparation.semantic_snapshot_placeholder.startswith(
-            "PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:"
-        )
+        assert preparation.semantic_snapshot_id
     document = read_run_manifest(Path("artifacts"))
     for entry in document["preparations"]:
-        assert "semantic_snapshot_id" not in entry
-        assert entry["semantic_snapshot_placeholder"].startswith(
-            "PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:"
+        assert entry["semantic_snapshot_id"] == next(
+            p.semantic_snapshot_id for p in preparations if p.journey_id == entry["journey_id"]
         )
 
 
@@ -1085,8 +1172,12 @@ def test_verify_cross_checks_descriptors_against_a_real_prepared_run_manifest(
     }
     assert _granted_query_descriptor_id("credit") in granted["credit"]
 
+    browser = browser_evidence_document("journey-granted-descriptors", "credit")
+    browser["ontology_release_id"] = fake_api.preparations[
+        ("journey-granted-descriptors", "credit")
+    ]["ontology_release_id"]
     write_browser_evidence(
-        Path("artifacts"), "journey-granted-descriptors", "credit", staging_manifest=False,
+        Path("artifacts"), "journey-granted-descriptors", "credit", browser, staging_manifest=False,
     )
     verification = verify_journey(
         "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
@@ -1143,59 +1234,13 @@ def test_verify_reads_only_persisted_evidence(fake_api):
     assert fake_api.mutations == []
 
 
-def test_verify_reports_the_preparations_real_http_attempts_not_a_hardcoded_one(fake_api):
-    """The ontology call's budget row used to be fabricated
-    (`http_attempts=1, retry_count=0`, hardcoded), so a preparation whose
-    real completion RETRIED — consuming two HTTP attempts of the run's
-    budget — was reported as a clean single attempt. The real numbers are
-    already recorded, durably, in the staging run manifest
-    (`JourneyPreparation.http_attempts`/`retry_count`, both sourced from the
-    real `ModelCallLedger`/`ModelResponse`); verification must read them."""
-    write_browser_evidence(Path("artifacts"), "journey-real-attempts", "credit")
-    write_staging_run_manifest(
-        Path("artifacts"), "journey-real-attempts", "credit", http_attempts=2, retry_count=1,
-    )
-    verification = verify_journey(
-        "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
-        run_id="journey-real-attempts",
-    )
-    # 2 (the retried ontology call) + 1 + 1 (the two browser-driven calls).
-    assert verification.http_attempts == 4
-    assert verification.retry_count == 1
-
-
-def test_verify_ontology_call_counters_come_from_a_real_prepared_run_manifest(
-    prepared_journeys, fake_api,
-):
-    """The same read, but against a manifest written by the REAL
-    `prepare_all_journeys` rather than a stub — proving the field names
-    `_ontology_call_from_manifest` reads really are the ones
-    `JourneyPreparation.to_dict()` writes."""
-    preparations = prepare_all_journeys(
-        api_base=fake_api.url, api_key="runtime/runtime",
-        output_dir=Path("artifacts"), run_id="journey-real-manifest-counters",
-        before_journey=prepared_journeys,
-    )
-    prepared = {p.journey_id: p for p in preparations}["credit"]
-    write_browser_evidence(
-        Path("artifacts"), "journey-real-manifest-counters", "credit", staging_manifest=False,
-    )
-    verification = verify_journey(
-        "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
-        run_id="journey-real-manifest-counters",
-    )
-    assert verification.http_attempts == prepared.http_attempts + 2
-    assert verification.retry_count == prepared.retry_count
-    assert verification.observed_model_ids[0] == prepared.observed_model_id
-    assert verification.correlation_ids[0] == prepared.correlation_id
-
-
 def test_verify_fails_closed_when_the_manifest_has_no_preparation_for_the_journey(fake_api):
-    """Both manifest readers (`_require_granted_mcp_descriptors` and
-    `_ontology_call_from_manifest`) go through the same `_preparation_entry`
-    helper, so both fail closed on the same reason code — the ontology
-    call's counters may never be invented when the durable record they come
-    from is absent."""
+    """`_require_granted_mcp_descriptors` reads this journey's own entry in
+    the staging run manifest (a durable record distinct from the app-DB
+    preparation evidence `_persisted_ontology_call` reads) via
+    `_preparation_entry`, which fails closed on this reason code when the
+    entry is absent — the MCP descriptor grant may never be assumed when the
+    durable record it comes from is missing."""
     write_browser_evidence(Path("artifacts"), "journey-missing-prep", "credit")
     write_staging_run_manifest(Path("artifacts"), "journey-missing-prep", "finance")
     path = Path("artifacts") / "business_journeys" / "staging" / "run.json"
@@ -1211,27 +1256,113 @@ def test_verify_fails_closed_when_the_manifest_has_no_preparation_for_the_journe
         )
 
 
-@pytest.mark.parametrize("missing_field", ["http_attempts", "retry_count"])
-def test_verify_fails_closed_when_the_preparation_is_missing_a_budget_counter(fake_api, missing_field):
-    """`int(preparation.get("http_attempts") or 0)` used to turn a MISSING
-    counter into a clean "zero attempts" reading — the same "invent a number
-    instead of reading the real one" bug the rest of this function exists to
-    fix, just for the absent-key case instead of the wrong-value case. A
-    well-formed preparation entry always has both keys
-    (`JourneyPreparation.to_dict()` writes them unconditionally); their
-    absence must fail closed, not silently report a suspiciously perfect
-    budget."""
-    write_browser_evidence(Path("artifacts"), "journey-missing-counter", "credit")
-    write_staging_run_manifest(Path("artifacts"), "journey-missing-counter", "credit")
-    path = Path("artifacts") / "business_journeys" / "staging" / "run.json"
-    document = json.loads(path.read_text(encoding="utf-8"))
-    del document["preparations"][0][missing_field]
-    path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
-    with pytest.raises(JourneyAcceptanceError, match="RUN_MANIFEST_PREPARATION_INCOMPLETE"):
-        verify_journey(
-            "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
-            run_id="journey-missing-counter",
-        )
+@pytest.mark.parametrize("missing_field", ["http_attempts", "retry_count", "logical_call_index"])
+def test_verify_fails_closed_when_the_persisted_ontology_call_is_missing_a_counter(fake_api, missing_field):
+    """`int(call.get("http_attempts") or 0)` used to turn a MISSING counter
+    on the app-DB-persisted ontology call into a clean "zero attempts"
+    reading — the same "invent a number instead of reading the real one" bug
+    this whole function exists to fix, just for the absent-key case instead
+    of the wrong-value case. The router's own `ModelCallEvidence` schema
+    requires all three fields, so a well-formed persisted call always has
+    them; their absence must fail closed, not silently report a suspiciously
+    perfect budget."""
+    run_id = "journey-persisted-call-missing-counter"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    call = {"call_kind": "ontology", "logical_call_index": 1,
+            "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+            "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}
+    del call[missing_field]
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for(f"{run_id}:credit:release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "snapshot_inputs": [{"snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+                             "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+                             "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version")}],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [call],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="PREPARATION_MODEL_EVIDENCE_INCOMPLETE"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+
+def test_verify_fails_when_preparation_model_evidence_is_missing_or_mismatched(fake_api):
+    run_id = "journey-missing-preparation-model-evidence"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    with pytest.raises(JourneyAcceptanceError, match="PREPARATION_EVIDENCE_NOT_PERSISTED"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for(f"{run_id}:credit:release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for("credit:pipeline-run"),
+        "dataset_version_id": _uuid_for("credit:dataset-version"),
+        "snapshot_inputs": [{"snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+                             "pipeline_run_id": _uuid_for("credit:pipeline-run"),
+                             "dataset_version_id": _uuid_for("credit:dataset-version")}],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": "wrong", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="CORRELATION_ID_INVALID"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+
+def test_verify_requires_exact_persisted_snapshot_lineage_and_release(fake_api):
+    run_id = "journey-snapshot-lineage"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for("different-release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "snapshot_inputs": [{
+            "snapshot_id": _uuid_for("other-snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        }],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELEASE_ID_MISMATCH"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+
+def test_verify_rejects_same_release_with_wrong_snapshot_input_tuple(fake_api):
+    run_id = "journey-wrong-snapshot-input"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    release_id = _uuid_for(f"{run_id}:credit:release")
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit", "ontology_release_id": release_id,
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "snapshot_inputs": [{
+            "snapshot_id": _uuid_for("different-snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        }],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    document = browser_evidence_document(run_id, "credit")
+    document["ontology_release_id"] = release_id
+    write_browser_evidence(Path("artifacts"), run_id, "credit", document)
+    with pytest.raises(JourneyAcceptanceError, match="PREPARATION_SNAPSHOT_LINEAGE_MISSING"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
 
 
 def test_verify_rejects_shared_plan_identity_across_branches(fake_api):

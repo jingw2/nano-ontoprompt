@@ -635,16 +635,25 @@ def build_journey_corpus(journey_id: str, seed: int) -> dict[str, dict]:
     minima_doc = build_journey_semantic_minima(journey_id)
     dialogues_doc = build_journey_dialogues(journey_id)
     governance_doc = build_journey_governance(journey_id, seed)
-    journey_hash = journey_registry.compute_corpus_hash(inputs_doc, minima_doc, dialogues_doc, governance_doc)
+    manifest_doc = build_journey_manifest_doc(journey_id, seed)
+    # The hash is self-referential only through the two fields normalized by
+    # compute_corpus_hash(), so placeholders are safe for the first build.
+    case_matrix_doc = build_journey_case_matrix(journey_id, "<corpus-hash>", governance_doc)
+    reproducibility_doc = build_journey_reproducibility(seed, "<corpus-hash>")
+    journey_hash = journey_registry.compute_corpus_hash(
+        manifest_doc, inputs_doc, minima_doc, dialogues_doc, governance_doc, case_matrix_doc, reproducibility_doc
+    )
+    case_matrix_doc = build_journey_case_matrix(journey_id, journey_hash, governance_doc)
+    reproducibility_doc = build_journey_reproducibility(seed, journey_hash)
 
     return {
-        f"{journey_id}/manifest.json": build_journey_manifest_doc(journey_id, seed),
+        f"{journey_id}/manifest.json": manifest_doc,
         f"{journey_id}/inputs.json": inputs_doc,
         f"{journey_id}/semantic_minima.json": minima_doc,
         f"{journey_id}/dialogues.json": dialogues_doc,
         f"{journey_id}/governance.json": governance_doc,
-        f"{journey_id}/case_matrix.json": build_journey_case_matrix(journey_id, journey_hash, governance_doc),
-        f"{journey_id}/reproducibility.json": build_journey_reproducibility(seed, journey_hash),
+        f"{journey_id}/case_matrix.json": case_matrix_doc,
+        f"{journey_id}/reproducibility.json": reproducibility_doc,
     }
 
 

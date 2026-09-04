@@ -184,14 +184,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Tabular duplicate-row detection via the generic Curated QualityService (duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also contains a null/missing cell). Does not cover journey-specific entities (duplicate invoices/applications) or, since exactly one target is allowed, the missing-policy-field half of this case's claim (proven separately by the sibling test_quality_detects_nulls, not registered here).",
       "source_case_id": "edge-duplicate-or-missing",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/curated/test_quality.py::test_quality_detects_duplicates"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_duplicate_or_missing_is_an_explicit_quality_result"
         }
       ],
       "user_id": "user-beta-operator-29"
@@ -232,14 +230,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Retrying the same governed write never calls the writer twice (retry-safety/idempotency). No HTTP status code is involved; nowhere in this codebase handles an HTTP 429 today, so this does not prove 429-specific retry behavior.",
       "source_case_id": "resilience-429-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_service.py::test_idempotent_retry_never_calls_the_writer_twice"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_429_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-acme-operator-34"
@@ -257,14 +253,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A raised transport-layer exception from the MCP client's underlying safe_post call is wrapped into a typed, traceable MCPClientError -- proven only for the SSRF-block exception path. _rpc_call does not catch a generic transport timeout today, so this does not prove timeout-specific handling, and it does not prove no-duplicate-write.",
       "source_case_id": "resilience-mcp-timeout",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_mcp_client.py::test_call_tool_wraps_ssrf_block"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_mcp_timeout_is_typed_and_makes_one_call"
         }
       ],
       "user_id": "user-acme-operator-36"
@@ -305,14 +299,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Replaying persisted turn events from an after_seq cursor returns exactly the persisted sequence with no gap or duplicate -- the same cursor-resume mechanism a browser SSE reconnect depends on. Does not by itself prove one-turn/one-tool-round preservation across a real reconnect.",
       "source_case_id": "resilience-sse-reconnect",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_event_stream.py::test_events_persisted_before_notify_no_gap"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_sse_reconnect_replays_only_events_after_cursor"
         }
       ],
       "user_id": "user-beta-operator-37"
@@ -330,14 +322,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A failed source pull schedules exactly one bounded retry with a backoff deadline -- not an unbounded retry loop. This is the generic refresh-source connector's retry-scheduling test, not the real DeepSeek HTTP-client timeout/backoff path Task 2 adds; no HTTP timeout is involved.",
       "source_case_id": "resilience-timeout-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_failed_retry_records_bounded_backoff_deadline"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_timeout_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-beta-operator-33"
@@ -378,14 +368,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Malicious upstream title/url content returned by an external tool call is sanitized at the tool-gateway payload boundary before it can reach model context. Does not prove policy immutability or unapproved-action prevention against injected instructions in a document body -- that invariant instead comes from the exact-plan-hash HITL system exercised by the writeback-* cases, since no action this codebase can execute is ever driven by free-form model/document text.",
       "source_case_id": "security-prompt-injection",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_tool_gateway_external.py::test_gateway_sanitizes_title_and_url_at_payload_boundary"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_prompt_injection_cannot_widen_the_declared_action"
         }
       ],
       "user_id": "user-acme-operator-32"
@@ -1059,14 +1047,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Tabular duplicate-row detection via the generic Curated QualityService (duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also contains a null/missing cell). Does not cover journey-specific entities (duplicate invoices/applications) or, since exactly one target is allowed, the missing-policy-field half of this case's claim (proven separately by the sibling test_quality_detects_nulls, not registered here).",
       "source_case_id": "edge-duplicate-or-missing",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/curated/test_quality.py::test_quality_detects_duplicates"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_duplicate_or_missing_is_an_explicit_quality_result"
         }
       ],
       "user_id": "user-beta-operator-15"
@@ -1107,14 +1093,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Retrying the same governed write never calls the writer twice (retry-safety/idempotency). No HTTP status code is involved; nowhere in this codebase handles an HTTP 429 today, so this does not prove 429-specific retry behavior.",
       "source_case_id": "resilience-429-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_service.py::test_idempotent_retry_never_calls_the_writer_twice"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_429_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-acme-operator-20"
@@ -1132,14 +1116,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A raised transport-layer exception from the MCP client's underlying safe_post call is wrapped into a typed, traceable MCPClientError -- proven only for the SSRF-block exception path. _rpc_call does not catch a generic transport timeout today, so this does not prove timeout-specific handling, and it does not prove no-duplicate-write.",
       "source_case_id": "resilience-mcp-timeout",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_mcp_client.py::test_call_tool_wraps_ssrf_block"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_mcp_timeout_is_typed_and_makes_one_call"
         }
       ],
       "user_id": "user-acme-operator-22"
@@ -1180,14 +1162,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Replaying persisted turn events from an after_seq cursor returns exactly the persisted sequence with no gap or duplicate -- the same cursor-resume mechanism a browser SSE reconnect depends on. Does not by itself prove one-turn/one-tool-round preservation across a real reconnect.",
       "source_case_id": "resilience-sse-reconnect",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_event_stream.py::test_events_persisted_before_notify_no_gap"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_sse_reconnect_replays_only_events_after_cursor"
         }
       ],
       "user_id": "user-beta-operator-23"
@@ -1205,14 +1185,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A failed source pull schedules exactly one bounded retry with a backoff deadline -- not an unbounded retry loop. This is the generic refresh-source connector's retry-scheduling test, not the real DeepSeek HTTP-client timeout/backoff path Task 2 adds; no HTTP timeout is involved.",
       "source_case_id": "resilience-timeout-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_failed_retry_records_bounded_backoff_deadline"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_timeout_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-beta-operator-19"
@@ -1253,14 +1231,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Malicious upstream title/url content returned by an external tool call is sanitized at the tool-gateway payload boundary before it can reach model context. Does not prove policy immutability or unapproved-action prevention against injected instructions in a document body -- that invariant instead comes from the exact-plan-hash HITL system exercised by the writeback-* cases, since no action this codebase can execute is ever driven by free-form model/document text.",
       "source_case_id": "security-prompt-injection",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_tool_gateway_external.py::test_gateway_sanitizes_title_and_url_at_payload_boundary"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_prompt_injection_cannot_widen_the_declared_action"
         }
       ],
       "user_id": "user-acme-operator-18"
@@ -2325,14 +2301,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Tabular duplicate-row detection via the generic Curated QualityService (duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also contains a null/missing cell). Does not cover journey-specific entities (duplicate invoices/applications) or, since exactly one target is allowed, the missing-policy-field half of this case's claim (proven separately by the sibling test_quality_detects_nulls, not registered here).",
       "source_case_id": "edge-duplicate-or-missing",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/curated/test_quality.py::test_quality_detects_duplicates"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_duplicate_or_missing_is_an_explicit_quality_result"
         }
       ],
       "user_id": "user-beta-operator-01"
@@ -2373,14 +2347,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Retrying the same governed write never calls the writer twice (retry-safety/idempotency). No HTTP status code is involved; nowhere in this codebase handles an HTTP 429 today, so this does not prove 429-specific retry behavior.",
       "source_case_id": "resilience-429-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/runtime/test_execution_service.py::test_idempotent_retry_never_calls_the_writer_twice"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_429_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-acme-operator-06"
@@ -2398,14 +2370,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A raised transport-layer exception from the MCP client's underlying safe_post call is wrapped into a typed, traceable MCPClientError -- proven only for the SSRF-block exception path. _rpc_call does not catch a generic transport timeout today, so this does not prove timeout-specific handling, and it does not prove no-duplicate-write.",
       "source_case_id": "resilience-mcp-timeout",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_mcp_client.py::test_call_tool_wraps_ssrf_block"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_mcp_timeout_is_typed_and_makes_one_call"
         }
       ],
       "user_id": "user-acme-operator-08"
@@ -2446,14 +2416,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Replaying persisted turn events from an after_seq cursor returns exactly the persisted sequence with no gap or duplicate -- the same cursor-resume mechanism a browser SSE reconnect depends on. Does not by itself prove one-turn/one-tool-round preservation across a real reconnect.",
       "source_case_id": "resilience-sse-reconnect",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_event_stream.py::test_events_persisted_before_notify_no_gap"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_sse_reconnect_replays_only_events_after_cursor"
         }
       ],
       "user_id": "user-beta-operator-09"
@@ -2471,14 +2439,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "A failed source pull schedules exactly one bounded retry with a backoff deadline -- not an unbounded retry loop. This is the generic refresh-source connector's retry-scheduling test, not the real DeepSeek HTTP-client timeout/backoff path Task 2 adds; no HTTP timeout is involved.",
       "source_case_id": "resilience-timeout-retry",
-      "target_status": "provisional",
       "tenant_id": "tenant-beta",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/v2/incremental/test_refresh_polling.py::test_failed_retry_records_bounded_backoff_deadline"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_timeout_retry_is_bounded_to_two_attempts"
         }
       ],
       "user_id": "user-beta-operator-05"
@@ -2519,14 +2485,12 @@
       "layers": [
         "business_journey_deterministic"
       ],
-      "proves": "Malicious upstream title/url content returned by an external tool call is sanitized at the tool-gateway payload boundary before it can reach model context. Does not prove policy immutability or unapproved-action prevention against injected instructions in a document body -- that invariant instead comes from the exact-plan-hash HITL system exercised by the writeback-* cases, since no action this codebase can execute is ever driven by free-form model/document text.",
       "source_case_id": "security-prompt-injection",
-      "target_status": "provisional",
       "tenant_id": "tenant-acme",
       "test_targets": [
         {
           "kind": "pytest",
-          "path": "backend/tests/agent/test_tool_gateway_external.py::test_gateway_sanitizes_title_and_url_at_payload_boundary"
+          "path": "backend/tests/runtime/test_journey_case_contracts.py::test_journey_prompt_injection_cannot_widen_the_declared_action"
         }
       ],
       "user_id": "user-acme-operator-04"
@@ -2679,24 +2643,24 @@
   ],
   "files": {
     "README.md": "2d14d702c99a5efa1934f8d390355735c5a7b8337011a5345cc7b390b2ea6385",
-    "credit/case_matrix.json": "e50c30cb4f1999475c53635a6774610030c2b55a6010cdad234434a677971692",
+    "credit/case_matrix.json": "587b4d26d8cd1d11b449aca93e11ecf69ad6cc58cac86ff7d858044caa0d31f3",
     "credit/dialogues.json": "2d84a501f54547a1c9020115fb449c004ff86b4efc3b1e7eb2bd29cbafd5cba7",
     "credit/governance.json": "6304eb09059ae64249a3aaf0cda46742b1cefa3eb6b5e3d8b8d2254c7d30830f",
     "credit/inputs.json": "c80c23d09061ce744cd2e626c76677b556326b9dbd52947a5dcca160329ec96c",
     "credit/manifest.json": "f442a5087d7f064c55f29a803d44f3fc2b7ef77384d3e9cf7ab8d96c64713387",
-    "credit/reproducibility.json": "f8c589121c25bb21334877d4fe62be58463e177ede4acc7ed770d0f34e0bd526",
+    "credit/reproducibility.json": "557c5a3e9e17cacebd008a6c284ae6c5c24f2a3b9da07490742b07c7fbc6d789",
     "credit/semantic_minima.json": "0d63eb500e81a0c8e0d17dfa86a43910fec78df5633e09ccc3e808261efd3092",
     "db/docker-compose.yml": "757920b296a36b49f350eb53cc14493ddb3de3f1f7a8c408d2b88847d04d4563",
     "db/mysql/schema.sql": "c5243e85cfb01929995ac3e6eeee678c11e1f92cd3edb5c3bec9b43f5359e0ba",
     "db/mysql/seed.sql": "b4d63bf3e6c25d17bb59dc3e0c68e924d79753906c227fa6e81693065d499787",
     "db/postgres/schema.sql": "c13fb9b11c7682c958e065ca8f3598c0ce9f56dba2c274e11ab5c7cbd22a3aa1",
     "db/postgres/seed.sql": "22bcd3d4f06710f22d8b92591e798c9d568b342f6abba6fdfae874c197ad615f",
-    "finance/case_matrix.json": "dc205e3e553807cb94a5609f7cfdfd85347ea3cb95db32f2ded9380cf06b5a3f",
+    "finance/case_matrix.json": "a31f8009497d5ef847c8ab7a18188afd42bb3262cba2ac0326704b807f76ac4b",
     "finance/dialogues.json": "6e2ad945779cfb3c3a305995ee8a73d7f156dd6f72ac46eb500e301e76adb327",
     "finance/governance.json": "d71abc79dffb002b27142053fff3b6ded865aa777b6aafee7b2b4e8ff51acef7",
     "finance/inputs.json": "81a9d6b6e7199b3ec0b490adb946f6240994e376d727826eeb366cc4ee298d7e",
     "finance/manifest.json": "21e0ffc7ac9d21a30e61de6947ad08d2b0788e3249ccdc531bee4d2a9f1bcc71",
-    "finance/reproducibility.json": "6448d02f51f6b0c8ea53847d0b6abbfb405fd779dd85f939e48380107eba4d53",
+    "finance/reproducibility.json": "2c548cd198b3ce043d9cae0708e62d5633126bdaa11a2e921d30871580adcb37",
     "finance/semantic_minima.json": "616ba615d52665a530ee98cdded8535eb85ad93d78402d061ea518de024bb9e4",
     "fixtures/execution_cases.json": "98f743ec38cba35a4164360a314bdb841fec4d6fec2f560cc75ed1f93e51dce9",
     "fixtures/identities.json": "acee6db42d9961b43500d3d990d141b07f99fc07f33d8fcb444388f3356895fd",
@@ -2705,12 +2669,12 @@
     "fixtures/snapshots.json": "6b1e1465400444ebfd8b07091d358c321a47a1291a7b797cf537e077b51a45d0",
     "fixtures/transport_cases.json": "936b9fa7c1f84e6c3af2d0dee81f030b8ab09863889cd28b9256e9bafa2833ae",
     "playwright_seed.json": "d79c5c0b7797db7a19e13de402a655a341d6bc5dbcb9383861929560f5e007fd",
-    "supply_chain/case_matrix.json": "c2238532269ca97dfe2afb30dd5d78437d2cfda1f164f4e7391b9404bf80c650",
+    "supply_chain/case_matrix.json": "32f2ee2efb72758205cfc5408f6973764b225b6b5f3368f64fe90ac9abadd5f5",
     "supply_chain/dialogues.json": "ff50c605a55d5224df25f888f6c536a8f6eceb3f5b2c9663cd883f80d3c107b3",
     "supply_chain/governance.json": "be0650518a3e45caedab63f37e68063d906925f7a15db502fc6912bf35018255",
     "supply_chain/inputs.json": "0badfe853402becd3cda2cb9b4400bb71691878ca8279788f948c8f961aae4c1",
     "supply_chain/manifest.json": "4d6386cea71bc3d3387492202e1e381aba25e99e684c81ca6bd64a40a19297cb",
-    "supply_chain/reproducibility.json": "5550681c28da25ec408c47aa89bc1a36cec4b7ef81021f8e1f0f1a17ad978c38",
+    "supply_chain/reproducibility.json": "20accc67bf1e2a239fca1a1779fb4b58207b344416790610c2387de2c5000009",
     "supply_chain/semantic_minima.json": "5bdbef9b11c2bbc77449531600feaef7fa1a8c3e1004fdd37f6da5ef3d4e3bfb"
   },
   "generated_at": "2026-08-26T00:00:00Z",

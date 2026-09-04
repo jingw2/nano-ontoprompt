@@ -167,17 +167,6 @@ class OntologyReleaseEvidence:
     release_id: str
     release_status: str
     schema_hash: str
-    # NOT a real `SemanticSnapshot` row id. No production API endpoint
-    # anywhere in the application creates a `SemanticSnapshot`:
-    # `app.services.runtime.snapshots.materialize_snapshot` (the only place
-    # `SemanticSnapshot(...)` is ever constructed) and its
-    # `materialize_refresh_snapshot` wrapper have zero callers outside
-    # `tests/runtime/`, so there is nothing this client could call to obtain
-    # one. This is a synthetic placeholder derived from the release id,
-    # recorded for traceability only; nothing may treat it as an
-    # independently-verifiable snapshot identity. See
-    # `_semantic_snapshot_placeholder`.
-    semantic_snapshot_placeholder: str
     content: OntologyContentEvidence
     structured: Mapping[str, Any]
     model_response: ModelResponse
@@ -562,39 +551,29 @@ class JourneyApiClient:
         )
 
     # -- curated -----------------------------------------------------------
-    def approve_curated(self, pipeline: PipelineEvidence) -> CuratedEvidence:
-        """Start and approve a review for the curated dataset THIS journey's
-        pipeline run produced.
+    def approve_curated(self, run_id: str) -> CuratedEvidence:
+        """Approve only the curated dataset emitted by ``run_id``.
 
-        The dataset is identified by ``pipeline.curated_dataset_id``, which
-        `start_pipeline` read from this run's own
-        ``stats.curated_dataset_id`` — a real run-to-output binding written
-        by `app.tasks.v2.pipeline_run.pipeline_run_task`. ``GET
-        /api/v2/curated`` lists every curated dataset ever created, not just
-        this run's, so taking ``items[0]`` (newest first, as this previously
-        did) would approve some other journey's — or a stale failed run's —
-        dataset whenever anything else produced one in between. The list is
-        still read, but only to require that this run's own dataset really is
-        a listed, reviewable curated dataset.
+        The pipeline-run projection is the authoritative run-to-output
+        binding; the global curated list is deliberately never consulted --
+        the router itself (`_require_run_curated_dataset`) independently
+        re-derives and cross-checks the same binding server-side, so listing
+        every curated dataset here would only duplicate that check.
         """
-        run_id = pipeline.pipeline_run_id
-        datasets = self._get("/api/v2/curated", reason_code="CURATED_DATASET_MISSING")
-        items = datasets if isinstance(datasets, list) else (_dig(datasets, "data") or [])
-        if not items:
+        run = self._get(f"/api/v2/pipelines/runs/{run_id}", reason_code="PIPELINE_RUN_MISSING")
+        dataset_id = str((run.get("stats") or {}).get("curated_dataset_id") or "")
+        if not dataset_id:
             raise JourneyAcceptanceError(f"CURATED_DATASET_MISSING: no curated dataset for run {run_id}")
-        dataset_id = pipeline.curated_dataset_id
-        if dataset_id not in {str(item.get("id")) for item in items}:
-            raise JourneyAcceptanceError(
-                f"CURATED_DATASET_MISSING: run {run_id}'s curated dataset is not listed"
-            )
         review = self._post(
             f"/api/v2/curated/{dataset_id}/reviews", reason_code="CURATED_REVIEW_MISSING",
+            json={"pipeline_run_id": run_id},
         )
         review_id = _dig(review, "review_id") or _dig(review, "data", "review_id")
         if not review_id:
             raise JourneyAcceptanceError("CURATED_REVIEW_MISSING: no review id")
         approved = self._post(
             f"/api/v2/curated/reviews/{review_id}/approve", reason_code="CURATED_APPROVAL_FAILED",
+            json={"pipeline_run_id": run_id},
         )
         status = _dig(approved, "status") or _dig(approved, "data", "status")
         if status != "approved":
@@ -602,6 +581,39 @@ class JourneyApiClient:
         return CuratedEvidence(
             curated_dataset_id=dataset_id, review_id=str(review_id), status=str(status),
         )
+
+    def persist_preparation_evidence(
+        self, *, manifest: Any, pipeline: PipelineEvidence, curated: CuratedEvidence,
+        release: OntologyReleaseEvidence, model_config: ModelConfigEvidence,
+        probe: ModelProbe,
+    ) -> Mapping[str, Any]:
+        """Store the completed ontology and preparation model evidence in the app.
+
+        This narrow endpoint is intentionally the only preparation evidence
+        source verification may read; it also materializes the governed
+        snapshot using the successful run's dataset version.
+        """
+        response = release.model_response
+        body = self._post(
+            "/api/v1/business-journeys/preparations", reason_code="PREPARATION_EVIDENCE_NOT_PERSISTED",
+            json={
+                "run_id": self._run_id, "journey_id": manifest.journey_id,
+                "ontology_id": release.ontology_id, "ontology_release_id": release.release_id,
+                "pipeline_run_id": pipeline.pipeline_run_id,
+                "dataset_version_id": pipeline.dataset_version_id,
+                "curated_dataset_id": curated.curated_dataset_id, "curated_review_id": curated.review_id,
+                "model_config_version_id": model_config.model_config_version_id,
+                "structured": dict(release.structured),
+                "model_probe": {"requested_model": probe.requested_model, "observed_model": probe.observed_model},
+                "model_calls": [{
+                    "call_kind": "ontology", "logical_call_index": 1,
+                    "correlation_id": f"{self._run_id}:{manifest.journey_id}:ontology:1",
+                    "requested_model": MODEL_ID, "observed_model": response.model,
+                    "http_attempts": response.http_attempts, "retry_count": response.retry_count,
+                }],
+            },
+        )
+        return _dig(body, "data") or body
 
     # -- ontology ----------------------------------------------------------
     def create_or_complete_ontology(
@@ -641,15 +653,9 @@ class JourneyApiClient:
         if not ontology_id:
             raise JourneyAcceptanceError("ONTOLOGY_MISSING: no ontology id")
 
-        # The lifecycle state machine requires an explicit draft -> created
-        # transition before `publish` will do anything but 404 — confirmed
-        # directly against the real endpoint (`app.services.publication.
-        # lifecycle.mark_created`/`publish`).
-        self._post(
-            f"/api/v1/ontologies/{ontology_id}/mark-created", reason_code="ONTOLOGY_MARK_CREATED_FAILED",
-            json={}, headers={"Idempotency-Key": f"journey-{self._run_id}-{manifest.journey_id}-mark-created"},
-        )
-
+        # The model response becomes schema content before publication.  The
+        # release compiler therefore snapshots real Entity/Relation rows,
+        # instead of a local evaluation-only response document.
         context = JourneyModelContext(
             run_id=self._run_id,
             journey_id=manifest.journey_id,
@@ -667,6 +673,15 @@ class JourneyApiClient:
             raise
         except BusinessJourneyModelError as exc:
             raise JourneyAcceptanceError(f"{exc}") from exc
+
+        # The lifecycle state machine requires an explicit draft -> created
+        # transition before `publish` will do anything but 404 — confirmed
+        # directly against the real endpoint (`app.services.publication.
+        # lifecycle.mark_created`/`publish`).
+        self._post(
+            f"/api/v1/ontologies/{ontology_id}/mark-created", reason_code="ONTOLOGY_MARK_CREATED_FAILED",
+            json={}, headers={"Idempotency-Key": f"journey-{self._run_id}-{manifest.journey_id}-mark-created"},
+        )
 
         validate_structured(response.structured)
 
@@ -693,7 +708,6 @@ class JourneyApiClient:
             release_id=str(release_id),
             release_status=status,
             schema_hash=str(release.get("schema_hash") or ""),
-            semantic_snapshot_placeholder=_semantic_snapshot_placeholder(str(release_id)),
             content=content,
             structured=dict(response.structured),
             model_response=response,
@@ -1056,6 +1070,16 @@ class JourneyApiClient:
             plan_branches=tuple(branches),
         )
 
+    def read_preparation_evidence(self, run_id: str, journey_id: str) -> Mapping[str, Any]:
+        body = self._get(
+            f"/api/v1/business-journeys/preparations/{run_id}/{journey_id}",
+            reason_code="PREPARATION_EVIDENCE_NOT_PERSISTED",
+        )
+        record = _dig(body, "data") or body
+        if record.get("run_id") != run_id or record.get("journey_id") != journey_id:
+            raise JourneyAcceptanceError("PREPARATION_EVIDENCE_MISMATCH")
+        return record
+
     def _read_plan_branch(self, declared: Mapping[str, Any]) -> PlanBranchEvidence:
         """Read back one governed-turn-plan branch through the single
         consolidated projection `GET /api/v2/runtime/action-plans/from-turn/
@@ -1151,23 +1175,6 @@ def _unique_names(value: Any) -> tuple[str, ...]:
         seen.add(key)
         names.append(name)
     return tuple(names)
-
-
-def _semantic_snapshot_placeholder(release_id: str) -> str:
-    """A deliberately, visibly synthetic stand-in for a snapshot id.
-
-    There is NO production endpoint that creates a `SemanticSnapshot`:
-    `app.services.runtime.snapshots.materialize_snapshot` is the only
-    constructor of that row anywhere, and neither it nor
-    `materialize_refresh_snapshot` has a single caller outside
-    `tests/runtime/` — no router, no service, no task. So the preparation
-    phase cannot obtain a real snapshot id today, and this value must never
-    be read as one. The `PLACEHOLDER` prefix keeps that obvious in the
-    staging run manifest and in any artifact that echoes it; nothing
-    downstream (`verify_journey`, the Playwright evidence, the artifact
-    allowlist) consumes it.
-    """
-    return f"PLACEHOLDER-NO-SNAPSHOT-ENDPOINT:{release_id}"
 
 
 def _as_text(data: bytes, media_type: str) -> str:
