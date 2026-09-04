@@ -378,6 +378,7 @@ def _get_preparation(state: _FakeState, match: "re.Match[str]", _body: dict) -> 
             "semantic_snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
             "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
             "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            "mcp_descriptor_ids": [_granted_query_descriptor_id(journey_id)],
             "snapshot_inputs": [{
                 "snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
                 "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
@@ -1189,16 +1190,34 @@ def test_verify_cross_checks_descriptors_against_a_real_prepared_run_manifest(
 def test_verify_rejects_a_descriptor_the_preparation_never_granted(fake_api):
     """The negative half of the same cross-check: a turn that executed a
     descriptor outside the granted set must fail closed, not be recorded as
-    passing evidence."""
-    write_browser_evidence(Path("artifacts"), "journey-ungranted", "credit")
-    write_staging_run_manifest(
-        Path("artifacts"), "journey-ungranted", "credit",
-        mcp_descriptor_ids=["query:some-other-ontology"],
-    )
+    passing evidence. The turn's own trace always claims
+    `_granted_query_descriptor_id("credit")` (`_turn_events`'s
+    `tool_executed` payload), so the real, server-persisted preparation
+    record must grant a DIFFERENT descriptor for the cross-check to have
+    anything to reject."""
+    run_id = "journey-ungranted"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for(f"{run_id}:credit:release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "mcp_descriptor_ids": ["query:some-other-ontology"],
+        "snapshot_inputs": [{
+            "snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        }],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
     with pytest.raises(JourneyAcceptanceError, match="MCP_DESCRIPTOR_NOT_GRANTED"):
         verify_journey(
             "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
-            run_id="journey-ungranted",
+            run_id=run_id,
         )
 
 
@@ -1234,25 +1253,34 @@ def test_verify_reads_only_persisted_evidence(fake_api):
     assert fake_api.mutations == []
 
 
-def test_verify_fails_closed_when_the_manifest_has_no_preparation_for_the_journey(fake_api):
-    """`_require_granted_mcp_descriptors` reads this journey's own entry in
-    the staging run manifest (a durable record distinct from the app-DB
-    preparation evidence `_persisted_ontology_call` reads) via
-    `_preparation_entry`, which fails closed on this reason code when the
-    entry is absent — the MCP descriptor grant may never be assumed when the
-    durable record it comes from is missing."""
-    write_browser_evidence(Path("artifacts"), "journey-missing-prep", "credit")
-    write_staging_run_manifest(Path("artifacts"), "journey-missing-prep", "finance")
-    path = Path("artifacts") / "business_journeys" / "staging" / "run.json"
-    document = json.loads(path.read_text(encoding="utf-8"))
-    document["preparations"] = [
-        entry for entry in document["preparations"] if entry["journey_id"] != "credit"
-    ]
-    path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
-    with pytest.raises(JourneyAcceptanceError, match="RUN_MANIFEST_PREPARATION_MISSING"):
+def test_verify_fails_closed_when_the_persisted_preparation_grants_no_descriptors(fake_api):
+    """`_require_granted_mcp_descriptors` reads `mcp_descriptor_ids` from
+    the real, server-persisted preparation record (`GET .../business-
+    journeys/preparations/{run_id}/{journey_id}`) -- a genuinely empty
+    grant set must fail closed, never be treated as "nothing to check"."""
+    run_id = "journey-no-descriptors-granted"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for(f"{run_id}:credit:release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "mcp_descriptor_ids": [],
+        "snapshot_inputs": [{
+            "snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+            "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+            "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        }],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="MCP_DESCRIPTOR_MISSING"):
         verify_journey(
             "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
-            run_id="journey-missing-prep",
+            run_id=run_id,
         )
 
 
@@ -1279,6 +1307,7 @@ def test_verify_fails_closed_when_the_persisted_ontology_call_is_missing_a_count
         "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
         "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
         "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "mcp_descriptor_ids": [_granted_query_descriptor_id("credit")],
         "snapshot_inputs": [{"snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
                              "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
                              "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version")}],
@@ -1302,6 +1331,7 @@ def test_verify_fails_when_preparation_model_evidence_is_missing_or_mismatched(f
         "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
         "pipeline_run_id": _uuid_for("credit:pipeline-run"),
         "dataset_version_id": _uuid_for("credit:dataset-version"),
+        "mcp_descriptor_ids": [_granted_query_descriptor_id("credit")],
         "snapshot_inputs": [{"snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
                              "pipeline_run_id": _uuid_for("credit:pipeline-run"),
                              "dataset_version_id": _uuid_for("credit:dataset-version")}],

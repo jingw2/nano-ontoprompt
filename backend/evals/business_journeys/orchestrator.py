@@ -382,6 +382,7 @@ def prepare_journey(
             persisted_preparation = client_with_model.persist_preparation_evidence(
                 manifest=manifest, pipeline=pipeline, curated=curated,
                 release=release, model_config=model_config, probe=probe,
+                descriptors=descriptors,
             )
             semantic_snapshot_id = str(persisted_preparation.get("semantic_snapshot_id") or "")
             if not semantic_snapshot_id:
@@ -590,9 +591,7 @@ def verify_journey(
     _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
     _require_preparation_binding(preparation_evidence, evidence)
     _require_independent_plan_branches(evidence.plan_branches)
-    _require_granted_mcp_descriptors(
-        evidence, output_dir=output_dir, run_id=run_id, journey_id=journey_id,
-    )
+    _require_granted_mcp_descriptors(evidence, preparation_evidence)
 
     if not evidence.tool_trace_ids:
         raise JourneyAcceptanceError("TOOL_TRACE_MISSING: turn recorded no tool execution")
@@ -738,24 +737,6 @@ def _require_persisted_ontology_call(call: Any, *, run_id: str, journey_id: str)
         raise JourneyAcceptanceError("PREPARATION_HTTP_ATTEMPTS_INVALID")
 
 
-def _preparation_entry(
-    *, output_dir: Path, run_id: str, journey_id: str,
-) -> Mapping[str, Any]:
-    """This journey's own entry in the staging run manifest, or fail closed."""
-    manifest = read_run_manifest(output_dir)
-    if manifest.get("run_id") != run_id:
-        raise JourneyAcceptanceError(
-            f"RUN_MANIFEST_MISLABELLED: {manifest.get('run_id')!r} != {run_id!r}"
-        )
-    preparations = [
-        p for p in (manifest.get("preparations") or [])
-        if isinstance(p, Mapping) and p.get("journey_id") == journey_id
-    ]
-    if not preparations:
-        raise JourneyAcceptanceError(f"RUN_MANIFEST_PREPARATION_MISSING: {journey_id}")
-    return preparations[0]
-
-
 def _require_model_call_chain(
     evidence: PersistedJourneyEvidence, *, run_id: str, journey_id: str,
 ) -> None:
@@ -781,7 +762,7 @@ def _require_model_call_chain(
 
 
 def _require_granted_mcp_descriptors(
-    evidence: PersistedJourneyEvidence, *, output_dir: Path, run_id: str, journey_id: str,
+    evidence: PersistedJourneyEvidence, preparation: Mapping[str, Any],
 ) -> None:
     """Cross-check the descriptor ids the turn actually executed against the
     descriptors `prepare_journey` really published and granted.
@@ -792,17 +773,16 @@ def _require_granted_mcp_descriptors(
     evidence document); `mcp_descriptor_ids` was the one identity field with
     no such cross-check, so nothing noticed that the value collected from
     the `tool_executed` event was not necessarily a real granted descriptor
-    at all. The second source here is the staging run manifest
-    `prepare_journey` wrote from the application's own published tool
-    catalog (`publish_mcp_descriptors`), read from the SAME `output_dir`
-    this phase already reads the browser evidence from.
+    at all. `preparation` here is the same real, server-persisted app-DB
+    record `_require_preparation_binding`/`_persisted_ontology_call` also
+    read (`GET /api/v1/business-journeys/preparations/{run_id}/
+    {journey_id}`, written by `persist_preparation_evidence` from the real
+    `publish_mcp_descriptors` result) -- not a local file this same process
+    wrote to its own disk, which nothing independently verifies.
     """
-    preparation = _preparation_entry(
-        output_dir=output_dir, run_id=run_id, journey_id=journey_id,
-    )
     granted = {str(d) for d in (preparation.get("mcp_descriptor_ids") or ())}
     if not granted:
-        raise JourneyAcceptanceError(f"MCP_DESCRIPTOR_MISSING: no granted descriptors for {journey_id}")
+        raise JourneyAcceptanceError("MCP_DESCRIPTOR_MISSING: no granted descriptors persisted for this preparation")
     if not evidence.mcp_descriptor_ids:
         raise JourneyAcceptanceError("MCP_DESCRIPTOR_MISSING: turn executed no governed descriptor")
     ungranted = [d for d in evidence.mcp_descriptor_ids if d not in granted]

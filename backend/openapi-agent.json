@@ -3246,6 +3246,14 @@
             "title": "Journey Id",
             "type": "string"
           },
+          "mcp_descriptor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Mcp Descriptor Ids",
+            "type": "array"
+          },
           "model_calls": {
             "items": {
               "$ref": "#/components/schemas/ModelCallEvidence"
@@ -3297,6 +3305,7 @@
           "curated_dataset_id",
           "curated_review_id",
           "model_config_version_id",
+          "mcp_descriptor_ids",
           "structured",
           "model_probe",
           "model_calls"

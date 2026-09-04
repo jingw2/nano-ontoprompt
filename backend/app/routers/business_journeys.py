@@ -41,6 +41,7 @@ class PreparationEvidenceIn(BaseModel):
     curated_dataset_id: str
     curated_review_id: str
     model_config_version_id: str
+    mcp_descriptor_ids: list[str] = Field(min_length=1)
     structured: dict[str, Any]
     model_probe: dict[str, str]
     model_calls: list[ModelCallEvidence] = Field(min_length=1, max_length=1)
@@ -117,7 +118,7 @@ def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) ->
     result = {key: getattr(row, key) for key in (
         "run_id", "journey_id", "ontology_id", "ontology_release_id", "semantic_snapshot_id",
         "pipeline_run_id", "dataset_version_id", "curated_dataset_id", "curated_review_id",
-        "model_config_version_id", "structured", "model_probe", "model_calls",
+        "model_config_version_id", "mcp_descriptor_ids", "structured", "model_probe", "model_calls",
     )}
     if db is not None:
         result["snapshot_inputs"] = [

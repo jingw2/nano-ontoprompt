@@ -25,6 +25,7 @@ class BusinessJourneyPreparation(Base):
     curated_dataset_id: Mapped[str] = mapped_column(String(200), nullable=False)
     curated_review_id: Mapped[str] = mapped_column(String(200), nullable=False)
     model_config_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mcp_descriptor_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     structured: Mapped[dict] = mapped_column(JSON, nullable=False)
     model_probe: Mapped[dict] = mapped_column(JSON, nullable=False)
     model_calls: Mapped[list] = mapped_column(JSON, nullable=False)

@@ -585,13 +585,19 @@ class JourneyApiClient:
     def persist_preparation_evidence(
         self, *, manifest: Any, pipeline: PipelineEvidence, curated: CuratedEvidence,
         release: OntologyReleaseEvidence, model_config: ModelConfigEvidence,
-        probe: ModelProbe,
+        probe: ModelProbe, descriptors: Sequence[McpDescriptor],
     ) -> Mapping[str, Any]:
         """Store the completed ontology and preparation model evidence in the app.
 
         This narrow endpoint is intentionally the only preparation evidence
         source verification may read; it also materializes the governed
-        snapshot using the successful run's dataset version.
+        snapshot using the successful run's dataset version. ``descriptors``
+        is the SAME real, published-catalog descriptor set
+        `publish_mcp_descriptors` already returned earlier in
+        `prepare_journey` -- durably recording it here (rather than only in
+        the local staging manifest) is what lets verification cross-check a
+        turn's actually-executed descriptor against a real, server-persisted
+        grant instead of a file this same process wrote to local disk.
         """
         response = release.model_response
         body = self._post(
@@ -603,6 +609,7 @@ class JourneyApiClient:
                 "dataset_version_id": pipeline.dataset_version_id,
                 "curated_dataset_id": curated.curated_dataset_id, "curated_review_id": curated.review_id,
                 "model_config_version_id": model_config.model_config_version_id,
+                "mcp_descriptor_ids": [d.descriptor_id for d in descriptors],
                 "structured": dict(release.structured),
                 "model_probe": {"requested_model": probe.requested_model, "observed_model": probe.observed_model},
                 "model_calls": [{
@@ -1009,8 +1016,8 @@ class JourneyApiClient:
                 # MAX_HTTP_ATTEMPTS`) -- a `model_call` event genuinely
                 # missing one of these would silently under-report real
                 # usage and mask a budget violation, the same failure mode
-                # `_preparation_entry` fails closed on for the manifest's
-                # copy of these counters.
+                # `_persisted_ontology_call` (orchestrator.py) fails closed
+                # on for the preparation record's copy of these counters.
                 for _field in ("logical_call_index", "http_attempts", "retry_count"):
                     if payload.get(_field) is None:
                         raise JourneyAcceptanceError(
