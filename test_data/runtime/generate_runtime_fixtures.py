@@ -1113,6 +1113,14 @@ and requires the repository secret `DEEPSEEK_API_KEY`; the backend process
 it starts also requires `BUSINESS_JOURNEY_ACCEPTANCE_ENABLED=true`
 (`backend/app/config.py`), which the script sets in a scratch `.env` for its
 one disposable Compose stack.
+
+The `--phase prepare` step's model-call evidence (`POST /api/v1/business-
+journeys/preparations`) is self-reported: the eval harness, not the
+application server, is the one that actually calls DeepSeek, so the server
+can only validate that the reported counters are plausibly shaped, not
+independently prove a real completion produced them. See
+`app.routers.business_journeys`'s own module docstring for the full
+disclosure of what this endpoint's trust model actually is.
 """
 
 

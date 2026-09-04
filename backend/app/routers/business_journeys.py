@@ -1,4 +1,26 @@
-"""Narrow durable evidence API used by the real-model journey gate."""
+"""Narrow durable evidence API used by the real-model journey gate.
+
+TRUST MODEL, disclosed honestly rather than left implicit (Codex review,
+Task 30): `ModelCallEvidence`/`PreparationEvidenceIn.model_probe` are
+self-reported by the caller. This server is never a party to the actual
+DeepSeek completion -- only `evals.business_journeys.api_client.
+JourneyApiClient` (a process running outside this application, holding the
+DeepSeek credential itself) talks to DeepSeek directly -- so nothing here
+can independently prove a call with these exact counters really happened,
+only that the reported shape is plausible (`_validate_model_evidence`:
+right call kind, right correlation id, an allowed model id, an allowed
+`http_attempts` value). This is not a gap this endpoint can close by
+itself: doing so for real would mean the application server making the
+completion call on the harness's behalf instead of trusting its report,
+a materially different design than the harness owning the DeepSeek
+credential locally (see `scripts/run_business_journey_gate.sh`'s own
+loopback-only trust boundary for `BUSINESS_JOURNEY_API_BASE`). The actual
+security boundary today is `require_editor` authentication plus the real
+gate's own controls (trusted-PR-only, no `pull_request_target`, a secret-
+gated `DEEPSEEK_API_KEY`) -- the same shape most CI provenance/attestation
+systems use: trust the authenticated, gated caller's identity, not an
+independent replay of what it did internally.
+"""
 from __future__ import annotations
 
 from typing import Any

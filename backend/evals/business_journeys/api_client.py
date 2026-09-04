@@ -598,6 +598,15 @@ class JourneyApiClient:
         the local staging manifest) is what lets verification cross-check a
         turn's actually-executed descriptor against a real, server-persisted
         grant instead of a file this same process wrote to local disk.
+
+        The model-call counters/probe in this body are self-reported: this
+        process, not the application server, is the one that actually
+        talked to DeepSeek (see ``DeepSeekVisionCaller``/``ModelCallLedger``
+        in ``orchestrator.prepare_journey``), so the server cannot
+        independently prove these exact counters came from a real
+        completion -- only that the reported shape is plausible. See
+        ``app.routers.business_journeys``'s own module docstring for the
+        full disclosure of what this endpoint's trust model actually is.
         """
         response = release.model_response
         body = self._post(
