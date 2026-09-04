@@ -401,6 +401,22 @@ def _validate_allowlist_schema(payload: Mapping[str, object]) -> None:
         raise ArtifactSafetyError("ARTIFACT_SCHEMA_VIOLATION") from exc
 
 
+def _validate_staged_file_identity(path: Path, staging_dir: Path, payload: Mapping[str, object], *, run_id: str) -> None:
+    """A file that individually passes ``ArtifactAllowlist`` (right schema,
+    no forbidden values) can still be a real journey's evidence staged
+    under the WRONG name -- e.g. `finance.json` actually carrying
+    `credit`'s content, or a stale file from an entirely different run.
+    Nothing previously cross-checked a staged file's own self-declared
+    `run_id`/`journey_id` against the run being scanned or the filename
+    `assemble_journey_evidence` is required to have written it under
+    (`<staging>/<journey_id>.json`, the same convention
+    `_missing_journey_evidence` already relies on)."""
+    if payload.get("run_id") != run_id:
+        raise ArtifactSafetyError("ARTIFACT_RUN_ID_MISMATCH")
+    if path.parent == staging_dir and path.stem in JOURNEY_IDS and payload.get("journey_id") != path.stem:
+        raise ArtifactSafetyError("ARTIFACT_JOURNEY_ID_MISMATCH")
+
+
 def scan_and_materialize(
     staging_dir: Path,
     *,
@@ -443,8 +459,13 @@ def scan_and_materialize(
             failed_this_file = True
         if path.name not in NON_ALLOWLIST_STAGING_FILENAMES:
             try:
-                _validate_allowlist_schema(json.loads(path.read_text(encoding="utf-8", errors="replace")))
-            except (ArtifactSafetyError, ValueError):
+                payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                _validate_allowlist_schema(payload)
+                _validate_staged_file_identity(path, staging_dir, payload, run_id=run_id)
+            except ArtifactSafetyError as exc:
+                reason_codes.update(str(exc).split(","))
+                failed_this_file = True
+            except ValueError:
                 reason_codes.add("ARTIFACT_SCHEMA_VIOLATION")
                 failed_this_file = True
         if failed_this_file:

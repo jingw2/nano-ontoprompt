@@ -191,6 +191,54 @@ def test_allowlist_rejects_unknown_fields():
         ArtifactAllowlist.model_validate(payload)
 
 
+def test_scan_rejects_a_schema_valid_file_whose_run_id_does_not_match(tmp_path):
+    """Three schema-valid, forbidden-value-free JSON files could previously
+    belong to an entirely different run than the one being scanned --
+    nothing cross-checked a staged file's own self-declared `run_id`
+    against the run this scan invocation is actually for."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    payload = _valid_allowlist_payload()
+    payload["run_id"] = "some-other-run"
+    (staging / "supply_chain.json").write_text(json.dumps(payload))
+
+    failure = tmp_path / "scanner-failure-summary.json"
+    result = scan_and_materialize(
+        staging,
+        output_dir=tmp_path / "sanitized",
+        failure_summary_path=failure,
+        manifest=_SUPPLY_CHAIN_MANIFEST,
+        run_id="run-1",
+    )
+    assert result.status == "failed"
+    assert result.scan_safe is False
+    assert "ARTIFACT_RUN_ID_MISMATCH" in result.reason_codes
+
+
+def test_scan_rejects_a_journey_evidence_file_staged_under_the_wrong_name(tmp_path):
+    """`<staging>/<journey_id>.json` is the contract `assemble_journey_
+    evidence` writes to and `_missing_journey_evidence` relies on -- a file
+    named `finance.json` that actually carries `credit`'s content (e.g. a
+    copy-paste or staging-path bug) previously passed the scan silently."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    payload = _valid_allowlist_payload()
+    payload["journey_id"] = "credit"  # filename below says supply_chain
+    (staging / "supply_chain.json").write_text(json.dumps(payload))
+
+    failure = tmp_path / "scanner-failure-summary.json"
+    result = scan_and_materialize(
+        staging,
+        output_dir=tmp_path / "sanitized",
+        failure_summary_path=failure,
+        manifest=_SUPPLY_CHAIN_MANIFEST,
+        run_id="run-1",
+    )
+    assert result.status == "failed"
+    assert result.scan_safe is False
+    assert "ARTIFACT_JOURNEY_ID_MISMATCH" in result.reason_codes
+
+
 def _clean_deterministic_report() -> dict:
     return {
         "model_calls": 0,
