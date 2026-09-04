@@ -236,3 +236,52 @@ def test_legacy_curated_approval_is_unbound_and_cannot_be_used_as_run_evidence(j
     assert response.json()["detail"] == "CURATED_APPROVAL_RUN_MISMATCH"
     with pytest.raises(JourneyAcceptanceError, match="PIPELINE_RUN_MISSING"):
         journey_client.approve_curated("not-the-producing-run")
+
+
+def test_preparation_rejects_an_ontology_release_id_that_does_not_exist(journey_client):
+    """`materialize_snapshot` is only ever given `ontology_release_id` -- it
+    has no way to notice a caller-submitted `ontology_id` that names an
+    unrelated (or entirely fabricated) ontology, since nothing else in
+    `create_preparation` reads that field back against the database either.
+    `release is None or release.ontology_id != body.ontology_id` is one
+    guard clause; this proves the `release is None` half against the real
+    app/database, past a real curated-approval chain (so this is genuinely
+    testing THIS check, not an earlier one in the chain -- see
+    `test_legacy_curated_approval_is_unbound_...` above for the case that
+    reaches `CURATED_APPROVAL_RUN_MISMATCH` first instead).
+
+    The `release.ontology_id != body.ontology_id` half needs a REAL,
+    persisted `OntologyRelease` row to exercise, which needs a real
+    `/publish` -- and `/publish`/`mark-created` are a KNOWN, pre-existing
+    SQLite-only gap under this harness (see the module docstring above).
+    Confirmed directly: constructing an `OntologyRelease` row straight
+    through the ORM under this same SQLite harness also fails, for the
+    same class of reason (`manifest_projection`'s `CanonicalJSONB` type has
+    no SQLite compiler support) -- so this half of the guard can only be
+    proven end-to-end against real Postgres, same as `/publish` itself.
+    """
+    manifest = load_journey_manifest(JOURNEY_ID, _RUNTIME_DATA_DIR)
+    run_id = "journey-ontology-mismatch"
+    journey_client._run_id = run_id
+    pipeline = journey_client.start_pipeline(manifest)
+    curated = journey_client.approve_curated(pipeline.pipeline_run_id)
+
+    body = {
+        "run_id": run_id, "journey_id": JOURNEY_ID,
+        "ontology_id": "44444444-4444-4444-4444-444444444444",
+        "ontology_release_id": "55555555-5555-5555-5555-555555555555",  # does not exist
+        "pipeline_run_id": pipeline.pipeline_run_id,
+        "dataset_version_id": pipeline.dataset_version_id,
+        "curated_dataset_id": pipeline.curated_dataset_id,
+        "curated_review_id": curated.review_id,
+        "model_config_version_id": "00000000-0000-0000-0000-000000000003",
+        "structured": {},
+        "model_probe": {"requested_model": "deepseek-v4-flash-vision-exp", "observed_model": "deepseek-v4-flash-vision-exp"},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:{JOURNEY_ID}:ontology:1",
+                         "requested_model": "deepseek-v4-flash-vision-exp",
+                         "observed_model": "deepseek-v4-flash-vision-exp", "http_attempts": 1, "retry_count": 0}],
+    }
+    response = journey_client._call("POST", "/api/v1/business-journeys/preparations", json=body)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "ONTOLOGY_RELEASE_MISMATCH"

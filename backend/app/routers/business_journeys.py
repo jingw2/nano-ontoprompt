@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db, require_editor
 from app.models.business_journey import BusinessJourneyPreparation
+from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshotInput
 from app.models.user import User
 from app.services.runtime.snapshots import SnapshotValidationError, materialize_snapshot
@@ -75,6 +76,16 @@ def create_preparation(
     if (review is None or review.curated_dataset_id != curated_dataset_id or review.status != "approved"
             or review.pipeline_run_id != body.pipeline_run_id):
         raise HTTPException(status_code=422, detail="CURATED_APPROVAL_RUN_MISMATCH")
+    # `materialize_snapshot` below is only ever given `ontology_release_id`
+    # -- it has no way to notice if the caller's separately-submitted
+    # `ontology_id` names an unrelated (or fabricated) ontology, since
+    # nothing else in this handler ever reads that field back against the
+    # database. A release always belongs to exactly one ontology
+    # (`ontology_releases.ontology_id`), so that's the one independent
+    # source of truth available to cross-check it against.
+    release = db.get(OntologyRelease, body.ontology_release_id)
+    if release is None or release.ontology_id != body.ontology_id:
+        raise HTTPException(status_code=422, detail="ONTOLOGY_RELEASE_MISMATCH")
     inputs = db.query(PipelineRunInput).filter_by(pipeline_run_id=body.pipeline_run_id).all()
     if body.dataset_version_id not in {item.dataset_version_id for item in inputs}:
         raise HTTPException(status_code=422, detail="PIPELINE_OUTPUT_LINEAGE_MISSING")
