@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from generate_runtime_fixtures import generate, validate_manifest  # noqa: E402
+from generate_runtime_fixtures import generate, main, validate_manifest  # noqa: E402
 from registry import assert_case_registry, load_cases, targets_for  # noqa: E402
 
 RUNTIME_DIR = Path(__file__).resolve().parent
@@ -136,6 +136,11 @@ def test_runtime_fixture_generation_is_deterministic(tmp_path):
     assert first["manifest_version"] == 1
     assert first["files"] == second["files"]
     validate_manifest(tmp_path / "first")
+
+
+def test_checked_in_corpus_passes_generator_check_including_readme_metadata():
+    """The checked-in corpus, not merely a fresh temporary directory, is reproducible."""
+    assert main(["--seed", "20260826", "--output", "test_data/runtime", "--check"]) == 0
 
 
 def test_no_pii_or_real_secret():

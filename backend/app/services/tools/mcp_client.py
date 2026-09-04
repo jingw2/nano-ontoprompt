@@ -17,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import httpx
+
 from app.services.tools.playwright import _domain_allowed
 from app.services.tools.ssrf_guard import SsrfBlockedError, safe_post
 from app.services.untrusted_artifact import safe_markdown
@@ -44,6 +46,8 @@ def _rpc_call(*, endpoint: str, access_token: str, allowed_domains: list[str],
                              json_body=body, headers=headers)
     except SsrfBlockedError as exc:
         raise MCPClientError(f"MCP_BLOCKED:{exc}") from exc
+    except httpx.TimeoutException as exc:
+        raise MCPClientError("MCP_TIMEOUT") from exc
     if response.status_code != 200:
         raise MCPClientError(f"MCP_UPSTREAM_ERROR:{response.status_code}")
     try:

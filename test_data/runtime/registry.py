@@ -281,6 +281,7 @@ _QUALITY_TEST_FILE = "backend/tests/v2/curated/test_quality.py"
 _TOOL_GATEWAY_EXTERNAL_TEST_FILE = "backend/tests/agent/test_tool_gateway_external.py"
 _MCP_CLIENT_TEST_FILE = "backend/tests/agent/test_mcp_client.py"
 _EVENT_STREAM_TEST_FILE = "backend/tests/agent/test_event_stream.py"
+_JOURNEY_CASE_TEST_FILE = "backend/tests/runtime/test_journey_case_contracts.py"
 
 
 @dataclass(frozen=True)
@@ -304,16 +305,7 @@ JOURNEY_DETERMINISTIC_TARGET_DEFS: dict[str, JourneyDeterministicTargetDef] = {
         f"{_RUNTIME_API_TEST_FILE}::test_investigate_api_returns_empty_allow_for_no_match"
     ),
     "edge-duplicate-or-missing": JourneyDeterministicTargetDef(
-        f"{_QUALITY_TEST_FILE}::test_quality_detects_duplicates",
-        target_status="provisional",
-        proves=(
-            "Tabular duplicate-row detection via the generic Curated QualityService "
-            "(duplicate_count/uniqueness_score over the shared DIRTY_DATA fixture, which also "
-            "contains a null/missing cell). Does not cover journey-specific entities "
-            "(duplicate invoices/applications) or, since exactly one target is allowed, the "
-            "missing-policy-field half of this case's claim (proven separately by the sibling "
-            "test_quality_detects_nulls, not registered here)."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_duplicate_or_missing_is_an_explicit_quality_result",
     ),
     "security-no-grant": JourneyDeterministicTargetDef(
         f"{_IDENTITY_TEST_FILE}::test_invalid_delegation_is_structured_denial[missing]"
@@ -322,60 +314,22 @@ JOURNEY_DETERMINISTIC_TARGET_DEFS: dict[str, JourneyDeterministicTargetDef] = {
         f"{_SNAPSHOT_FRESHNESS_TEST_FILE}::test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"
     ),
     "security-prompt-injection": JourneyDeterministicTargetDef(
-        f"{_TOOL_GATEWAY_EXTERNAL_TEST_FILE}::test_gateway_sanitizes_title_and_url_at_payload_boundary",
-        target_status="provisional",
-        proves=(
-            "Malicious upstream title/url content returned by an external tool call is "
-            "sanitized at the tool-gateway payload boundary before it can reach model "
-            "context. Does not prove policy immutability or unapproved-action prevention "
-            "against injected instructions in a document body -- that invariant instead comes "
-            "from the exact-plan-hash HITL system exercised by the writeback-* cases, since no "
-            "action this codebase can execute is ever driven by free-form model/document text."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_prompt_injection_cannot_widen_the_declared_action",
     ),
     "resilience-timeout-retry": JourneyDeterministicTargetDef(
-        f"{_POLLING_TEST_FILE}::test_failed_retry_records_bounded_backoff_deadline",
-        target_status="provisional",
-        proves=(
-            "A failed source pull schedules exactly one bounded retry with a backoff "
-            "deadline -- not an unbounded retry loop. This is the generic refresh-source "
-            "connector's retry-scheduling test, not the real DeepSeek HTTP-client "
-            "timeout/backoff path Task 2 adds; no HTTP timeout is involved."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_timeout_retry_is_bounded_to_two_attempts",
     ),
     "resilience-429-retry": JourneyDeterministicTargetDef(
-        f"{_EXECUTION_TEST_FILE}::test_idempotent_retry_never_calls_the_writer_twice",
-        target_status="provisional",
-        proves=(
-            "Retrying the same governed write never calls the writer twice "
-            "(retry-safety/idempotency). No HTTP status code is involved; nowhere in this "
-            "codebase handles an HTTP 429 today, so this does not prove 429-specific retry "
-            "behavior."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_429_retry_is_bounded_to_two_attempts",
     ),
     "resilience-provider-error": JourneyDeterministicTargetDef(
         f"{_MCP_CLIENT_TEST_FILE}::test_call_tool_surfaces_protocol_error"
     ),
     "resilience-mcp-timeout": JourneyDeterministicTargetDef(
-        f"{_MCP_CLIENT_TEST_FILE}::test_call_tool_wraps_ssrf_block",
-        target_status="provisional",
-        proves=(
-            "A raised transport-layer exception from the MCP client's underlying safe_post "
-            "call is wrapped into a typed, traceable MCPClientError -- proven only for the "
-            "SSRF-block exception path. _rpc_call does not catch a generic transport timeout "
-            "today, so this does not prove timeout-specific handling, and it does not prove "
-            "no-duplicate-write."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_mcp_timeout_is_typed_and_makes_one_call",
     ),
     "resilience-sse-reconnect": JourneyDeterministicTargetDef(
-        f"{_EVENT_STREAM_TEST_FILE}::test_events_persisted_before_notify_no_gap",
-        target_status="provisional",
-        proves=(
-            "Replaying persisted turn events from an after_seq cursor returns exactly the "
-            "persisted sequence with no gap or duplicate -- the same cursor-resume mechanism "
-            "a browser SSE reconnect depends on. Does not by itself prove one-turn/"
-            "one-tool-round preservation across a real reconnect."
-        ),
+        f"{_JOURNEY_CASE_TEST_FILE}::test_journey_sse_reconnect_replays_only_events_after_cursor",
     ),
     "writeback-automatic": JourneyDeterministicTargetDef(
         f"{_EXECUTION_TEST_FILE}::test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
