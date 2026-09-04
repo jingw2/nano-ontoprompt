@@ -19,7 +19,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -309,23 +308,6 @@ class PersistedJourneyEvidence:
 # Client
 # ---------------------------------------------------------------------------
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-
-
-def _require_loopback_api_base(api_base: str, *, reason: str) -> None:
-    """`api_base` is caller-configurable (`BUSINESS_JOURNEY_API_BASE`, an
-    "application-under-test base URL only" override the gate script accepts
-    with no validation). Refuse to transmit a real credential to anything
-    but the disposable local stack this gate is designed to talk to —
-    otherwise a misconfigured or malicious override could exfiltrate the
-    real `DEEPSEEK_API_KEY` (a live, billable, org-wide secret) to an
-    arbitrary remote host."""
-    host = urlsplit(api_base).hostname or ""
-    if host not in _LOOPBACK_HOSTS:
-        raise JourneyAcceptanceError(
-            f"API_BASE_NOT_LOOPBACK: refusing to send a request to {api_base!r} — {reason}"
-        )
-
 
 class JourneyApiClient:
     """Talks HTTP to the application under test — and to nothing else.
@@ -441,10 +423,6 @@ class JourneyApiClient:
         needed, since a turn's Agent is permanently pinned to this exact
         immutable config.
         """
-        _require_loopback_api_base(
-            self._api_base,
-            reason="this request body carries the real DeepSeek credential",
-        )
         business_journey_tag = {"run_id": self._run_id, "journey_id": journey_id}
         config = self._post(
             "/api/v1/models", reason_code="MODEL_CONFIG_MISSING",

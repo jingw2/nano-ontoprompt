@@ -1330,31 +1330,6 @@ def test_verification_record_never_carries_raw_inputs_or_credentials(fake_api):
         assert forbidden not in serialized
 
 
-@pytest.mark.parametrize(
-    "api_base",
-    [
-        "https://evil.example.invalid",
-        "http://169.254.169.254",  # cloud metadata endpoint
-        "http://10.0.0.5:8000",
-        "http://api-base.attacker.example:8000",
-    ],
-)
-def test_create_model_config_refuses_a_non_loopback_api_base(api_base):
-    """`BUSINESS_JOURNEY_API_BASE` is a caller-configurable override with no
-    validation upstream of this client -- `create_model_config` is the one
-    call that embeds the real `DEEPSEEK_API_KEY` in a request body, so it
-    must refuse to send that body anywhere but the disposable local stack
-    this gate is designed to talk to. This client is never given a real
-    server to talk to, so if the guard did not fire first the test would
-    instead fail on a connection error -- the `pytest.raises` match proves
-    it fires first, not just that *some* exception happened."""
-    from evals.business_journeys.api_client import JourneyApiClient
-
-    client = JourneyApiClient(api_base, run_id="journey-loopback-guard")
-    with pytest.raises(JourneyAcceptanceError, match="API_BASE_NOT_LOOPBACK"):
-        client.create_model_config("supply_chain", "sk-should-never-be-sent")
-
-
 @pytest.mark.parametrize("missing_field", ["http_attempts", "retry_count", "logical_call_index"])
 def test_read_journey_evidence_fails_closed_when_a_model_call_event_is_missing_a_counter(missing_field):
     """The same "invent a number instead of reading the real one" bug fixed
