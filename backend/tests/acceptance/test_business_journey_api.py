@@ -162,5 +162,23 @@ def test_legacy_curated_approval_is_unbound_and_cannot_be_used_as_run_evidence(j
         f"/api/v2/curated/reviews/{legacy['review_id']}", reason_code="REVIEW_MISSING",
     )
     assert review["pipeline_run_id"] is None
+    response = journey_client._call("POST", "/api/v1/business-journeys/preparations", json={
+        "run_id": "legacy-review-proof", "journey_id": JOURNEY_ID,
+        "ontology_id": "00000000-0000-0000-0000-000000000001",
+        "ontology_release_id": "00000000-0000-0000-0000-000000000002",
+        "pipeline_run_id": pipeline.pipeline_run_id,
+        "dataset_version_id": pipeline.dataset_version_id,
+        "curated_dataset_id": pipeline.curated_dataset_id,
+        "curated_review_id": legacy["review_id"],
+        "model_config_version_id": "00000000-0000-0000-0000-000000000003",
+        "structured": {},
+        "model_probe": {"requested_model": "deepseek-v4-flash-vision-exp", "observed_model": "deepseek-v4-flash-vision-exp"},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"legacy-review-proof:{JOURNEY_ID}:ontology:1",
+                         "requested_model": "deepseek-v4-flash-vision-exp",
+                         "observed_model": "deepseek-v4-flash-vision-exp", "http_attempts": 1, "retry_count": 0}],
+    })
+    assert response.status_code == 422
+    assert response.json()["detail"] == "CURATED_APPROVAL_RUN_MISMATCH"
     with pytest.raises(JourneyAcceptanceError, match="PIPELINE_RUN_MISSING"):
         journey_client.approve_curated("not-the-producing-run")
