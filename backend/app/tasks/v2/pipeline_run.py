@@ -526,6 +526,12 @@ def pipeline_run_task(
                 input_ordinal=next_input_ordinal,
             ))
             next_input_ordinal += 1
+        if run.dataset_version_id and run.dataset_version_id not in existing_lineage:
+            db.add(PipelineRunInput(
+                id=str(uuid.uuid4()), pipeline_run_id=run.id,
+                dataset_version_id=run.dataset_version_id, input_ordinal=next_input_ordinal,
+                provenance={"pipeline_output": True},
+            ))
         db.commit()
 
         run.status = "success"

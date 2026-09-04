@@ -371,15 +371,16 @@ def prepare_journey(
     finally:
         client.close()
 
-    totals = ledger.totals(run_id, journey_id)
+    persisted_calls = persisted_preparation.get("model_calls") or []
     budget = JourneyPreparationBudget()
-    if totals["logical_model_calls"] != budget.logical_model_calls:
+    if len(persisted_calls) != budget.logical_model_calls:
         raise JourneyAcceptanceError(
-            f"LOGICAL_CALL_BUDGET_VIOLATED: {totals['logical_model_calls']} != {budget.logical_model_calls}"
+            f"LOGICAL_CALL_BUDGET_VIOLATED: {len(persisted_calls)} != {budget.logical_model_calls}"
         )
-    if totals["http_attempts"] > budget.max_http_attempts:
+    preparation_http_attempts = sum(int(call.get("http_attempts") or 0) for call in persisted_calls)
+    if preparation_http_attempts > budget.max_http_attempts:
         raise JourneyAcceptanceError(
-            f"HTTP_ATTEMPT_BUDGET_VIOLATED: {totals['http_attempts']} > {budget.max_http_attempts}"
+            f"HTTP_ATTEMPT_BUDGET_VIOLATED: {preparation_http_attempts} > {budget.max_http_attempts}"
         )
 
     return JourneyPreparation(
@@ -406,9 +407,9 @@ def prepare_journey(
         observed_model_id=release.model_response.model,
         call_kinds=["ontology"],
         correlation_id=f"{run_id}:{journey_id}:ontology:1",
-        logical_model_calls=totals["logical_model_calls"],
-        http_attempts=totals["http_attempts"],
-        retry_count=release.model_response.retry_count,
+        logical_model_calls=len(persisted_calls),
+        http_attempts=preparation_http_attempts,
+        retry_count=sum(int(call.get("retry_count") or 0) for call in persisted_calls),
         semantic_reason_codes=validation.reason_codes,
         status="passed",
     )
@@ -549,6 +550,7 @@ def verify_journey(
         client.close()
 
     _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
+    _require_preparation_binding(preparation_evidence, evidence)
     _require_independent_plan_branches(evidence.plan_branches)
     _require_granted_mcp_descriptors(
         evidence, output_dir=output_dir, run_id=run_id, journey_id=journey_id,
@@ -646,6 +648,18 @@ def _persisted_ontology_call(preparation: Mapping[str, Any], *, run_id: str, jou
         http_attempts=int(call.get("http_attempts") or 0),
         retry_count=int(call.get("retry_count") or 0),
     )
+
+
+def _require_preparation_binding(preparation: Mapping[str, Any], evidence: PersistedJourneyEvidence) -> None:
+    if preparation.get("ontology_release_id") != evidence.ontology_release_id:
+        raise JourneyAcceptanceError("PREPARATION_RELEASE_MISMATCH")
+    expected = {
+        "snapshot_id": preparation.get("semantic_snapshot_id"),
+        "dataset_version_id": preparation.get("dataset_version_id"),
+        "pipeline_run_id": preparation.get("pipeline_run_id"),
+    }
+    if not all(expected.values()) or expected not in (preparation.get("snapshot_inputs") or []):
+        raise JourneyAcceptanceError("PREPARATION_SNAPSHOT_LINEAGE_MISSING")
 
 
 def _require_persisted_ontology_call(call: Any, *, run_id: str, journey_id: str) -> None:

@@ -215,6 +215,19 @@ class BatchEditRequest(BaseModel):
     edits: list[dict]  # [{row_pk, field_name, old_value, new_value}]
 
 
+class PipelineRunBinding(BaseModel):
+    pipeline_run_id: str
+
+
+def _require_run_curated_dataset(db: Session, pipeline_run_id: str, dataset_id: str) -> None:
+    from app.models.v2.pipeline import PipelineRun
+
+    run = db.get(PipelineRun, pipeline_run_id)
+    output = str((run.stats or {}).get("curated_dataset_id") or "") if run else ""
+    if run is None or not run.is_governed or output != dataset_id:
+        raise HTTPException(status_code=422, detail="CURATED_DATASET_RUN_MISMATCH")
+
+
 def _ensure_curated_dataset_row(db: Session, dataset_id: str) -> None:
     """`ReviewService` (and therefore this whole review workflow) reads and
     writes `CuratedDataset`/`v2_curated_datasets` — a separate table from
@@ -251,9 +264,10 @@ def _ensure_curated_dataset_row(db: Session, dataset_id: str) -> None:
 
 
 @router.post("/{dataset_id}/reviews")
-def start_review(dataset_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
+def start_review(dataset_id: str, body: PipelineRunBinding, db: Session = Depends(get_db), _=Depends(require_editor)):
     """为数据集启动审核流程"""
     from app.services.v2.curated.review_service import ReviewService
+    _require_run_curated_dataset(db, body.pipeline_run_id, dataset_id)
     _ensure_curated_dataset_row(db, dataset_id)
     svc = ReviewService(db)
     review = svc.start_review(dataset_id)
@@ -286,10 +300,14 @@ def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_d
 
 
 @router.post("/reviews/{review_id}/approve")
-def approve_review(review_id: str, notes: str = "", db: Session = Depends(get_db),
+def approve_review(review_id: str, body: PipelineRunBinding, notes: str = "", db: Session = Depends(get_db),
                    _admin=Depends(require_admin)):
     """审核通过"""
     from app.services.v2.curated.review_service import ReviewService
+    review_row = db.get(CuratedReview, review_id)
+    if review_row is None:
+        raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
+    _require_run_curated_dataset(db, body.pipeline_run_id, review_row.curated_dataset_id)
     svc = ReviewService(db)
     review = svc.approve(review_id, notes)
     return {"review_id": review.id, "status": review.status}

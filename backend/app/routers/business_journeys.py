@@ -6,13 +6,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
-import uuid
 
 from app.deps import get_current_user, get_db, require_editor
 from app.models.business_journey import BusinessJourneyPreparation
+from app.models.semantic_snapshot import SemanticSnapshotInput
 from app.models.user import User
 from app.services.runtime.snapshots import SnapshotValidationError, materialize_snapshot
-from app.models.v2.pipeline import PipelineRunInput
+from app.models.v2.curated import CuratedReview
+from app.models.v2.pipeline import PipelineRun, PipelineRunInput
 
 router = APIRouter()
 
@@ -62,20 +63,20 @@ def create_preparation(
     _validate_model_evidence(body)
     if db.query(BusinessJourneyPreparation).filter_by(run_id=body.run_id, journey_id=body.journey_id).first():
         raise HTTPException(status_code=409, detail="PREPARATION_EVIDENCE_EXISTS")
-    # `PipelineRun.dataset_version_id` is the completed output pointer.  Make
-    # that output an explicit governed association before snapshot creation;
-    # retain every existing source association too, so the snapshot service's
-    # complete-lineage rule remains authoritative rather than guessed here.
+    run = db.get(PipelineRun, body.pipeline_run_id)
+    if run is None or not run.is_governed:
+        raise HTTPException(status_code=422, detail="PIPELINE_RUN_NOT_GOVERNED")
+    if body.dataset_version_id != run.dataset_version_id:
+        raise HTTPException(status_code=422, detail="PIPELINE_OUTPUT_VERSION_MISMATCH")
+    curated_dataset_id = str((run.stats or {}).get("curated_dataset_id") or "")
+    if body.curated_dataset_id != curated_dataset_id:
+        raise HTTPException(status_code=422, detail="CURATED_DATASET_RUN_MISMATCH")
+    review = db.get(CuratedReview, body.curated_review_id)
+    if review is None or review.curated_dataset_id != curated_dataset_id or review.status != "approved":
+        raise HTTPException(status_code=422, detail="CURATED_APPROVAL_RUN_MISMATCH")
     inputs = db.query(PipelineRunInput).filter_by(pipeline_run_id=body.pipeline_run_id).all()
     if body.dataset_version_id not in {item.dataset_version_id for item in inputs}:
-        next_ordinal = max((item.input_ordinal for item in inputs), default=-1) + 1
-        db.add(PipelineRunInput(
-            id=str(uuid.uuid4()), pipeline_run_id=body.pipeline_run_id,
-            dataset_version_id=body.dataset_version_id, input_ordinal=next_ordinal,
-            provenance={"business_journey_output": True},
-        ))
-        db.flush()
-        inputs = db.query(PipelineRunInput).filter_by(pipeline_run_id=body.pipeline_run_id).all()
+        raise HTTPException(status_code=422, detail="PIPELINE_OUTPUT_LINEAGE_MISSING")
     try:
         snapshot = materialize_snapshot(
             db, ontology_release_id=body.ontology_release_id,
@@ -97,12 +98,19 @@ def get_preparation(run_id: str, journey_id: str, db: Session = Depends(get_db),
     row = db.query(BusinessJourneyPreparation).filter_by(run_id=run_id, journey_id=journey_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="PREPARATION_EVIDENCE_NOT_PERSISTED")
-    return {"data": _serialize(row)}
+    return {"data": _serialize(row, db=db)}
 
 
-def _serialize(row: BusinessJourneyPreparation) -> dict[str, Any]:
-    return {key: getattr(row, key) for key in (
+def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) -> dict[str, Any]:
+    result = {key: getattr(row, key) for key in (
         "run_id", "journey_id", "ontology_id", "ontology_release_id", "semantic_snapshot_id",
         "pipeline_run_id", "dataset_version_id", "curated_dataset_id", "curated_review_id",
         "model_config_version_id", "structured", "model_probe", "model_calls",
     )}
+    if db is not None:
+        result["snapshot_inputs"] = [
+            {"snapshot_id": item.snapshot_id, "dataset_version_id": item.dataset_version_id,
+             "pipeline_run_id": item.pipeline_run_id}
+            for item in db.query(SemanticSnapshotInput).filter_by(snapshot_id=row.semantic_snapshot_id).all()
+        ]
+    return result

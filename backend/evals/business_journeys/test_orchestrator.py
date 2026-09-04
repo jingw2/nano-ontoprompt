@@ -333,6 +333,11 @@ def _persist_preparation(state: _FakeState, _match: "re.Match[str]", body: dict)
         "pipeline_run_id": body["pipeline_run_id"],
         "dataset_version_id": body["dataset_version_id"],
     }
+    persisted["snapshot_inputs"] = [{
+        "snapshot_id": snapshot_id,
+        "pipeline_run_id": body["pipeline_run_id"],
+        "dataset_version_id": body["dataset_version_id"],
+    }]
     state.preparations[(body["run_id"], body["journey_id"])] = persisted
     return 201, {"data": persisted}
 
@@ -347,6 +352,11 @@ def _get_preparation(state: _FakeState, match: "re.Match[str]", _body: dict) -> 
             "semantic_snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
             "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
             "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            "snapshot_inputs": [{
+                "snapshot_id": _uuid_for(f"{run_id}:{journey_id}:snapshot"),
+                "pipeline_run_id": _uuid_for(f"{run_id}:{journey_id}:pipeline-run"),
+                "dataset_version_id": _uuid_for(f"{run_id}:{journey_id}:dataset-version"),
+            }],
             "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
             "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
                              "correlation_id": f"{run_id}:{journey_id}:ontology:1",
@@ -446,6 +456,8 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
     turn_id = match.group("turn_id")
     run_id, journey_id = _RUN_BY_TURN.get(turn_id, ("unknown", "supply_chain"))
     manifest = load_journey_manifest(journey_id, _RUNTIME_DATA_DIR)
+    preparation = state.preparations.get((run_id, journey_id))
+    release_id = (preparation or {}).get("ontology_release_id") or _uuid_for(f"{run_id}:{journey_id}:release")
     minima = manifest.semantic_minima
     citations = list(minima.get("source_citation_ids") or [])
     items = [
@@ -454,7 +466,7 @@ def _turn_events(state: _FakeState, match: "re.Match[str]", _body: dict) -> tupl
             "agent_version_id": _uuid_for(f"{run_id}:{journey_id}:agent-version"),
         }},
         {"sequence": 2, "event_type": "resolve_snapshot", "payload": {
-            "release_id": _uuid_for(f"{run_id}:{journey_id}:release"), "citations": citations,
+            "release_id": release_id, "citations": citations,
         }},
         {"sequence": 3, "event_type": "model_call", "payload": {
             "call_kind": "agent_initial", "logical_call_index": 2,
@@ -929,8 +941,12 @@ def test_verify_cross_checks_descriptors_against_a_real_prepared_run_manifest(
     }
     assert _granted_query_descriptor_id("credit") in granted["credit"]
 
+    browser = browser_evidence_document("journey-granted-descriptors", "credit")
+    browser["ontology_release_id"] = fake_api.preparations[
+        ("journey-granted-descriptors", "credit")
+    ]["ontology_release_id"]
     write_browser_evidence(
-        Path("artifacts"), "journey-granted-descriptors", "credit", staging_manifest=False,
+        Path("artifacts"), "journey-granted-descriptors", "credit", browser, staging_manifest=False,
     )
     verification = verify_journey(
         "credit", api_base=fake_api.url, output_dir=Path("artifacts"),
@@ -1000,12 +1016,35 @@ def test_verify_fails_when_preparation_model_evidence_is_missing_or_mismatched(f
         "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
         "pipeline_run_id": _uuid_for("credit:pipeline-run"),
         "dataset_version_id": _uuid_for("credit:dataset-version"),
+        "snapshot_inputs": [{"snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+                             "pipeline_run_id": _uuid_for("credit:pipeline-run"),
+                             "dataset_version_id": _uuid_for("credit:dataset-version")}],
         "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
         "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
                          "correlation_id": "wrong", "requested_model": MODEL_ID,
                          "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
     }
     with pytest.raises(JourneyAcceptanceError, match="CORRELATION_ID_INVALID"):
+        verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
+
+
+def test_verify_requires_exact_persisted_snapshot_lineage_and_release(fake_api):
+    run_id = "journey-snapshot-lineage"
+    write_browser_evidence(Path("artifacts"), run_id, "credit")
+    fake_api.implicit_preparation_evidence = False
+    fake_api.preparations[(run_id, "credit")] = {
+        "run_id": run_id, "journey_id": "credit",
+        "ontology_release_id": _uuid_for("different-release"),
+        "semantic_snapshot_id": _uuid_for(f"{run_id}:credit:snapshot"),
+        "pipeline_run_id": _uuid_for(f"{run_id}:credit:pipeline-run"),
+        "dataset_version_id": _uuid_for(f"{run_id}:credit:dataset-version"),
+        "snapshot_inputs": [],
+        "model_probe": {"requested_model": MODEL_ID, "observed_model": MODEL_ID},
+        "model_calls": [{"call_kind": "ontology", "logical_call_index": 1,
+                         "correlation_id": f"{run_id}:credit:ontology:1", "requested_model": MODEL_ID,
+                         "observed_model": MODEL_ID, "http_attempts": 1, "retry_count": 0}],
+    }
+    with pytest.raises(JourneyAcceptanceError, match="ONTOLOGY_RELEASE_ID_MISMATCH"):
         verify_journey("credit", api_base=fake_api.url, output_dir=Path("artifacts"), run_id=run_id)
 
 
