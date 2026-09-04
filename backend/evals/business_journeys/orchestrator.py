@@ -396,9 +396,20 @@ def prepare_journey(
 
     persisted_calls = persisted_preparation.get("model_calls") or []
     budget = JourneyPreparationBudget()
-    if len(persisted_calls) != budget.logical_model_calls:
+    # `persisted_calls` is the app-DB record `persist_preparation_evidence`
+    # POSTed -- but the router's own schema pins it to exactly one entry
+    # (`ModelCallEvidence` list, `min_length=1, max_length=1`), so comparing
+    # its length to the budget can never actually fail: it would pass even
+    # if the real DeepSeek caller had been invoked twice. `ledger.totals` is
+    # the genuinely independent count of real `begin_logical_call`
+    # invocations the SAME `ledger` (constructed fresh per journey, above)
+    # recorded -- the only source that can actually catch a caller bug
+    # making more model calls than declared.
+    real_logical_model_calls = ledger.totals(run_id, journey_id)["logical_model_calls"]
+    if real_logical_model_calls != budget.logical_model_calls or len(persisted_calls) != budget.logical_model_calls:
         raise JourneyAcceptanceError(
-            f"LOGICAL_CALL_BUDGET_VIOLATED: {len(persisted_calls)} != {budget.logical_model_calls}"
+            f"LOGICAL_CALL_BUDGET_VIOLATED: {real_logical_model_calls} real calls, "
+            f"{len(persisted_calls)} persisted, budget {budget.logical_model_calls}"
         )
     preparation_http_attempts = sum(int(call.get("http_attempts") or 0) for call in persisted_calls)
     if preparation_http_attempts > budget.max_http_attempts:
