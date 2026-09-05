@@ -60,17 +60,25 @@ def _no_real_sleep(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _preparation_binding(db):
+def _preparation_binding(db, pinned_model_config_version_id):
     """Runtime slots are valid only after the preparation phase bound them."""
     db.add(BusinessJourneyPreparation(
         run_id=RUN_ID, journey_id=JOURNEY_ID, ontology_id="ledger-ontology",
         ontology_release_id="ledger-release", semantic_snapshot_id="ledger-snapshot",
         pipeline_run_id="ledger-pipeline", dataset_version_id="ledger-dataset",
         curated_dataset_id="ledger-curated", curated_review_id="ledger-review",
-        model_config_version_id="ledger-model", mcp_descriptor_ids=["query:ledger"],
+        model_config_version_id=pinned_model_config_version_id, mcp_descriptor_ids=["query:ledger"],
         structured={}, model_probe={}, model_calls=[],
     ))
     db.flush()
+    from app.services.business_journey_ledger import record_preparation_call
+    record_preparation_call(
+        db, run_id=RUN_ID, journey_id=JOURNEY_ID,
+        model_config_version_id=pinned_model_config_version_id,
+        call={"call_kind": "ontology", "correlation_id": f"{RUN_ID}:{JOURNEY_ID}:ontology:1",
+              "requested_model": MODEL_ID, "observed_model": MODEL_ID,
+              "http_attempts": 1, "retry_count": 0},
+    )
 
 
 @pytest.fixture
