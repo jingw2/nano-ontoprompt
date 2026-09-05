@@ -149,3 +149,10 @@ def test_runtime_model_call_slots_require_preparation_and_reject_duplicates(db):
             call_kind="agent_initial", correlation_id="ledger-run:credit:agent_initial:2",
             model_config_version_id="model-version",
         )
+
+    with pytest.raises(JourneyLedgerError, match="MODEL_CONFIG_VERSION_MISMATCH"):
+        reserve_runtime_call(
+            db, run_id="ledger-run", journey_id="credit", logical_call_index=3,
+            call_kind="agent_final", correlation_id="ledger-run:credit:agent_final:3",
+            model_config_version_id="different-model-version",
+        )

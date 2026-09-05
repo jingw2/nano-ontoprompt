@@ -188,7 +188,7 @@ def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) ->
         ledger_calls = [
             {key: getattr(item, key) for key in (
                 "call_kind", "logical_call_index", "correlation_id", "requested_model",
-                "observed_model", "http_attempts", "retry_count",
+                "observed_model", "http_attempts", "retry_count", "model_config_version_id",
             )}
             for item in db.query(BusinessJourneyModelCall).filter_by(
                 run_id=row.run_id, journey_id=row.journey_id, status="finalized",

@@ -26,8 +26,13 @@ def record_preparation_call(db: Session, *, run_id: str, journey_id: str, call: 
 
 def reserve_runtime_call(db: Session, *, run_id: str, journey_id: str, logical_call_index: int,
                          call_kind: str, correlation_id: str, model_config_version_id: str) -> BusinessJourneyModelCall:
-    if not db.query(BusinessJourneyPreparation).filter_by(run_id=run_id, journey_id=journey_id).first():
+    preparation = db.query(BusinessJourneyPreparation).filter_by(
+        run_id=run_id, journey_id=journey_id,
+    ).first()
+    if preparation is None:
         raise JourneyLedgerError("PREPARATION_BINDING_MISSING")
+    if preparation.model_config_version_id != model_config_version_id:
+        raise JourneyLedgerError("MODEL_CONFIG_VERSION_MISMATCH")
     return _create_slot(
         db, run_id=run_id, journey_id=journey_id, logical_call_index=logical_call_index,
         phase="runtime", status="reserved", call_kind=call_kind, correlation_id=correlation_id,

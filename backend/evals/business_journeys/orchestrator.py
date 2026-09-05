@@ -728,6 +728,14 @@ def _persisted_model_call_ledger(preparation: Mapping[str, Any], *, run_id: str,
     if len(rows) != MAX_LOGICAL_MODEL_CALLS:
         raise JourneyAcceptanceError(f"MODEL_CALL_LEDGER_INCOMPLETE: {len(rows)}")
     probe = preparation.get("model_probe") or {}
+    pinned_version = str(preparation.get("model_config_version_id") or "")
+    if not pinned_version:
+        raise JourneyAcceptanceError("MODEL_CALL_LEDGER_MODEL_VERSION_MISSING")
+    for row in rows:
+        if row.get("http_attempts") is None or row.get("retry_count") is None:
+            raise JourneyAcceptanceError("MODEL_CALL_LEDGER_COUNTER_INCOMPLETE")
+        if str(row.get("model_config_version_id") or "") != pinned_version:
+            raise JourneyAcceptanceError("MODEL_CALL_LEDGER_MODEL_VERSION_MISMATCH")
     return tuple(ModelCallRecord(
         call_kind=str(row.get("call_kind") or ""),
         logical_call_index=int(row.get("logical_call_index") or 0),
@@ -736,8 +744,8 @@ def _persisted_model_call_ledger(preparation: Mapping[str, Any], *, run_id: str,
         requested_model=str(row.get("requested_model") or ""),
         observed_model=str(row.get("observed_model") or ""),
         preflight_model_id=str(probe.get("observed_model") or ""),
-        http_attempts=int(row.get("http_attempts") or 0),
-        retry_count=int(row.get("retry_count") or 0),
+        http_attempts=int(row["http_attempts"]),
+        retry_count=int(row["retry_count"]),
     ) for row in rows)
 
 

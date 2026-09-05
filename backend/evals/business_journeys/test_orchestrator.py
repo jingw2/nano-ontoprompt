@@ -1200,10 +1200,11 @@ def test_post_runtime_ledger_keeps_preparation_slot_one_separate_from_all_slots(
         "call_kind": kind, "logical_call_index": index,
         "correlation_id": f"{run_id}:{journey_id}:{kind}:{index}",
         "requested_model": MODEL_ID, "observed_model": MODEL_ID,
-        "http_attempts": 1, "retry_count": 0,
+        "http_attempts": 1, "retry_count": 0, "model_config_version_id": "model-version",
     }
     preparation = {
         "semantic_snapshot_id": "snapshot", "pipeline_run_id": "pipeline", "dataset_version_id": "dataset",
+        "model_config_version_id": "model-version",
         "model_probe": {"observed_model": MODEL_ID},
         "model_calls": [slot("ontology", 1)],
         "model_call_ledger": [slot("ontology", 1), slot("agent_initial", 2), slot("agent_final", 3)],
@@ -1211,6 +1212,20 @@ def test_post_runtime_ledger_keeps_preparation_slot_one_separate_from_all_slots(
     assert _persisted_ontology_call(preparation, run_id=run_id, journey_id=journey_id).logical_call_index == 1
     assert [call.logical_call_index for call in _persisted_model_call_ledger(
         preparation, run_id=run_id, journey_id=journey_id)] == [1, 2, 3]
+
+
+def test_model_call_ledger_rejects_missing_counter_or_version_drift():
+    from evals.business_journeys.orchestrator import _persisted_model_call_ledger
+
+    base = {"model_config_version_id": "model-version", "model_probe": {"observed_model": MODEL_ID}}
+    rows = [{"call_kind": "ontology", "logical_call_index": 1, "correlation_id": "x",
+             "requested_model": MODEL_ID, "observed_model": MODEL_ID, "http_attempts": None,
+             "retry_count": 0, "model_config_version_id": "model-version"}] * 3
+    with pytest.raises(JourneyAcceptanceError, match="MODEL_CALL_LEDGER_COUNTER_INCOMPLETE"):
+        _persisted_model_call_ledger({**base, "model_call_ledger": rows}, run_id="r", journey_id="j")
+    rows[0] = {**rows[0], "http_attempts": 1, "model_config_version_id": "other-version"}
+    with pytest.raises(JourneyAcceptanceError, match="MODEL_CALL_LEDGER_MODEL_VERSION_MISMATCH"):
+        _persisted_model_call_ledger({**base, "model_call_ledger": rows}, run_id="r", journey_id="j")
 
 
 def test_verify_rejects_a_descriptor_the_preparation_never_granted(fake_api):
