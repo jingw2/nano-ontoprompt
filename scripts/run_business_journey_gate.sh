@@ -47,6 +47,8 @@ PROJECT="business-journey-gate-$$"
 API_BASE="http://127.0.0.1:8000"
 ARTIFACTS_DIR="$REPO_ROOT/artifacts"
 STAGING_DIR="$REPO_ROOT/artifacts/business_journeys/staging"
+GATE_USERNAME="business-journey-gate-${RUN_ID}"
+GATE_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 ENV_BACKUP=""
 
@@ -82,6 +84,10 @@ cp .env.example .env
 # no-approval-gate business-journey Runtime protocol (backend/app/config.py).
 # Never true in a real deployment; only ever true for this controlled gate.
 echo "BUSINESS_JOURNEY_ACCEPTANCE_ENABLED=true" >> .env
+# Preparation evidence is accepted only from this explicitly configured,
+# disposable gate account. It is created below using the bootstrap admin,
+# then all journey work switches to this identity.
+echo "BUSINESS_JOURNEY_GATE_USERNAME=${GATE_USERNAME}" >> .env
 # The real provider credential: `app/runtime/langgraph_runtime.py` reads
 # `DEEPSEEK_API_KEY` from the backend/worker CONTAINER's own environment
 # when it actually places the agent_initial/agent_final calls -- the
@@ -107,14 +113,24 @@ test -n "$HEALTH"
 echo "$HEALTH" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
 echo "[business-journey-gate] backend healthy"
 
-# The application credential `run.py`'s prepare/verify phases authenticate
-# with (`orchestrator.APPLICATION_API_KEY_ENV_VAR`) -- distinct from
-# DEEPSEEK_API_KEY. `app.main`'s own startup `seed_admin` creates this exact
-# user (`FIRST_ADMIN_USER`/`FIRST_ADMIN_PASSWORD`, both left at
-# `.env.example`'s defaults above) the moment the disposable backend boots;
-# `JourneyApiClient.authenticate` accepts this "user/password" form and logs
-# in for real. Never echoed; only ever held in this process's environment.
-export BUSINESS_JOURNEY_API_KEY="admin/admin123"
+# Bootstrap a one-shot editor identity for the entire journey run. The
+# bootstrap admin is used only for this user creation; neither prepare nor
+# verify can authenticate as that generic administrator.
+ADMIN_TOKEN="$(curl -fsS -X POST "${API_BASE}/api/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  --data '{"username":"admin","password":"admin123"}' | \
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["access_token"])')"
+GATE_USER_BODY="$(GATE_USERNAME="$GATE_USERNAME" GATE_PASSWORD="$GATE_PASSWORD" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["GATE_USERNAME"],
+                  "email": os.environ["GATE_USERNAME"] + "@example.com",
+                  "password": os.environ["GATE_PASSWORD"], "role": "admin"}))
+')"
+curl -fsS -X POST "${API_BASE}/api/v1/users" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+  --data "$GATE_USER_BODY" >/dev/null
+unset ADMIN_TOKEN GATE_USER_BODY
+export BUSINESS_JOURNEY_API_KEY="${GATE_USERNAME}/${GATE_PASSWORD}"
 
 echo "[business-journey-gate] starting the shared runtime Postgres/MySQL fixture"
 docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans >/dev/null 2>&1 || true

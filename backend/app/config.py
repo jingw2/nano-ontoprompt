@@ -51,8 +51,9 @@ class Settings(BaseSettings):
     # (the default) in every real deployment.
     business_journey_acceptance_enabled: bool = False
     # The preparation-evidence writer is a CI/gate identity, not a general
-    # editor API. Deployments should set this to their dedicated gate user.
-    business_journey_gate_username: str = "admin"
+    # editor API. Empty is deliberate: writes fail closed until a dedicated
+    # gate user is explicitly configured.
+    business_journey_gate_username: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -602,13 +602,15 @@ class LangGraphRuntime:
         never falls back to another caller on a config/model mismatch —
         `DeepSeekVisionCaller`/`select_journey_model_config` already raise a
         fatal `ModelConfigurationError`/`RuntimeModelError` for that."""
-        from evals.business_journeys.contracts import BusinessJourneyModelError, InputPart, sha256_text
+        from evals.business_journeys.contracts import BusinessJourneyModelError, InputPart, MODEL_ID, sha256_text
 
         caller = self._journey_caller
         question = context.user_message or ""
         question_part = InputPart(kind="text", media_type="text/plain", content=question,
                                   sha256=sha256_text(question))
 
+        initial_slot = self._reserve_journey_model_call(
+            context, call_kind="agent_initial", logical_call_index=2)
         try:
             initial = caller.complete(
                 self._journey_context(context, call_kind="agent_initial", logical_call_index=2),
@@ -617,7 +619,12 @@ class LangGraphRuntime:
                     "agent_initial", self._journey_low_risk_action or ""),
             )
         except BusinessJourneyModelError as exc:
+            from app.services.business_journey_ledger import fail_runtime_call
+            fail_runtime_call(initial_slot)
             raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
+        from app.services.business_journey_ledger import finalize_runtime_call
+        finalize_runtime_call(initial_slot, observed_model=initial.model, requested_model=MODEL_ID,
+                              http_attempts=initial.http_attempts, retry_count=initial.retry_count)
         self._emit_journey_model_call_event(events, context, initial, call_kind="agent_initial",
                                             logical_call_index=2)
 
@@ -632,6 +639,8 @@ class LangGraphRuntime:
             )
 
         final_parts = [question_part] + ([tool_result_part] if tool_result_part else [])
+        final_slot = self._reserve_journey_model_call(
+            context, call_kind="agent_final", logical_call_index=3)
         try:
             final = caller.complete(
                 self._journey_context(context, call_kind="agent_final", logical_call_index=3),
@@ -640,7 +649,11 @@ class LangGraphRuntime:
                     "agent_final", self._journey_low_risk_action or ""),
             )
         except BusinessJourneyModelError as exc:
+            from app.services.business_journey_ledger import fail_runtime_call
+            fail_runtime_call(final_slot)
             raise RuntimeModelError("MODEL_CALL_FAILED", str(exc)) from exc
+        finalize_runtime_call(final_slot, observed_model=final.model, requested_model=MODEL_ID,
+                              http_attempts=final.http_attempts, retry_count=final.retry_count)
         self._emit_journey_model_call_event(events, context, final, call_kind="agent_final",
                                             logical_call_index=3)
 
@@ -722,6 +735,22 @@ class LangGraphRuntime:
             "http_attempts": response.http_attempts,
             "retry_count": response.retry_count,
         })
+
+    def _reserve_journey_model_call(self, context: TurnRuntimeContext, *, call_kind: str,
+                                    logical_call_index: int):
+        from app.services.business_journey_ledger import JourneyLedgerError, reserve_runtime_call
+
+        run_id = self._business_journey["run_id"]
+        journey_id = self._business_journey["journey_id"]
+        try:
+            return reserve_runtime_call(
+                self.db, run_id=run_id, journey_id=journey_id,
+                logical_call_index=logical_call_index, call_kind=call_kind,
+                correlation_id=f"{run_id}:{journey_id}:{call_kind}:{logical_call_index}",
+                model_config_version_id=context.model_config_version_id,
+            )
+        except JourneyLedgerError as exc:
+            raise RuntimeModelError(str(exc), str(exc)) from exc
 
     def _published_query_descriptor_id(self, ontology_id: str) -> str:
         """The real MCP descriptor id the ontology exposes for its governed

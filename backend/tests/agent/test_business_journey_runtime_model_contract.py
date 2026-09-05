@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 from app.models.entity import Entity
 from app.models.entity_instance import EntityInstance
+from app.models.business_journey import BusinessJourneyPreparation
 from app.models.ontology import OntologyProject
 from app.models.user import User
 import app.services.model_config_selector as model_config_selector
@@ -56,6 +57,20 @@ JOURNEY_LOW_RISK_ACTION = "risk_label"
 @pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     monkeypatch.setattr(DeepSeekVisionClient, "_sleep", staticmethod(lambda seconds: None))
+
+
+@pytest.fixture(autouse=True)
+def _preparation_binding(db):
+    """Runtime slots are valid only after the preparation phase bound them."""
+    db.add(BusinessJourneyPreparation(
+        run_id=RUN_ID, journey_id=JOURNEY_ID, ontology_id="ledger-ontology",
+        ontology_release_id="ledger-release", semantic_snapshot_id="ledger-snapshot",
+        pipeline_run_id="ledger-pipeline", dataset_version_id="ledger-dataset",
+        curated_dataset_id="ledger-curated", curated_review_id="ledger-review",
+        model_config_version_id="ledger-model", mcp_descriptor_ids=["query:ledger"],
+        structured={}, model_probe={}, model_calls=[],
+    ))
+    db.flush()
 
 
 @pytest.fixture

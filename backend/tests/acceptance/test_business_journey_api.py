@@ -25,6 +25,7 @@ import asyncio
 import socket
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 import pytest
@@ -89,7 +90,7 @@ def live_app_url():
 
 
 @pytest.fixture
-def journey_client(live_app_url):
+def journey_client(live_app_url, monkeypatch):
     """A `JourneyApiClient` wired to the real, live-served app, authenticated
     through the real `POST /api/v1/auth/login` flow as the app's own
     lifespan-seeded default admin (`app.config.Settings.first_admin_user`/
@@ -98,12 +99,26 @@ def journey_client(live_app_url):
     path a real deployment's operator credential would use."""
     from app.config import settings
 
-    api_client = JourneyApiClient(
+    admin_client = JourneyApiClient(
         live_app_url, f"{settings.first_admin_user}/{settings.first_admin_password}", run_id=RUN_ID,
     )
+    admin_client.authenticate()
+    gate_username = f"journey-gate-{uuid.uuid4().hex}"
+    gate_password = "journey-gate-password"
+    monkeypatch.setattr(settings, "business_journey_gate_username", gate_username)
+    create_gate = admin_client._call(
+        "POST", "/api/v1/users",
+        json={"username": gate_username, "email": f"{gate_username}@example.com",
+              "password": gate_password, "role": "admin"},
+    )
+    assert create_gate.status_code == 201, create_gate.text
+    api_client = JourneyApiClient(live_app_url, f"{gate_username}/{gate_password}", run_id=RUN_ID)
     api_client.authenticate()
-    yield api_client
-    api_client.close()
+    try:
+        yield api_client
+    finally:
+        api_client.close()
+        admin_client.close()
 
 
 def test_dataset_pipeline_and_curated_review_run_against_the_real_application(journey_client):

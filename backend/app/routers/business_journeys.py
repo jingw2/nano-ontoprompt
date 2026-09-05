@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.deps import get_current_user, get_db, require_editor
-from app.models.business_journey import BusinessJourneyPreparation
+from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation
 from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshotInput
@@ -25,6 +25,7 @@ from app.services.runtime.snapshots import SnapshotValidationError, materialize_
 from app.models.v2.curated import CuratedReview
 from app.models.v2.pipeline import PipelineRun, PipelineRunInput
 from app.services.agent.catalog import ontology_tool_catalog
+from app.services.business_journey_ledger import JourneyLedgerError, record_preparation_call
 
 router = APIRouter()
 
@@ -68,7 +69,9 @@ def _validate_model_evidence(body: PreparationEvidenceIn) -> None:
 
 
 def _require_gate_identity(current_user: User) -> None:
-    if current_user.username != settings.business_journey_gate_username:
+    gate_username = settings.business_journey_gate_username.strip()
+    if (not gate_username or gate_username == settings.first_admin_user
+            or current_user.username != gate_username):
         raise HTTPException(status_code=403, detail="BUSINESS_JOURNEY_GATE_IDENTITY_REQUIRED")
 
 
@@ -156,8 +159,15 @@ def create_preparation(
         model_calls=[call.model_dump() for call in body.model_calls],
     )
     db.add(row)
+    try:
+        record_preparation_call(
+            db, run_id=body.run_id, journey_id=body.journey_id,
+            call=row.model_calls[0], model_config_version_id=body.model_config_version_id,
+        )
+    except JourneyLedgerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.commit()
-    return {"data": _serialize(row)}
+    return {"data": _serialize(row, db=db)}
 
 
 @router.get("/preparations/{run_id}/{journey_id}")
@@ -175,6 +185,15 @@ def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) ->
         "model_config_version_id", "mcp_descriptor_ids", "structured", "model_probe", "model_calls",
     )}
     if db is not None:
+        result["model_calls"] = [
+            {key: getattr(item, key) for key in (
+                "call_kind", "logical_call_index", "correlation_id", "requested_model",
+                "observed_model", "http_attempts", "retry_count",
+            )}
+            for item in db.query(BusinessJourneyModelCall).filter_by(
+                run_id=row.run_id, journey_id=row.journey_id, status="finalized",
+            ).order_by(BusinessJourneyModelCall.logical_call_index).all()
+        ]
         result["snapshot_inputs"] = [
             {"snapshot_id": item.snapshot_id, "dataset_version_id": item.dataset_version_id,
              "pipeline_run_id": item.pipeline_run_id}

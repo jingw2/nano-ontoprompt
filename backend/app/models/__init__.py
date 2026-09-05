@@ -16,7 +16,7 @@ from app.models.security_domain import SecurityDomain
 from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput
-from app.models.business_journey import BusinessJourneyPreparation
+from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation
 from app.models.governance_audit import (
     GovernanceAuditLog,
     GovernanceAuditOutbox,
@@ -103,7 +103,7 @@ def load_all_models():
     from app.models.auth_refresh import AuthRefreshFamily, AuthRefreshToken  # noqa: F401
     from app.models.ontology_release import OntologyRelease  # noqa: F401
     from app.models.semantic_snapshot import SemanticSnapshot, SemanticSnapshotInput  # noqa: F401
-    from app.models.business_journey import BusinessJourneyPreparation  # noqa: F401
+    from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation  # noqa: F401
     from app.models.governance_audit import (  # noqa: F401
         GovernanceAuditLog,
         GovernanceAuditOutbox,
@@ -214,6 +214,8 @@ __all__ = [
     "OntologyRelease",
     "SemanticSnapshot",
     "SemanticSnapshotInput",
+    "BusinessJourneyPreparation",
+    "BusinessJourneyModelCall",
     "GovernanceAuditLog",
     "GovernanceAuditOutbox",
     "GovernanceAuditChainHead",
