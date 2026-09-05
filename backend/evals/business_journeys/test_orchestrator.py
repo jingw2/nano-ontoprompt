@@ -354,6 +354,9 @@ def _persist_preparation(state: _FakeState, _match: "re.Match[str]", body: dict)
         raise _FakeNotFound("PREPARATION_EVIDENCE_NOT_PERSISTED")
     snapshot_id = _uuid_for(f"{body['run_id']}:{body['journey_id']}:snapshot")
     persisted = dict(body)
+    # Matches the production endpoint: descriptor grants are derived from
+    # release/grant state, never copied from the preparation request body.
+    persisted["mcp_descriptor_ids"] = [_granted_query_descriptor_id(body["journey_id"])]
     persisted["semantic_snapshot_id"] = snapshot_id
     persisted["snapshot_input"] = {
         "pipeline_run_id": body["pipeline_run_id"],

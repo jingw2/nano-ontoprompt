@@ -1,42 +1,30 @@
 """Narrow durable evidence API used by the real-model journey gate.
 
-TRUST MODEL, disclosed honestly rather than left implicit (Codex review,
-Task 30): `ModelCallEvidence`/`PreparationEvidenceIn.model_probe` are
-self-reported by the caller. This server is never a party to the actual
-DeepSeek completion -- only `evals.business_journeys.api_client.
-JourneyApiClient` (a process running outside this application, holding the
-DeepSeek credential itself) talks to DeepSeek directly -- so nothing here
-can independently prove a call with these exact counters really happened,
-only that the reported shape is plausible (`_validate_model_evidence`:
-right call kind, right correlation id, an allowed model id, an allowed
-`http_attempts` value). This is not a gap this endpoint can close by
-itself: doing so for real would mean the application server making the
-completion call on the harness's behalf instead of trusting its report,
-a materially different design than the harness owning the DeepSeek
-credential locally (see `scripts/run_business_journey_gate.sh`'s own
-loopback-only trust boundary for `BUSINESS_JOURNEY_API_BASE`). The actual
-security boundary today is `require_editor` authentication plus the real
-gate's own controls (trusted-PR-only, no `pull_request_target`, a secret-
-gated `DEEPSEEK_API_KEY`) -- the same shape most CI provenance/attestation
-systems use: trust the authenticated, gated caller's identity, not an
-independent replay of what it did internally.
+The preparation model call happens in the trusted gate process, which owns
+the provider credential. This write endpoint is therefore bound to the
+configured gate user, while release tool descriptors are independently
+derived from the application's published catalog and active data grant.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_current_user, get_db, require_editor
 from app.models.business_journey import BusinessJourneyPreparation
+from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshotInput
 from app.models.user import User
 from app.services.runtime.snapshots import SnapshotValidationError, materialize_snapshot
 from app.models.v2.curated import CuratedReview
 from app.models.v2.pipeline import PipelineRun, PipelineRunInput
+from app.services.agent.catalog import ontology_tool_catalog
 
 router = APIRouter()
 
@@ -63,7 +51,6 @@ class PreparationEvidenceIn(BaseModel):
     curated_dataset_id: str
     curated_review_id: str
     model_config_version_id: str
-    mcp_descriptor_ids: list[str] = Field(min_length=1)
     structured: dict[str, Any]
     model_probe: dict[str, str]
     model_calls: list[ModelCallEvidence] = Field(min_length=1, max_length=1)
@@ -80,10 +67,53 @@ def _validate_model_evidence(body: PreparationEvidenceIn) -> None:
         raise HTTPException(status_code=422, detail="PREPARATION_MODEL_PROBE_INVALID")
 
 
+def _require_gate_identity(current_user: User) -> None:
+    if current_user.username != settings.business_journey_gate_username:
+        raise HTTPException(status_code=403, detail="BUSINESS_JOURNEY_GATE_IDENTITY_REQUIRED")
+
+
+def _active_grant_capabilities(db: Session, ontology_id: str, user_id: str) -> set[str]:
+    now = datetime.now(timezone.utc)
+    capabilities: set[str] = set()
+    grants = db.query(OntologyDataGrant).filter_by(
+        ontology_id=ontology_id, user_id=user_id, status="active",
+    ).all()
+    for grant in grants:
+        valid_from = grant.valid_from
+        valid_until = grant.valid_until
+        if valid_from is not None and valid_from.tzinfo is None:
+            valid_from = valid_from.replace(tzinfo=timezone.utc)
+        if valid_until is not None and valid_until.tzinfo is None:
+            valid_until = valid_until.replace(tzinfo=timezone.utc)
+        if (valid_from is not None and valid_from > now) or (valid_until is not None and now >= valid_until):
+            continue
+        capabilities.update(str(capability) for capability in (grant.capabilities or ()))
+    return capabilities
+
+
+def _derive_granted_descriptor_ids(db: Session, release: OntologyRelease, user_id: str) -> list[str]:
+    """Return descriptors exposed by this exact published release and grant."""
+    if release.status != "published":
+        raise HTTPException(status_code=422, detail="ONTOLOGY_RELEASE_NOT_PUBLISHED")
+    catalog = ontology_tool_catalog(db, release.ontology_id)
+    if not catalog.get("published") or catalog.get("release_id") != release.id:
+        raise HTTPException(status_code=422, detail="MCP_CATALOG_RELEASE_MISMATCH")
+    grant_capabilities = _active_grant_capabilities(db, release.ontology_id, user_id)
+    descriptor_ids = [
+        str(tool["descriptor_id"])
+        for tool in catalog.get("tools") or ()
+        if tool.get("descriptor_id") and tool.get("capability") in grant_capabilities
+    ]
+    if not descriptor_ids:
+        raise HTTPException(status_code=422, detail="MCP_DESCRIPTOR_GRANT_MISSING")
+    return descriptor_ids
+
+
 @router.post("/preparations", status_code=201)
 def create_preparation(
     body: PreparationEvidenceIn, db: Session = Depends(get_db), current_user: User = Depends(require_editor),
 ):
+    _require_gate_identity(current_user)
     _validate_model_evidence(body)
     if db.query(BusinessJourneyPreparation).filter_by(run_id=body.run_id, journey_id=body.journey_id).first():
         raise HTTPException(status_code=409, detail="PREPARATION_EVIDENCE_EXISTS")
@@ -109,6 +139,7 @@ def create_preparation(
     release = db.get(OntologyRelease, body.ontology_release_id)
     if release is None or release.ontology_id != body.ontology_id:
         raise HTTPException(status_code=422, detail="ONTOLOGY_RELEASE_MISMATCH")
+    descriptor_ids = _derive_granted_descriptor_ids(db, release, current_user.id)
     inputs = db.query(PipelineRunInput).filter_by(pipeline_run_id=body.pipeline_run_id).all()
     if body.dataset_version_id not in {item.dataset_version_id for item in inputs}:
         raise HTTPException(status_code=422, detail="PIPELINE_OUTPUT_LINEAGE_MISSING")
@@ -121,6 +152,7 @@ def create_preparation(
         raise HTTPException(status_code=422, detail=f"SEMANTIC_SNAPSHOT_MATERIALIZATION_FAILED:{exc.reason_code}") from exc
     row = BusinessJourneyPreparation(
         **body.model_dump(exclude={"model_calls"}), semantic_snapshot_id=snapshot.id,
+        mcp_descriptor_ids=descriptor_ids,
         model_calls=[call.model_dump() for call in body.model_calls],
     )
     db.add(row)

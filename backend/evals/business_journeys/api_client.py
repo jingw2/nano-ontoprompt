@@ -93,7 +93,7 @@ _EXTRACTED_RELATION_TYPE_FALLBACK = "关联"
 _EXTRACTED_LOGIC_TYPE = "validation"
 _EXTRACTED_ACTION_CATEGORY = "crud"
 
-GRANT_CAPABILITIES = ("investigate", "propose_action")
+GRANT_CAPABILITIES = ("read_instances", "execute_read_logic", "execute_instance_action")
 
 # `POST /api/v1/ontologies` validates `domain` against a closed Chinese-label
 # enum (`app.schemas.ontology.VALID_DOMAINS`) — the journey id itself
@@ -599,14 +599,10 @@ class JourneyApiClient:
         turn's actually-executed descriptor against a real, server-persisted
         grant instead of a file this same process wrote to local disk.
 
-        The model-call counters/probe in this body are self-reported: this
-        process, not the application server, is the one that actually
-        talked to DeepSeek (see ``DeepSeekVisionCaller``/``ModelCallLedger``
-        in ``orchestrator.prepare_journey``), so the server cannot
-        independently prove these exact counters came from a real
-        completion -- only that the reported shape is plausible. See
-        ``app.routers.business_journeys``'s own module docstring for the
-        full disclosure of what this endpoint's trust model actually is.
+        The model-call counters/probe originate in the trusted gate process,
+        the only identity allowed to persist preparation evidence. Descriptor
+        ids are intentionally omitted: the application derives those from
+        the exact published release and the gate user's active data grant.
         """
         response = release.model_response
         body = self._post(
@@ -618,7 +614,6 @@ class JourneyApiClient:
                 "dataset_version_id": pipeline.dataset_version_id,
                 "curated_dataset_id": curated.curated_dataset_id, "curated_review_id": curated.review_id,
                 "model_config_version_id": model_config.model_config_version_id,
-                "mcp_descriptor_ids": [d.descriptor_id for d in descriptors],
                 "structured": dict(release.structured),
                 "model_probe": {"requested_model": probe.requested_model, "observed_model": probe.observed_model},
                 "model_calls": [{
