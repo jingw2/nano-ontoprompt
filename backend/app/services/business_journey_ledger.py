@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation
 
@@ -57,6 +58,10 @@ def _create_slot(db: Session, **values) -> BusinessJourneyModelCall:
     if existing is not None:
         raise JourneyLedgerError("MODEL_CALL_SLOT_ALREADY_EXISTS")
     slot = BusinessJourneyModelCall(**values)
-    db.add(slot)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(slot)
+            db.flush()
+    except IntegrityError as exc:
+        raise JourneyLedgerError("MODEL_CALL_SLOT_ALREADY_EXISTS") from exc
     return slot

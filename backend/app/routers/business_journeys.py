@@ -185,7 +185,7 @@ def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) ->
         "model_config_version_id", "mcp_descriptor_ids", "structured", "model_probe", "model_calls",
     )}
     if db is not None:
-        result["model_calls"] = [
+        ledger_calls = [
             {key: getattr(item, key) for key in (
                 "call_kind", "logical_call_index", "correlation_id", "requested_model",
                 "observed_model", "http_attempts", "retry_count",
@@ -194,6 +194,10 @@ def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) ->
                 run_id=row.run_id, journey_id=row.journey_id, status="finalized",
             ).order_by(BusinessJourneyModelCall.logical_call_index).all()
         ]
+        # Preparation evidence remains exactly slot 1. The separate ledger is
+        # the authoritative all-phase source for verification after runtime.
+        result["model_calls"] = [call for call in ledger_calls if call["logical_call_index"] == 1]
+        result["model_call_ledger"] = ledger_calls
         result["snapshot_inputs"] = [
             {"snapshot_id": item.snapshot_id, "dataset_version_id": item.dataset_version_id,
              "pipeline_run_id": item.pipeline_run_id}

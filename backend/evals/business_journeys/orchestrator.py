@@ -588,7 +588,6 @@ def verify_journey(
     finally:
         client.close()
 
-    _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
     _require_preparation_binding(preparation_evidence, evidence)
     _require_independent_plan_branches(evidence.plan_branches)
     _require_granted_mcp_descriptors(evidence, preparation_evidence)
@@ -621,9 +620,18 @@ def verify_journey(
             f"persisted {evidence.automatic_action!r}"
         )
 
-    ontology_call = _persisted_ontology_call(preparation_evidence, run_id=run_id, journey_id=journey_id)
-    _require_persisted_ontology_call(ontology_call, run_id=run_id, journey_id=journey_id)
-    calls = (ontology_call,) + evidence.model_calls
+    ledger_calls = _persisted_model_call_ledger(
+        preparation_evidence, run_id=run_id, journey_id=journey_id)
+    if ledger_calls:
+        _require_persisted_ontology_call(ledger_calls[0], run_id=run_id, journey_id=journey_id)
+        _require_ledger_call_chain(ledger_calls, run_id=run_id, journey_id=journey_id)
+        _cross_check_runtime_events_against_ledger(evidence, ledger_calls[1:])
+        calls = ledger_calls
+    else:
+        _require_model_call_chain(evidence, run_id=run_id, journey_id=journey_id)
+        ontology_call = _persisted_ontology_call(preparation_evidence, run_id=run_id, journey_id=journey_id)
+        _require_persisted_ontology_call(ontology_call, run_id=run_id, journey_id=journey_id)
+        calls = (ontology_call,) + evidence.model_calls
     http_attempts = sum(call.http_attempts for call in calls)
     retry_count = sum(call.retry_count for call in calls)
     if len(calls) != MAX_LOGICAL_MODEL_CALLS:
@@ -709,6 +717,51 @@ def _persisted_ontology_call(preparation: Mapping[str, Any], *, run_id: str, jou
         http_attempts=int(call["http_attempts"]),
         retry_count=int(call["retry_count"]),
     )
+
+
+def _persisted_model_call_ledger(preparation: Mapping[str, Any], *, run_id: str, journey_id: str):
+    """Read all finalized slots from the application-owned cross-phase ledger."""
+    from .api_client import ModelCallRecord
+    rows = preparation.get("model_call_ledger")
+    if rows is None:
+        return ()  # compatibility with the isolated fake transport tests
+    if len(rows) != MAX_LOGICAL_MODEL_CALLS:
+        raise JourneyAcceptanceError(f"MODEL_CALL_LEDGER_INCOMPLETE: {len(rows)}")
+    probe = preparation.get("model_probe") or {}
+    return tuple(ModelCallRecord(
+        call_kind=str(row.get("call_kind") or ""),
+        logical_call_index=int(row.get("logical_call_index") or 0),
+        correlation_id=str(row.get("correlation_id") or ""),
+        model_caller="DeepSeekVisionCaller", model_origin=OFFICIAL_ORIGIN,
+        requested_model=str(row.get("requested_model") or ""),
+        observed_model=str(row.get("observed_model") or ""),
+        preflight_model_id=str(probe.get("observed_model") or ""),
+        http_attempts=int(row.get("http_attempts") or 0),
+        retry_count=int(row.get("retry_count") or 0),
+    ) for row in rows)
+
+
+def _require_ledger_call_chain(calls, *, run_id: str, journey_id: str) -> None:
+    if [call.logical_call_index for call in calls] != [1, 2, 3]:
+        raise JourneyAcceptanceError("MODEL_CALL_LEDGER_INDEX_INVALID")
+    if [call.call_kind for call in calls] != list(REQUIRED_CALL_KINDS):
+        raise JourneyAcceptanceError("MODEL_CALL_LEDGER_KINDS_INVALID")
+    for call in calls:
+        expected = f"{run_id}:{journey_id}:{call.call_kind}:{call.logical_call_index}"
+        if call.correlation_id != expected:
+            raise JourneyAcceptanceError(f"CORRELATION_ID_INVALID: {call.correlation_id!r}")
+        if call.requested_model != MODEL_ID or call.observed_model != MODEL_ID:
+            raise JourneyAcceptanceError(f"MODEL_ID_MISMATCH: observed {call.observed_model!r}")
+
+
+def _cross_check_runtime_events_against_ledger(evidence: PersistedJourneyEvidence, ledger_calls) -> None:
+    if len(evidence.model_calls) != len(ledger_calls):
+        raise JourneyAcceptanceError("MODEL_CALL_LEDGER_EVENT_MISMATCH")
+    for event_call, ledger_call in zip(evidence.model_calls, ledger_calls):
+        if (event_call.logical_call_index, event_call.correlation_id, event_call.http_attempts,
+                event_call.retry_count) != (ledger_call.logical_call_index, ledger_call.correlation_id,
+                                             ledger_call.http_attempts, ledger_call.retry_count):
+            raise JourneyAcceptanceError("MODEL_CALL_LEDGER_EVENT_MISMATCH")
 
 
 def _require_preparation_binding(preparation: Mapping[str, Any], evidence: PersistedJourneyEvidence) -> None:

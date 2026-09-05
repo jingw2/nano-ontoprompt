@@ -1190,6 +1190,29 @@ def test_verify_cross_checks_descriptors_against_a_real_prepared_run_manifest(
     assert verification.mcp_descriptor_ids == (_granted_query_descriptor_id("credit"),)
 
 
+def test_post_runtime_ledger_keeps_preparation_slot_one_separate_from_all_slots():
+    """A GET after runtime contains three ledger slots without making the
+    preparation-call reader mistake that collection for its slot-one record."""
+    from evals.business_journeys.orchestrator import _persisted_model_call_ledger, _persisted_ontology_call
+
+    run_id, journey_id = "ledger-post-runtime", "credit"
+    slot = lambda kind, index: {
+        "call_kind": kind, "logical_call_index": index,
+        "correlation_id": f"{run_id}:{journey_id}:{kind}:{index}",
+        "requested_model": MODEL_ID, "observed_model": MODEL_ID,
+        "http_attempts": 1, "retry_count": 0,
+    }
+    preparation = {
+        "semantic_snapshot_id": "snapshot", "pipeline_run_id": "pipeline", "dataset_version_id": "dataset",
+        "model_probe": {"observed_model": MODEL_ID},
+        "model_calls": [slot("ontology", 1)],
+        "model_call_ledger": [slot("ontology", 1), slot("agent_initial", 2), slot("agent_final", 3)],
+    }
+    assert _persisted_ontology_call(preparation, run_id=run_id, journey_id=journey_id).logical_call_index == 1
+    assert [call.logical_call_index for call in _persisted_model_call_ledger(
+        preparation, run_id=run_id, journey_id=journey_id)] == [1, 2, 3]
+
+
 def test_verify_rejects_a_descriptor_the_preparation_never_granted(fake_api):
     """The negative half of the same cross-check: a turn that executed a
     descriptor outside the granted set must fail closed, not be recorded as
