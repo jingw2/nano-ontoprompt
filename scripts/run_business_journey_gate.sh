@@ -47,7 +47,12 @@ PROJECT="business-journey-gate-$$"
 API_BASE="http://127.0.0.1:8000"
 ARTIFACTS_DIR="$REPO_ROOT/artifacts"
 STAGING_DIR="$REPO_ROOT/artifacts/business_journeys/staging"
-GATE_USERNAME="business-journey-gate-${RUN_ID}"
+# Keep the identity unique with the same timestamp/PID suffix as this run,
+# without copying the long human-readable RUN_ID prefix into the persisted
+# username/email columns (both are limited to 50 characters).
+GATE_ID="${RUN_ID#business-journey-}"
+GATE_USERNAME="bjg-${GATE_ID}"
+GATE_EMAIL="${GATE_USERNAME}@example.com"
 GATE_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 ENV_BACKUP=""
@@ -120,10 +125,10 @@ ADMIN_TOKEN="$(curl -fsS -X POST "${API_BASE}/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
   --data '{"username":"admin","password":"admin123"}' | \
   python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["access_token"])')"
-GATE_USER_BODY="$(GATE_USERNAME="$GATE_USERNAME" GATE_PASSWORD="$GATE_PASSWORD" python3 -c '
+GATE_USER_BODY="$(GATE_USERNAME="$GATE_USERNAME" GATE_EMAIL="$GATE_EMAIL" GATE_PASSWORD="$GATE_PASSWORD" python3 -c '
 import json, os
 print(json.dumps({"username": os.environ["GATE_USERNAME"],
-                  "email": os.environ["GATE_USERNAME"] + "@example.com",
+                  "email": os.environ["GATE_EMAIL"],
                   "password": os.environ["GATE_PASSWORD"], "role": "admin"}))
 ')"
 curl -fsS -X POST "${API_BASE}/api/v1/users" \

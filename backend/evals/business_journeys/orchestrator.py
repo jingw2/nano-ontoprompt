@@ -288,6 +288,57 @@ def _semantic_minimum(manifest: Any) -> JourneySemanticMinimum:
     )
 
 
+SEMANTIC_DIAGNOSTICS_RELATIVE_PATH = Path("business_journeys") / "diagnostics"
+
+
+def _safe_artifact_component(value: str) -> str:
+    component = "".join(
+        character if character.isalnum() or character in "._-" else "_"
+        for character in value
+    )
+    return component or "unknown"
+
+
+def _write_semantic_failure_diagnostic(
+    output_dir: Path,
+    *,
+    run_id: str,
+    journey_id: str,
+    validation: Any,
+) -> Path:
+    """Persist only field-level semantic failure metadata.
+
+    Expected requirement names and validator reason codes are safe to retain;
+    the model response, answer, source content, and credentials never enter
+    this projection.
+    """
+    document = {
+        "schema_version": 1,
+        "status": "semantic_minimum_failed",
+        "run_id": _safe_artifact_component(run_id),
+        "journey_id": _safe_artifact_component(journey_id),
+        "reason_codes": list(validation.reason_codes),
+        "missing_requirements": {
+            "entities": list(validation.missing_entities),
+            "relations": list(validation.missing_relations),
+            "rules": list(validation.missing_rules),
+            "actions": list(validation.missing_actions),
+            "citations": list(validation.missing_citations),
+            "answer_keywords": list(validation.missing_keywords),
+            "numeric_predicates": list(validation.numeric_predicate_failures),
+        },
+    }
+    safe_run_id = _safe_artifact_component(run_id)
+    safe_journey_id = _safe_artifact_component(journey_id)
+    path = (
+        Path(output_dir) / SEMANTIC_DIAGNOSTICS_RELATIVE_PATH
+        / f"{safe_run_id}.{safe_journey_id}.semantic-minimum.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def get_journey_low_risk_action(journey_id: str) -> str:
     """The single low-risk action name a business-journey turn's browser
     completion must produce and `execute_automatic_low_risk_action`'s caller
@@ -363,6 +414,9 @@ def prepare_journey(
                 validation = validate_semantic_minimum(structured, _semantic_minimum(manifest))
                 validations.append(validation)
                 if not validation.passed:
+                    _write_semantic_failure_diagnostic(
+                        output_dir, run_id=run_id, journey_id=manifest.journey_id, validation=validation,
+                    )
                     raise JourneyAcceptanceError(
                         f"SEMANTIC_MINIMUM_FAILED: {','.join(validation.reason_codes)}"
                     )
@@ -901,6 +955,7 @@ __all__ = [
     "JourneyPreparation",
     "JourneyPreparationBudget",
     "JourneyVerification",
+    "SEMANTIC_DIAGNOSTICS_RELATIVE_PATH",
     "get_journey_low_risk_action",
     "prepare_all_journeys",
     "prepare_journey",

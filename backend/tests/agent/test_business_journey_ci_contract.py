@@ -206,3 +206,19 @@ def test_script_is_strict_and_syntactically_valid():
     assert "down -v --remove-orphans" in script
     assert "BUSINESS_JOURNEY_ACCEPTANCE_ENABLED" in script
     assert "BUSINESS_JOURNEY_RUN_MANIFEST" in script
+
+
+def test_gate_identity_is_unique_and_within_persisted_length_limits():
+    """The disposable user must fit both persisted 50-character columns."""
+    script = SCRIPT_PATH.read_text()
+    assert 'GATE_ID="${RUN_ID#business-journey-}"' in script
+    assert 'GATE_USERNAME="bjg-${GATE_ID}"' in script
+    assert 'GATE_EMAIL="${GATE_USERNAME}@example.com"' in script
+
+    # The generated suffix is epoch seconds plus the shell PID.  Even with
+    # conservative decimal-width bounds, both values stay under the API's
+    # persisted 50-character username/email limits.
+    worst_case_username = "bjg-" + ("9" * 12) + "-" + ("9" * 7)
+    worst_case_email = worst_case_username + "@example.com"
+    assert len(worst_case_username) <= 50
+    assert len(worst_case_email) <= 50

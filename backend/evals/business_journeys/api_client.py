@@ -679,6 +679,7 @@ class JourneyApiClient:
         try:
             response = self._model_caller.complete(
                 context, build_input_parts(manifest), response_schema=ONTOLOGY_RESPONSE_SCHEMA,
+                system_instruction=build_ontology_system_instruction(manifest),
             )
         except JourneyAcceptanceError:
             raise
@@ -1134,6 +1135,41 @@ class JourneyApiClient:
 # ---------------------------------------------------------------------------
 
 
+def build_ontology_system_instruction(manifest: Any) -> str:
+    """Describe one journey's exact semantic minimum to the model.
+
+    DeepSeek's JSON-object mode does not enforce the supplied schema. Keep
+    the response contract and this journey-specific requirement set in the
+    system message so the model has an actionable target; the caller still
+    validates every field before writing any ontology rows.
+    """
+    minima = manifest.semantic_minima
+    requirements = {
+        "entities": list(minima.get("entities") or ()),
+        "relations": list(minima.get("relations") or ()),
+        "rules": list(minima.get("rules") or ()),
+        "actions": list(minima.get("actions") or ()),
+        "citations": list(minima.get("source_citation_ids") or ()),
+        "answer_keywords": list(minima.get("keywords") or ()),
+        "numeric_predicates": dict(minima.get("numeric_predicates") or {}),
+    }
+    return (
+        "Produce the ontology extraction for this business journey. Return a "
+        "single JSON object only: no markdown, no explanatory prose outside the "
+        "JSON object, and no omitted required fields. Follow the JSON schema "
+        "provided after this instruction exactly. Every required entity, "
+        "relation, rule, action, and citation must be included verbatim. "
+        "The answer must mention every answer keyword. For every relation, "
+        "include one relation_edges entry with the same relation name and "
+        "source/target names that are present in entities. Include every "
+        "numeric predicate field at its named path with a numeric value that "
+        "satisfies its operator and expected value. Do not invent citation "
+        "identifiers or replace required names with synonyms. Exact semantic "
+        f"minimum for journey {manifest.journey_id}: "
+        f"{json.dumps(requirements, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
 def build_input_parts(manifest: Any) -> tuple[InputPart, ...]:
     """Turn the journey's versioned inputs into model input parts.
 
@@ -1253,6 +1289,7 @@ __all__ = [
     "PipelineEvidence",
     "PlanBranchEvidence",
     "build_input_parts",
+    "build_ontology_system_instruction",
     "canonical_digest",
     "new_idempotency_key",
 ]

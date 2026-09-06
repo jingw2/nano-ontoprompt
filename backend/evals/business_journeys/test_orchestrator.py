@@ -68,6 +68,7 @@ class _FakeState:
         self.model_response_id: str = MODEL_ID
         self.available_models: list[str] = [MODEL_ID]
         self.model_calls = 0
+        self.model_request_bodies: list[dict[str, Any]] = []
         self.agent_create_calls = 0
         self.agent_turn_calls = 0
         self.mutations: list[str] = []
@@ -631,6 +632,7 @@ def _deepseek_transport(state: _FakeState) -> httpx.MockTransport:
             return httpx.Response(200, json={"data": [{"id": m} for m in state.available_models]})
         if request.url.path == "/chat/completions":
             state.model_calls += 1
+            state.model_request_bodies.append(json.loads(request.content))
             return httpx.Response(200, json={
                 "model": state.model_response_id,
                 "choices": [{"message": {"content": json.dumps(_STRUCTURED_RESPONSE[0])}}],
@@ -892,6 +894,61 @@ def test_prepare_uses_exactly_one_deepseek_completion_and_official_origin(fake_a
     assert preparation.correlation_id == "journey-one-call:supply_chain:ontology:1"
     assert JourneyPreparationBudget().logical_model_calls == 1
     assert JourneyPreparationBudget().max_http_attempts == 2
+
+
+def test_prepare_instructs_deepseek_with_the_exact_journey_semantic_minimum(fake_api):
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-semantic-instruction",
+    )
+
+    assert preparation.status == "passed"
+    request = fake_api.model_request_bodies[0]
+    assert request["messages"][0]["role"] == "system"
+    instruction = request["messages"][0]["content"]
+    minima = load_journey_manifest("supply_chain", _RUNTIME_DATA_DIR).semantic_minima
+    for field in ("entities", "relations", "rules", "actions", "keywords", "source_citation_ids"):
+        for required_name in minima[field]:
+            assert str(required_name) in instruction
+    for field, expected_value in minima["numeric_predicates"].items():
+        assert str(field) in instruction
+        assert str(expected_value) in instruction
+    assert "single JSON object" in instruction
+    assert "no markdown" in instruction
+    assert "relation_edges" in instruction
+
+
+def test_prepare_writes_redacted_semantic_failure_diagnostic(fake_api):
+    secret_answer = "RAW_MODEL_ANSWER_SHOULD_NOT_BE_PERSISTED"
+    secret_source = "RAW_SOURCE_INPUT_SHOULD_NOT_BE_PERSISTED"
+    _STRUCTURED_RESPONSE[0] = {
+        "answer": secret_answer,
+        "entities": [],
+        "relations": [],
+        "rules": [],
+        "actions": [],
+        "citations": [],
+        "source_excerpt": secret_source,
+    }
+    output_dir = Path("journey-output")
+    with pytest.raises(JourneyAcceptanceError, match="SEMANTIC_MINIMUM_FAILED"):
+        prepare_journey(
+            "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+            output_dir=output_dir, run_id="journey-semantic-diagnostic",
+        )
+
+    diagnostic_path = (
+        output_dir / "business_journeys" / "diagnostics"
+        / "journey-semantic-diagnostic.supply_chain.semantic-minimum.json"
+    )
+    diagnostic_text = diagnostic_path.read_text(encoding="utf-8")
+    diagnostic = json.loads(diagnostic_text)
+    assert diagnostic["journey_id"] == "supply_chain"
+    assert "MISSING_ENTITIES" in diagnostic["reason_codes"]
+    assert "Supplier" in diagnostic["missing_requirements"]["entities"]
+    assert "below_safety_stock_supplier_count_min" in diagnostic["missing_requirements"]["numeric_predicates"]
+    assert secret_answer not in diagnostic_text
+    assert secret_source not in diagnostic_text
 
 
 def test_prepare_persists_completion_snapshot_lineage_and_model_evidence(fake_api):
