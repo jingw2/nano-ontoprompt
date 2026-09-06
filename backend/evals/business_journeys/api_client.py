@@ -678,7 +678,7 @@ class JourneyApiClient:
         )
         try:
             response = self._model_caller.complete(
-                context, build_input_parts(manifest), response_schema=ONTOLOGY_RESPONSE_SCHEMA,
+                context, build_input_parts(manifest), response_schema=build_ontology_response_schema(manifest),
                 system_instruction=build_ontology_system_instruction(manifest),
             )
         except JourneyAcceptanceError:
@@ -1144,20 +1144,7 @@ def build_ontology_system_instruction(manifest: Any) -> str:
     validates every field before writing any ontology rows.
     """
     minima = manifest.semantic_minima
-    numeric_predicates: dict[str, dict[str, object]] = {}
-    for name, predicate in (minima.get("numeric_predicates") or {}).items():
-        if isinstance(predicate, Mapping):
-            numeric_predicates[str(name)] = {
-                "path": str(predicate.get("path", name)),
-                "op": str(predicate.get("op", "eq")),
-                "value": predicate.get("value"),
-            }
-        else:
-            numeric_predicates[str(name)] = {
-                "path": str(name),
-                "op": "eq",
-                "value": predicate,
-            }
+    numeric_predicates = _normalized_numeric_predicates(minima.get("numeric_predicates") or {})
 
     requirements = {
         "entities": list(minima.get("entities") or ()),
@@ -1183,6 +1170,51 @@ def build_ontology_system_instruction(manifest: Any) -> str:
         f"minimum for journey {manifest.journey_id}: "
         f"{json.dumps(requirements, ensure_ascii=False, sort_keys=True)}"
     )
+
+
+def _normalized_numeric_predicates(
+    raw: Mapping[str, Any],
+) -> dict[str, dict[str, object]]:
+    """Render the same explicit numeric contract consumed by the validator."""
+    normalized: dict[str, dict[str, object]] = {}
+    for name, predicate in raw.items():
+        if isinstance(predicate, Mapping):
+            normalized[str(name)] = {
+                "path": str(predicate.get("path", name)),
+                "op": str(predicate.get("op", "eq")),
+                "value": predicate.get("value"),
+            }
+        else:
+            normalized[str(name)] = {
+                "path": str(name),
+                "op": "eq",
+                "value": predicate,
+            }
+    return normalized
+
+
+def build_ontology_response_schema(manifest: Any) -> Mapping[str, object]:
+    """Extend the static ontology schema with safe top-level numeric fields.
+
+    A dotted validator path addresses nested response data and therefore must
+    not be advertised as a top-level JSON property. Such predicates remain
+    covered by the strict semantic validator and prompt instructions.
+    """
+    schema = dict(ONTOLOGY_RESPONSE_SCHEMA)
+    properties = dict(ONTOLOGY_RESPONSE_SCHEMA["properties"])
+    required = list(ONTOLOGY_RESPONSE_SCHEMA["required"])
+    for predicate in _normalized_numeric_predicates(
+        manifest.semantic_minima.get("numeric_predicates") or {}
+    ).values():
+        path = str(predicate["path"])
+        if not path or "." in path:
+            continue
+        properties.setdefault(path, {"type": "number"})
+        if path not in required:
+            required.append(path)
+    schema["properties"] = properties
+    schema["required"] = required
+    return schema
 
 
 def build_input_parts(manifest: Any) -> tuple[InputPart, ...]:
@@ -1305,6 +1337,7 @@ __all__ = [
     "PlanBranchEvidence",
     "build_input_parts",
     "build_ontology_system_instruction",
+    "build_ontology_response_schema",
     "canonical_digest",
     "new_idempotency_key",
 ]

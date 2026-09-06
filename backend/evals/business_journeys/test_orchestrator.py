@@ -928,6 +928,23 @@ def test_prepare_instructs_deepseek_with_the_exact_journey_semantic_minimum(fake
     assert "relation_edges" in instruction
 
 
+def test_prepare_sends_scalar_numeric_predicates_as_required_number_schema_fields(fake_api):
+    prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-numeric-schema",
+    )
+
+    instruction = fake_api.model_request_bodies[0]["messages"][0]["content"]
+    schema_text = instruction.split(
+        "Respond with a single valid JSON object only, matching this JSON schema exactly, with no other text: ",
+        1,
+    )[1]
+    schema = json.loads(schema_text)
+    for field in ("below_safety_stock_supplier_count_min", "safety_stock_threshold_units"):
+        assert field in schema["required"]
+        assert schema["properties"][field] == {"type": "number"}
+
+
 def test_prepare_writes_redacted_semantic_failure_diagnostic(fake_api):
     secret_answer = "RAW_MODEL_ANSWER_SHOULD_NOT_BE_PERSISTED"
     secret_source = "RAW_SOURCE_INPUT_SHOULD_NOT_BE_PERSISTED"
