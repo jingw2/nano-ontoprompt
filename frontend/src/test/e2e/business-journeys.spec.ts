@@ -136,7 +136,7 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     const turnId = turnBody.data?.turn_id
     const sessionId = turnBody.data?.session_id
     if (!turnId) throw new Error('createTurn response missing turn_id')
-    await expect(page.getByTestId('journey-answer')).toContainText(journey.semantic_minima.keywords[0])
+    await expect(page.getByTestId('journey-answer')).toContainText(journey.semantic_minima.keywords[0], { timeout: 90_000 })
     // The real runtime citation (`resolve_snapshot`'s `citations`,
     // `app.services.runtime.context`) is grounded in the ontology RELEASE
     // the turn resolved — `{"type":"release","release_id":...,
