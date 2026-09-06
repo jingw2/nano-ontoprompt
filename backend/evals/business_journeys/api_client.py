@@ -93,7 +93,13 @@ _EXTRACTED_RELATION_TYPE_FALLBACK = "关联"
 _EXTRACTED_LOGIC_TYPE = "validation"
 _EXTRACTED_ACTION_CATEGORY = "crud"
 
-GRANT_CAPABILITIES = ("read_instances", "execute_read_logic", "execute_instance_action")
+GRANT_CAPABILITIES = (
+    "read_schema",
+    "read_instances",
+    "traverse_relations",
+    "execute_read_logic",
+    "execute_instance_action",
+)
 
 # `POST /api/v1/ontologies` validates `domain` against a closed Chinese-label
 # enum (`app.schemas.ontology.VALID_DOMAINS`) — the journey id itself

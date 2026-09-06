@@ -22,7 +22,7 @@ from typing import Any, Callable, Mapping
 import httpx
 import pytest
 
-from evals.business_journeys.api_client import build_ontology_response_schema
+from evals.business_journeys.api_client import GRANT_CAPABILITIES, build_ontology_response_schema
 from evals.business_journeys.contracts import MODEL_ID, OFFICIAL_ORIGIN
 from evals.business_journeys.deepseek_client import DeepSeekVisionClient
 from evals.business_journeys.orchestrator import (
@@ -833,6 +833,16 @@ def prepared_journeys(fake_api):
 # ---------------------------------------------------------------------------
 # Preparation
 # ---------------------------------------------------------------------------
+
+
+def test_grant_capabilities_cover_browser_binding_contract():
+    assert set(GRANT_CAPABILITIES) == {
+        "read_schema",
+        "read_instances",
+        "traverse_relations",
+        "execute_read_logic",
+        "execute_instance_action",
+    }
 
 
 def test_prepare_requires_published_release_grant_and_binding_options(fake_api):
