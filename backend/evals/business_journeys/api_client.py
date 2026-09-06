@@ -1144,6 +1144,21 @@ def build_ontology_system_instruction(manifest: Any) -> str:
     validates every field before writing any ontology rows.
     """
     minima = manifest.semantic_minima
+    numeric_predicates: dict[str, dict[str, object]] = {}
+    for name, predicate in (minima.get("numeric_predicates") or {}).items():
+        if isinstance(predicate, Mapping):
+            numeric_predicates[str(name)] = {
+                "path": str(predicate.get("path", name)),
+                "op": str(predicate.get("op", "eq")),
+                "value": predicate.get("value"),
+            }
+        else:
+            numeric_predicates[str(name)] = {
+                "path": str(name),
+                "op": "eq",
+                "value": predicate,
+            }
+
     requirements = {
         "entities": list(minima.get("entities") or ()),
         "relations": list(minima.get("relations") or ()),
@@ -1151,7 +1166,7 @@ def build_ontology_system_instruction(manifest: Any) -> str:
         "actions": list(minima.get("actions") or ()),
         "citations": list(minima.get("source_citation_ids") or ()),
         "answer_keywords": list(minima.get("keywords") or ()),
-        "numeric_predicates": dict(minima.get("numeric_predicates") or {}),
+        "numeric_predicates": numeric_predicates,
     }
     return (
         "Produce the ontology extraction for this business journey. Return a "

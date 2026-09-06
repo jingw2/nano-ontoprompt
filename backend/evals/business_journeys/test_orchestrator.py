@@ -913,6 +913,16 @@ def test_prepare_instructs_deepseek_with_the_exact_journey_semantic_minimum(fake
     for field, expected_value in minima["numeric_predicates"].items():
         assert str(field) in instruction
         assert str(expected_value) in instruction
+    rendered_instruction = instruction.split("\n\nRespond with a single valid JSON object only", 1)[0]
+    rendered_minimum = json.loads(
+        rendered_instruction.split("Exact semantic minimum for journey supply_chain: ", 1)[1]
+    )
+    for field, expected_value in minima["numeric_predicates"].items():
+        assert rendered_minimum["numeric_predicates"][field] == {
+            "path": field,
+            "op": "eq",
+            "value": expected_value,
+        }
     assert "single JSON object" in instruction
     assert "no markdown" in instruction
     assert "relation_edges" in instruction
