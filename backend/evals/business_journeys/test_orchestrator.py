@@ -16,11 +16,13 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 import httpx
 import pytest
 
+from evals.business_journeys.api_client import build_ontology_response_schema
 from evals.business_journeys.contracts import MODEL_ID, OFFICIAL_ORIGIN
 from evals.business_journeys.deepseek_client import DeepSeekVisionClient
 from evals.business_journeys.orchestrator import (
@@ -943,6 +945,24 @@ def test_prepare_sends_scalar_numeric_predicates_as_required_number_schema_field
     for field in ("below_safety_stock_supplier_count_min", "safety_stock_threshold_units"):
         assert field in schema["required"]
         assert schema["properties"][field] == {"type": "number"}
+
+
+def test_ontology_schema_only_declares_simple_numeric_predicate_paths():
+    manifest = SimpleNamespace(semantic_minima={
+        "numeric_predicates": {
+            "nested_count": {"path": "facts.count", "op": "ge", "value": 2},
+            "flat_count": 3,
+        },
+    })
+
+    schema = build_ontology_response_schema(manifest)
+
+    assert "flat_count" in schema["required"]
+    assert schema["properties"]["flat_count"] == {"type": "number"}
+    assert "nested_count" not in schema["properties"]
+    assert "nested_count" not in schema["required"]
+    assert "facts.count" not in schema["properties"]
+    assert "facts.count" not in schema["required"]
 
 
 def test_prepare_writes_redacted_semantic_failure_diagnostic(fake_api):
