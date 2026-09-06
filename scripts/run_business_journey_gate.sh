@@ -178,7 +178,9 @@ echo "[business-journey-gate] phase 3/6: prepare all three journeys (real DeepSe
 export BUSINESS_JOURNEY_RUN_MANIFEST="$STAGING_DIR/run.json"
 
 echo "[business-journey-gate] phase 4/6: exact three browser journeys"
-(cd frontend && AGENT_E2E_API_BASE="$API_BASE" npx playwright test --config playwright.config.ts \
+(cd frontend && AGENT_E2E_API_BASE="$API_BASE" \
+    AGENT_E2E_ADMIN_USER="$GATE_USERNAME" \
+    AGENT_E2E_ADMIN_PASSWORD="$GATE_PASSWORD" npx playwright test --config playwright.config.ts \
     src/test/e2e/business-journeys.spec.ts)
 
 echo "[business-journey-gate] phase 5/6: read-only post-browser verification"

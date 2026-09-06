@@ -222,3 +222,24 @@ def test_gate_identity_is_unique_and_within_persisted_length_limits():
     worst_case_email = worst_case_username + "@example.com"
     assert len(worst_case_username) <= 50
     assert len(worst_case_email) <= 50
+
+
+def test_browser_phase_uses_the_prepared_gate_identity_only_for_playwright():
+    """Browser calls must authenticate as the account that owns the grants."""
+    script = SCRIPT_PATH.read_text()
+    browser_phase = script.split(
+        "echo \"[business-journey-gate] phase 4/6: exact three browser journeys\"",
+        1,
+    )[1].split(
+        "echo \"[business-journey-gate] phase 5/6: read-only post-browser verification\"",
+        1,
+    )[0]
+
+    assert (
+        '(cd frontend && AGENT_E2E_API_BASE="$API_BASE" \\\n'
+        '    AGENT_E2E_ADMIN_USER="$GATE_USERNAME" \\\n'
+        '    AGENT_E2E_ADMIN_PASSWORD="$GATE_PASSWORD" npx playwright test --config playwright.config.ts \\\n'
+        '    src/test/e2e/business-journeys.spec.ts)'
+    ) in browser_phase
+    assert "export AGENT_E2E_ADMIN_USER" not in script
+    assert "export AGENT_E2E_ADMIN_PASSWORD" not in script
