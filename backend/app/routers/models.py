@@ -220,6 +220,7 @@ def create_model_version(model_id: str, body: ModelVersionCreate, db: Session = 
         version = create_next_version(
             db, model_id,
             base_version=body.base_version,
+            provider=active.provider,
             api_base=body.api_base if body.api_base is not None else active.api_base,
             options=body.options if body.options is not None else active.options,
             model_contract=contract,

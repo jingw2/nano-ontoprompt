@@ -262,6 +262,22 @@ def test_model_api_redacted_tagged_union_and_versioned_surface(pg):
     assert client.post("/api/v1/models", json={"name": "x", "provider": "openai", "models": ["gpt-4o"]}, headers=viewer_headers).status_code == 403
 
 
+def test_create_model_version_endpoint_inherits_active_provider(pg):
+    editor = _seed_user(pg, username="version-editor", role="editor")
+    llm_id = _seed_llm_config(pg, name="Versioned LLM", models=["gpt-4.1"])
+    _migrate_rows(pg)
+
+    client = next(_client(pg))
+    headers = _headers(create_access_token({"sub": editor.id, "role": "editor"}))
+
+    r = client.post(f"/api/v1/models/{llm_id}/versions", json={"options": {"temperature": 0.7}}, headers=headers)
+    assert r.status_code == 201
+    assert r.json()["data"]["version_no"] == 2
+
+    versions = client.get(f"/api/v1/models/{llm_id}/versions", headers=headers).json()["data"]
+    assert [v["version_no"] for v in versions] == [1, 2]
+
+
 def test_admin_model_migration_remediation_routes(pg):
     admin = _seed_user(pg, username="caller-admin", role="admin")
     editor = _seed_user(pg, username="caller-editor2", role="editor")
