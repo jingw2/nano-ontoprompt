@@ -55,6 +55,7 @@ CLAUDE.md
 nano-ontoprompt-requirements.md
 prompt-harness-rules-for-coding-agent.md
 docs/
+.superpowers/sdd/
 pipeline-builder-redesign-plan.md
 PRD_AND_ARCHITECTURE_v1.1_logic_actions.md
 PRD_AND_ARCHITECTURE.md
