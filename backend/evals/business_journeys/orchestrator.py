@@ -102,6 +102,7 @@ class JourneyPreparation:
     pipeline: PipelineEvidence
     curated: CuratedEvidence
     ontology_id: str
+    ontology_build_mode: str
     ontology_release_id: str
     release_status: str
     # A real, persisted `SemanticSnapshot` row id: `persist_preparation_evidence`
@@ -145,10 +146,13 @@ class JourneyPreparation:
             "pipeline_run_id": self.pipeline.pipeline_run_id,
             "dataset_version_id": self.pipeline.dataset_version_id,
             "pipeline_status": self.pipeline.status,
+            "pipeline_execution_mode": self.pipeline.execution_mode,
+            "pipeline_connector_count": self.pipeline.connector_count,
             "curated_dataset_id": self.curated.curated_dataset_id,
             "curated_review_id": self.curated.review_id,
             "curated_status": self.curated.status,
             "ontology_id": self.ontology_id,
+            "ontology_build_mode": self.ontology_build_mode,
             "ontology_release_id": self.ontology_release_id,
             "release_status": self.release_status,
             "semantic_snapshot_id": self.semantic_snapshot_id,
@@ -422,7 +426,8 @@ def prepare_journey(
                     )
 
             release = client_with_model.create_or_complete_ontology(
-                manifest, model_config.model_config_version_id, validate_structured=_validate,
+                manifest, model_config.model_config_version_id,
+                curated_dataset_id=curated.curated_dataset_id, validate_structured=_validate,
             )
             validation = validations[0]
 
@@ -482,6 +487,7 @@ def prepare_journey(
         pipeline=pipeline,
         curated=curated,
         ontology_id=release.ontology_id,
+        ontology_build_mode=release.build_mode,
         ontology_release_id=release.release_id,
         release_status=release.release_status,
         semantic_snapshot_id=semantic_snapshot_id,
@@ -564,7 +570,13 @@ def write_run_manifest(
         "model_caller": "DeepSeekVisionCaller",
         "model_origin": OFFICIAL_ORIGIN,
         "requested_model_id": MODEL_ID,
-        "preparations": [preparation.to_dict() for preparation in preparations],
+        "preparations": [
+            {
+                key: value for key, value in preparation.to_dict().items()
+                if key not in {"input_fixture_ids", "input_hashes"}
+            }
+            for preparation in preparations
+        ],
     }
     _reject_forbidden_manifest_content(document)
     path = Path(output_dir) / STAGING_RELATIVE_PATH
@@ -637,7 +649,9 @@ def verify_journey(
     client = JourneyApiClient(api_base, api_key, run_id=run_id)
     try:
         client.authenticate()
-        preparation_evidence = client.read_preparation_evidence(run_id, journey_id)
+        preparation_evidence = client.read_preparation_evidence(
+            run_id, journey_id, turn_id=str(browser_evidence["turn_id"]),
+        )
         evidence = client.read_journey_evidence(run_id, browser_evidence=browser_evidence)
     finally:
         client.close()

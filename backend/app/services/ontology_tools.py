@@ -31,7 +31,7 @@ def execute_ontology_read(db: Session, *, descriptor_id: str, parameters: dict,
 def _read_instances(db: Session, parameters: dict, correlation_id: str) -> tuple[str, dict]:
     ontology_id = parameters.get("ontology_id")
     release_id = parameters.get("release_id")
-    query = parameters.get("query")
+    query = parameters.get("query") or ""
     limit = int(parameters.get("limit", 20))
     if not ontology_id or not release_id:
         raise OntologyToolError("READ_PARAMETERS_REQUIRED")

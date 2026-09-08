@@ -10,13 +10,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.deps import get_current_user, get_db, require_editor
-from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation
+from app.models.business_journey import (
+    PREPARATION_SLOT_SCOPE,
+    BusinessJourneyModelCall,
+    BusinessJourneyPreparation,
+)
 from app.models.ontology_data_grant import OntologyDataGrant
 from app.models.ontology_release import OntologyRelease
 from app.models.semantic_snapshot import SemanticSnapshotInput
@@ -171,28 +176,47 @@ def create_preparation(
 
 
 @router.get("/preparations/{run_id}/{journey_id}")
-def get_preparation(run_id: str, journey_id: str, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def get_preparation(
+    run_id: str, journey_id: str, turn_id: str | None = Query(default=None),
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    _require_gate_identity(current_user)
     row = db.query(BusinessJourneyPreparation).filter_by(run_id=run_id, journey_id=journey_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="PREPARATION_EVIDENCE_NOT_PERSISTED")
-    return {"data": _serialize(row, db=db)}
+    return {"data": _serialize(row, db=db, turn_id=turn_id)}
 
 
-def _serialize(row: BusinessJourneyPreparation, *, db: Session | None = None) -> dict[str, Any]:
+def _serialize(
+    row: BusinessJourneyPreparation, *, db: Session | None = None, turn_id: str | None = None,
+) -> dict[str, Any]:
     result = {key: getattr(row, key) for key in (
         "run_id", "journey_id", "ontology_id", "ontology_release_id", "semantic_snapshot_id",
         "pipeline_run_id", "dataset_version_id", "curated_dataset_id", "curated_review_id",
         "model_config_version_id", "mcp_descriptor_ids", "structured", "model_probe", "model_calls",
     )}
     if db is not None:
+        ledger_query = db.query(BusinessJourneyModelCall).filter_by(
+            run_id=row.run_id, journey_id=row.journey_id, status="finalized",
+        )
+        if turn_id:
+            # Keep preparation slot 1 and only the exact runtime slots for
+            # the turn whose browser evidence is being verified.  Without
+            # this scope, a retry/second turn would make the verifier read
+            # more than its required three-call chain.
+            ledger_query = ledger_query.filter(or_(
+                BusinessJourneyModelCall.turn_id == PREPARATION_SLOT_SCOPE,
+                BusinessJourneyModelCall.turn_id == turn_id,
+            ))
         ledger_calls = [
             {key: getattr(item, key) for key in (
-                "call_kind", "logical_call_index", "correlation_id", "requested_model",
+                "turn_id", "call_kind", "logical_call_index", "correlation_id", "requested_model",
                 "observed_model", "http_attempts", "retry_count", "model_config_version_id",
             )}
-            for item in db.query(BusinessJourneyModelCall).filter_by(
-                run_id=row.run_id, journey_id=row.journey_id, status="finalized",
-            ).order_by(BusinessJourneyModelCall.logical_call_index).all()
+            for item in ledger_query.order_by(
+                BusinessJourneyModelCall.logical_call_index,
+                BusinessJourneyModelCall.created_at,
+            ).all()
         ]
         # Preparation evidence remains exactly slot 1. The separate ledger is
         # the authoritative all-phase source for verification after runtime.

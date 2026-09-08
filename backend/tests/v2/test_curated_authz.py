@@ -1,9 +1,11 @@
 """Curated 审批权限 — PRD Security Logic: only admin can approve curated rows"""
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
 from app.models.v2.curated import CuratedDataset
+from app.models.v2.pipeline import Pipeline, PipelineRun
 
 
 @pytest.fixture
@@ -67,3 +69,40 @@ def test_review_session_flow_works_with_no_pipeline_run_binding(curated_client, 
     approved = curated_client.post(f"/api/v2/curated/reviews/{review_id}/approve", headers=admin_headers)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
+
+
+def test_non_primary_run_output_can_be_reviewed_and_approved(curated_client, db, editor_user, admin_user):
+    """Every curated id recorded by a governed run is an authorized output."""
+    primary_id = _make_curated(db)
+    secondary_id = _make_curated(db)
+    unrelated_id = _make_curated(db)
+    pipeline = Pipeline(name=f"pipeline-{uuid.uuid4().hex[:6]}")
+    db.add(pipeline)
+    db.flush()
+    run = PipelineRun(
+        pipeline_id=pipeline.id, status="success", finished_at=datetime.now(timezone.utc),
+        dataset_version_id="primary-version",
+        stats={"curated_dataset_id": primary_id, "curated_dataset_ids": [primary_id, secondary_id]},
+    )
+    db.add(run)
+    db.commit()
+
+    editor_headers = _login(curated_client, "editor", "editor123")
+    started = curated_client.post(
+        f"/api/v2/curated/{secondary_id}/reviews", json={"pipeline_run_id": run.id}, headers=editor_headers,
+    )
+    assert started.status_code == 200, started.text
+
+    admin_headers = _login(curated_client, "admin", "admin123")
+    approved = curated_client.post(
+        f"/api/v2/curated/reviews/{started.json()['review_id']}/approve",
+        json={"pipeline_run_id": run.id}, headers=admin_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+
+    rejected = curated_client.post(
+        f"/api/v2/curated/{unrelated_id}/reviews", json={"pipeline_run_id": run.id}, headers=editor_headers,
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "CURATED_DATASET_RUN_MISMATCH"

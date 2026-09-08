@@ -140,6 +140,22 @@ def test_gateway_read_instances_mapped_and_traced(schema):
     s.close()
 
 
+def test_gateway_empty_read_returns_release_visible_instances(schema):
+    """A bounded empty query is the Agent's one-call fallback for curated data."""
+    release_id = _seed(schema)
+    s = _session(schema)
+    from app.services.tool_gateway import ToolGateway, GatewayRequest
+    result = ToolGateway(s).execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.read_instances", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id, "limit": 2}),
+        ontology_id="o-1",
+    )
+    assert {item["instance_id"] for item in result.payload["items"]} == {"i-1", "i-2"}
+    assert "note" in result.payload
+    s.close()
+
+
 def test_gateway_read_instances_sort_by_finds_min_max(schema):
     """sort_by/sort_order let the model find a min/max in one call instead of
     paging through every row (fixes TOOL_ROUND_LIMIT on "which X has the

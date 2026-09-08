@@ -85,6 +85,96 @@ def test_scanner_passes_content_with_no_forbidden_values_or_patterns(tmp_path):
     scan_artifact(path, forbidden_values=forbidden)  # must not raise
 
 
+def test_run_manifest_skips_forbidden_substrings_only_in_declared_opaque_id_paths(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    run_manifest = {
+        "preparations": [{
+            "ontology_id": "opaque-fixture-token",
+            "ontology_entity_ids": ["opaque-fixture-token"],
+            "ontology_relation_ids": ["opaque-fixture-token"],
+            "ontology_rule_ids": ["opaque-fixture-token"],
+            "ontology_action_ids": ["opaque-fixture-token"],
+            "mcp_descriptor_ids": ["query:opaque-fixture-token"],
+            "agent_binding_options": {
+                "ontology_release_id": "opaque-fixture-token",
+                "model_config_version_id": "opaque-fixture-token",
+                "mcp_descriptor_ids": ["logic:opaque-fixture-token"],
+            },
+        }],
+    }
+    (staging / "run.json").write_text(json.dumps(run_manifest))
+
+    allowed = scan_and_materialize(
+        staging, output_dir=tmp_path / "sanitized",
+        failure_summary_path=tmp_path / "scanner-failure-summary.json",
+        forbidden_values=frozenset({"fixture-token"}), run_id="run-1",
+    )
+    assert allowed.scan_safe is True
+
+    run_manifest["preparations"][0]["status"] = "fixture-token"
+    (staging / "run.json").write_text(json.dumps(run_manifest))
+    rejected = scan_and_materialize(
+        staging, output_dir=tmp_path / "sanitized",
+        failure_summary_path=tmp_path / "scanner-failure-summary.json",
+        forbidden_values=frozenset({"fixture-token"}), run_id="run-1",
+    )
+    assert rejected.scan_safe is False
+    assert "FORBIDDEN_VALUE_ECHOED" in rejected.reason_codes
+
+
+def test_root_run_manifest_rejects_unknown_preparation_keys_even_when_benign(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "run.json").write_text(json.dumps({
+        "preparations": [{"unexpected_note": "benign"}],
+    }))
+
+    result = scan_and_materialize(
+        staging, output_dir=tmp_path / "sanitized",
+        failure_summary_path=tmp_path / "scanner-failure-summary.json",
+        forbidden_values=frozenset(), run_id="run-1",
+    )
+
+    assert result.scan_safe is False
+    assert "RUN_MANIFEST_SCHEMA_VIOLATION" in result.reason_codes
+
+
+def test_root_run_manifest_rejects_non_string_opaque_scalar_before_it_can_skip_scan(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "run.json").write_text(json.dumps({
+        "preparations": [{"ontology_id": {"raw": "fixture-token"}}],
+    }))
+
+    result = scan_and_materialize(
+        staging, output_dir=tmp_path / "sanitized",
+        failure_summary_path=tmp_path / "scanner-failure-summary.json",
+        forbidden_values=frozenset({"fixture-token"}), run_id="run-1",
+    )
+
+    assert result.scan_safe is False
+    assert "RUN_MANIFEST_SCHEMA_VIOLATION" in result.reason_codes
+
+
+def test_nested_run_manifest_does_not_receive_opaque_id_exception(tmp_path):
+    staging = tmp_path / "staging"
+    nested = staging / "nested"
+    nested.mkdir(parents=True)
+    (nested / "run.json").write_text(json.dumps({
+        "preparations": [{"mcp_descriptor_ids": ["query:opaque-fixture-token"]}],
+    }))
+
+    result = scan_and_materialize(
+        staging, output_dir=tmp_path / "sanitized",
+        failure_summary_path=tmp_path / "scanner-failure-summary.json",
+        forbidden_values=frozenset({"fixture-token"}), run_id="run-1",
+    )
+
+    assert result.scan_safe is False
+    assert "FORBIDDEN_VALUE_ECHOED" in result.reason_codes
+
+
 def test_raw_browser_trace_is_omitted_before_upload(tmp_path):
     raw = tmp_path / "trace.zip"
     raw.write_bytes(b"fixture-cell production.example.com")

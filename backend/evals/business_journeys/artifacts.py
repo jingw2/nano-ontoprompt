@@ -391,7 +391,225 @@ def scan_artifact(path: Path, *, forbidden_values: frozenset[str]) -> None:
 # the (different) `ArtifactAllowlist` schema check and never copied into the
 # sanitized upload directory, which only ever carries per-journey CI
 # evidence.
-NON_ALLOWLIST_STAGING_FILENAMES = frozenset({"run.json"})
+_RUN_MANIFEST_ROOT_KEYS = frozenset({
+    "schema_version",
+    "run_id",
+    "model_caller",
+    "model_origin",
+    "requested_model_id",
+    "preparations",
+})
+
+_RUN_MANIFEST_PREPARATION_KEYS = frozenset({
+    "run_id",
+    "journey_id",
+    "fixture_version",
+    "fixture_manifest_sha256",
+    "pipeline_id",
+    "pipeline_run_id",
+    "dataset_version_id",
+    "pipeline_status",
+    "pipeline_execution_mode",
+    "pipeline_connector_count",
+    "curated_dataset_id",
+    "curated_review_id",
+    "curated_status",
+    "ontology_id",
+    "ontology_build_mode",
+    "ontology_release_id",
+    "release_status",
+    "semantic_snapshot_id",
+    "ontology_entity_ids",
+    "ontology_relation_ids",
+    "ontology_rule_ids",
+    "ontology_action_ids",
+    "mcp_descriptor_ids",
+    "grant_id",
+    "grant_status",
+    "model_config_id",
+    "model_config_version_id",
+    "model_caller",
+    "model_origin",
+    "preflight_model_id",
+    "requested_model_id",
+    "observed_model_id",
+    "call_kinds",
+    "correlation_id",
+    "logical_model_calls",
+    "http_attempts",
+    "retry_count",
+    "agent_binding_options",
+    "status",
+})
+
+_RUN_MANIFEST_AGENT_BINDING_OPTIONS_KEYS = frozenset({
+    "ontology_release_id",
+    "mcp_descriptor_ids",
+    "model_config_version_id",
+})
+
+_RUN_MANIFEST_ROOT_STRING_KEYS = frozenset({
+    "run_id",
+    "model_caller",
+    "model_origin",
+    "requested_model_id",
+})
+
+_RUN_MANIFEST_PREPARATION_STRING_KEYS = frozenset({
+    "run_id",
+    "journey_id",
+    "fixture_version",
+    "fixture_manifest_sha256",
+    "pipeline_id",
+    "pipeline_run_id",
+    "dataset_version_id",
+    "pipeline_status",
+    "pipeline_execution_mode",
+    "curated_dataset_id",
+    "curated_review_id",
+    "curated_status",
+    "ontology_id",
+    "ontology_build_mode",
+    "ontology_release_id",
+    "release_status",
+    "semantic_snapshot_id",
+    "grant_id",
+    "grant_status",
+    "model_config_id",
+    "model_config_version_id",
+    "model_caller",
+    "model_origin",
+    "preflight_model_id",
+    "requested_model_id",
+    "observed_model_id",
+    "correlation_id",
+    "status",
+})
+
+_RUN_MANIFEST_PREPARATION_INTEGER_KEYS = frozenset({
+    "pipeline_connector_count",
+    "logical_model_calls",
+    "http_attempts",
+    "retry_count",
+})
+
+_RUN_MANIFEST_PREPARATION_STRING_LIST_KEYS = frozenset({
+    "ontology_entity_ids",
+    "ontology_relation_ids",
+    "ontology_rule_ids",
+    "ontology_action_ids",
+    "mcp_descriptor_ids",
+    "call_kinds",
+})
+
+_RUN_MANIFEST_OPAQUE_IDENTIFIER_PATHS = frozenset({
+    "preparations.*.pipeline_id",
+    "preparations.*.pipeline_run_id",
+    "preparations.*.dataset_version_id",
+    "preparations.*.curated_dataset_id",
+    "preparations.*.curated_review_id",
+    "preparations.*.ontology_id",
+    "preparations.*.ontology_release_id",
+    "preparations.*.semantic_snapshot_id",
+    "preparations.*.ontology_entity_ids",
+    "preparations.*.ontology_relation_ids",
+    "preparations.*.ontology_rule_ids",
+    "preparations.*.ontology_action_ids",
+    "preparations.*.mcp_descriptor_ids",
+    "preparations.*.grant_id",
+    "preparations.*.model_config_id",
+    "preparations.*.model_config_version_id",
+    "preparations.*.agent_binding_options.ontology_release_id",
+    "preparations.*.agent_binding_options.mcp_descriptor_ids",
+    "preparations.*.agent_binding_options.model_config_version_id",
+})
+
+
+def _run_manifest_contains_forbidden(value: object, *, path: str,
+                                     forbidden_values: frozenset[str]) -> bool:
+    if path in _RUN_MANIFEST_OPAQUE_IDENTIFIER_PATHS:
+        return False
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if isinstance(key, str) and any(token and token in key for token in forbidden_values):
+                return True
+            if _run_manifest_contains_forbidden(
+                item, path=f"{path}.{key}" if path else str(key), forbidden_values=forbidden_values,
+            ):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_run_manifest_contains_forbidden(
+            item, path=f"{path}.*", forbidden_values=forbidden_values,
+        ) for item in value)
+    return isinstance(value, str) and any(item and item in value for item in forbidden_values)
+
+
+def _validate_run_manifest_schema(payload: object) -> None:
+    """Reject fields outside the writer's browser-facing staging projection."""
+    if not isinstance(payload, Mapping) or set(payload) - _RUN_MANIFEST_ROOT_KEYS:
+        raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+    if any(
+        key in payload and not isinstance(payload[key], str)
+        for key in _RUN_MANIFEST_ROOT_STRING_KEYS
+    ) or ("schema_version" in payload and type(payload["schema_version"]) is not int):
+        raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+    preparations = payload.get("preparations")
+    if not isinstance(preparations, list):
+        raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+    for preparation in preparations:
+        if not isinstance(preparation, Mapping) or set(preparation) - _RUN_MANIFEST_PREPARATION_KEYS:
+            raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+        if any(
+            key in preparation and not isinstance(preparation[key], str)
+            for key in _RUN_MANIFEST_PREPARATION_STRING_KEYS
+        ) or any(
+            key in preparation and type(preparation[key]) is not int
+            for key in _RUN_MANIFEST_PREPARATION_INTEGER_KEYS
+        ) or any(
+            key in preparation and not (
+                isinstance(preparation[key], list)
+                and all(isinstance(item, str) for item in preparation[key])
+            )
+            for key in _RUN_MANIFEST_PREPARATION_STRING_LIST_KEYS
+        ):
+            raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+        binding_options = preparation.get("agent_binding_options")
+        if binding_options is not None and (
+            not isinstance(binding_options, Mapping)
+            or set(binding_options) - _RUN_MANIFEST_AGENT_BINDING_OPTIONS_KEYS
+            or (
+                "ontology_release_id" in binding_options
+                and not isinstance(binding_options["ontology_release_id"], str)
+            )
+            or (
+                "model_config_version_id" in binding_options
+                and not isinstance(binding_options["model_config_version_id"], str)
+            )
+            or (
+                "mcp_descriptor_ids" in binding_options
+                and not (
+                    isinstance(binding_options["mcp_descriptor_ids"], list)
+                    and all(isinstance(item, str) for item in binding_options["mcp_descriptor_ids"])
+                )
+            )
+        ):
+            raise ArtifactSafetyError("RUN_MANIFEST_SCHEMA_VIOLATION")
+
+
+def _scan_run_manifest(path: Path, *, forbidden_values: frozenset[str]) -> None:
+    """Scan run.json while treating only its declared opaque-id paths as IDs."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except ValueError:
+        scan_artifact(path, forbidden_values=forbidden_values)
+        return
+    _validate_run_manifest_schema(payload)
+    # Keep every structural detector (PII, token patterns, sensitive headers)
+    # from the global scanner; only fixture-value matching is path-aware.
+    scan_artifact(path, forbidden_values=frozenset())
+    if _run_manifest_contains_forbidden(payload, path="", forbidden_values=forbidden_values):
+        raise ArtifactSafetyError("FORBIDDEN_VALUE_ECHOED")
 
 
 def _validate_allowlist_schema(payload: Mapping[str, object]) -> None:
@@ -452,12 +670,16 @@ def scan_and_materialize(
     for path in staged_files:
         counts["scanned"] += 1
         failed_this_file = False
+        is_root_run_manifest = path == staging_dir / "run.json"
         try:
-            scan_artifact(path, forbidden_values=forbidden_values)
+            if is_root_run_manifest:
+                _scan_run_manifest(path, forbidden_values=forbidden_values)
+            else:
+                scan_artifact(path, forbidden_values=forbidden_values)
         except ArtifactSafetyError as exc:
             reason_codes.update(str(exc).split(","))
             failed_this_file = True
-        if path.name not in NON_ALLOWLIST_STAGING_FILENAMES:
+        if not is_root_run_manifest:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
                 _validate_allowlist_schema(payload)
@@ -507,7 +729,7 @@ def scan_and_materialize(
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     for path in staged_files:
-        if path.name in NON_ALLOWLIST_STAGING_FILENAMES:
+        if path == staging_dir / "run.json":
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         allowed = ArtifactAllowlist.model_validate(payload)

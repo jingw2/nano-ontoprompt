@@ -13,12 +13,16 @@ writes.
 """
 import asyncio
 import json
+import threading
 import uuid
 
 from sqlalchemy import text
 
 from app.config import settings
 from app.tasks.celery_app import celery_app
+
+
+_HEARTBEAT_INTERVAL_SECONDS = 10
 
 
 def _resolve_business_journey(model_config_options) -> dict | None:
@@ -93,7 +97,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
     from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter, assemble_turn_context
     from app.runtime.langgraph_runtime import LangGraphRuntime
     from app.services.runtime.context import resolve_pinned_context
-    from app.services.runtime.dispatch import claim_turn
+    from app.services.runtime.dispatch import claim_turn, heartbeat_turn
     from app.services.runtime import events as events_service
     from app.services.runtime.finalize import (
         finalize_turn_failed,
@@ -131,7 +135,34 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
         context.extra["claim_token"] = claim_token
         runtime = LangGraphRuntime(db)
         adapter = LangGraphRuntimeAdapter(runtime=runtime)
-        runtime_events = asyncio.run(adapter.start(context))
+        heartbeat_stop = threading.Event()
+        heartbeat_errors = []
+
+        def heartbeat_while_running():
+            while not heartbeat_stop.wait(_HEARTBEAT_INTERVAL_SECONDS):
+                try:
+                    heartbeat_db = SessionLocal()
+                    try:
+                        heartbeat_turn(
+                            heartbeat_db, turn_id=turn_id, claim_token=claim_token,
+                        )
+                    finally:
+                        heartbeat_db.close()
+                except Exception as exc:
+                    heartbeat_errors.append(exc)
+                    return
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_while_running, name=f"turn-heartbeat-{turn_id}", daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            runtime_events = asyncio.run(adapter.start(context))
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join()
+        if heartbeat_errors:
+            raise heartbeat_errors[0]
 
         # one fenced transaction: persist events -> assistant message -> terminal
         for event in runtime_events:

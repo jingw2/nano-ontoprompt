@@ -208,6 +208,24 @@ def test_script_is_strict_and_syntactically_valid():
     assert "BUSINESS_JOURNEY_RUN_MANIFEST" in script
 
 
+def test_gate_starts_the_outbox_publisher_worker_with_the_interactive_worker():
+    """A queued browser turn needs both the interactive and housekeeping queues.
+
+    Turn creation writes an outbox row.  Beat routes its publisher task to
+    ``housekeeping``; only after that task publishes can ``agent.interactive``
+    execute the turn.  Starting just the latter leaves every browser turn
+    permanently queued.
+    """
+    script = SCRIPT_PATH.read_text()
+    assert "COMPOSE_PROFILES=agent,housekeeping docker compose" in script
+
+
+def test_agent_worker_mounts_the_read_only_journey_registry_for_real_turns():
+    compose = (REPO_ROOT / "docker-compose.v2.yml").read_text()
+    agent_worker = compose.split("  agent_worker:", 1)[1].split("\n  housekeeping_worker:", 1)[0]
+    assert "./test_data:/test_data:ro" in agent_worker
+
+
 def test_gate_identity_is_unique_and_within_persisted_length_limits():
     """The disposable user must fit both persisted 50-character columns."""
     script = SCRIPT_PATH.read_text()

@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.models.business_journey import BusinessJourneyModelCall, BusinessJourneyPreparation
+from app.models.business_journey import (
+    PREPARATION_SLOT_SCOPE,
+    BusinessJourneyModelCall,
+    BusinessJourneyPreparation,
+)
 
 
 class JourneyLedgerError(Exception):
@@ -16,7 +20,8 @@ class JourneyLedgerError(Exception):
 def record_preparation_call(db: Session, *, run_id: str, journey_id: str, call: dict,
                             model_config_version_id: str) -> BusinessJourneyModelCall:
     return _create_slot(
-        db, run_id=run_id, journey_id=journey_id, logical_call_index=1,
+        db, run_id=run_id, journey_id=journey_id, turn_id=PREPARATION_SLOT_SCOPE,
+        logical_call_index=1,
         phase="preparation", status="finalized", call_kind=str(call["call_kind"]),
         correlation_id=str(call["correlation_id"]), model_config_version_id=model_config_version_id,
         requested_model=str(call["requested_model"]), observed_model=str(call["observed_model"]),
@@ -24,7 +29,8 @@ def record_preparation_call(db: Session, *, run_id: str, journey_id: str, call: 
     )
 
 
-def reserve_runtime_call(db: Session, *, run_id: str, journey_id: str, logical_call_index: int,
+def reserve_runtime_call(db: Session, *, run_id: str, journey_id: str, turn_id: str,
+                         logical_call_index: int,
                          call_kind: str, correlation_id: str, model_config_version_id: str) -> BusinessJourneyModelCall:
     preparation = db.query(BusinessJourneyPreparation).filter_by(
         run_id=run_id, journey_id=journey_id,
@@ -34,7 +40,8 @@ def reserve_runtime_call(db: Session, *, run_id: str, journey_id: str, logical_c
     if preparation.model_config_version_id != model_config_version_id:
         raise JourneyLedgerError("MODEL_CONFIG_VERSION_MISMATCH")
     return _create_slot(
-        db, run_id=run_id, journey_id=journey_id, logical_call_index=logical_call_index,
+        db, run_id=run_id, journey_id=journey_id, turn_id=turn_id,
+        logical_call_index=logical_call_index,
         phase="runtime", status="reserved", call_kind=call_kind, correlation_id=correlation_id,
         model_config_version_id=model_config_version_id,
     )
@@ -58,6 +65,7 @@ def fail_runtime_call(slot: BusinessJourneyModelCall) -> None:
 def _create_slot(db: Session, **values) -> BusinessJourneyModelCall:
     existing = db.query(BusinessJourneyModelCall).filter_by(
         run_id=values["run_id"], journey_id=values["journey_id"],
+        turn_id=values["turn_id"],
         logical_call_index=values["logical_call_index"],
     ).first()
     if existing is not None:

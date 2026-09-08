@@ -22,7 +22,11 @@ from typing import Any, Callable, Mapping
 import httpx
 import pytest
 
-from evals.business_journeys.api_client import GRANT_CAPABILITIES, build_ontology_response_schema
+from evals.business_journeys.api_client import (
+    GRANT_CAPABILITIES,
+    build_ontology_response_schema,
+    build_ontology_system_instruction,
+)
 from evals.business_journeys.contracts import MODEL_ID, OFFICIAL_ORIGIN
 from evals.business_journeys.deepseek_client import DeepSeekVisionClient
 from evals.business_journeys.orchestrator import (
@@ -85,6 +89,12 @@ class _FakeState:
         self.relations: dict[str, list[dict]] = {}
         self.logic_rules: dict[str, list[dict]] = {}
         self.action_types: dict[str, list[dict]] = {}
+        self.ontologies: dict[str, dict[str, Any]] = {}
+        self.pipelines: dict[str, dict[str, Any]] = {}
+        self.mapped_instance_counts: dict[str, int] = {}
+        self.mapped_concept_ids: dict[str, set[str]] = {}
+        self.mapping_dataset_ids: dict[str, str] = {}
+        self.release_visible_instance_counts: dict[str, int] = {}
         # The one curated dataset this fake's pipeline run produced, plus
         # any unrelated curated datasets that exist alongside it.
         self.curated_reviews: list[str] = []
@@ -282,20 +292,30 @@ def _upload_dataset(state: _FakeState, _match: "re.Match[str]", _body: dict) -> 
 
 def _create_pipeline(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
     journey_id = _journey_of(str(body.get("name", "")))
-    return 201, {"id": _uuid_for(f"{journey_id}:pipeline"), "name": body.get("name"), "status": "draft"}
+    pipeline_id = _uuid_for(f"{journey_id}:pipeline")
+    state.pipelines[pipeline_id] = {"id": pipeline_id, **body, "status": "draft"}
+    return 201, state.pipelines[pipeline_id]
+
+
+def _get_pipeline(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    pipeline = state.pipelines.get(match.group("pipeline_id"))
+    if pipeline is None:
+        raise _FakeNotFound("PIPELINE_MISSING")
+    return 200, pipeline
 
 
 def _run_pipeline(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     pipeline_id = match.group("pipeline_id")
     run_id = _uuid_for(f"{pipeline_id}:run")
     if "curated_dataset" not in state.dropped:
-        state.curated_datasets.append({
-            "id": _curated_dataset_id(run_id),
-            "name": f"curated-{run_id}",
-            "status": "pending_review",
-            "row_count": 12,
-            "quality_score": 0.99,
-        })
+        for index, dataset_id in enumerate(_curated_dataset_ids(run_id)):
+            state.curated_datasets.append({
+                "id": dataset_id,
+                "name": f"curated-{run_id}-{index}",
+                "status": "pending_review",
+                "row_count": 12,
+                "quality_score": 0.99,
+            })
     return 200, {"run_id": run_id, "status": "success"}
 
 
@@ -306,6 +326,15 @@ def _curated_dataset_id(run_id: str) -> str:
     return _uuid_for(f"{run_id}:curated-dataset")
 
 
+def _curated_dataset_ids(run_id: str) -> tuple[str, ...]:
+    """One curated output per tabular source; the first remains primary."""
+    return (
+        _curated_dataset_id(run_id),
+        _uuid_for(f"{run_id}:curated-dataset:cash-flow"),
+        _uuid_for(f"{run_id}:curated-dataset:repayment"),
+    )
+
+
 def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     run_id = match.group("run_id")
     if "pipeline_run" in state.dropped:
@@ -313,7 +342,7 @@ def _get_run(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[in
     stats: dict[str, Any] = {"row_count": 12, "quality_score": 0.99}
     if "curated_dataset" not in state.dropped:
         stats["curated_dataset_id"] = _curated_dataset_id(run_id)
-        stats["curated_dataset_ids"] = [_curated_dataset_id(run_id)]
+        stats["curated_dataset_ids"] = list(_curated_dataset_ids(run_id))
     return 200, {
         "id": run_id,
         "status": "success",
@@ -404,12 +433,21 @@ def _get_preparation(state: _FakeState, match: "re.Match[str]", _body: dict) -> 
 def _create_ontology(state: _FakeState, _match: "re.Match[str]", body: dict) -> tuple[int, Any]:
     journey_id = _journey_of(str(body.get("name", "")))
     ontology_id = _uuid_for(f"{journey_id}:ontology")
-    return 201, {"data": {
+    state.ontologies[ontology_id] = {
         "id": ontology_id,
         "name": body.get("name"),
         "domain": body.get("domain"),
+        "build_mode": body.get("build_mode"),
         "status": "draft",
-    }}
+    }
+    return 201, {"data": state.ontologies[ontology_id]}
+
+
+def _get_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    ontology = state.ontologies.get(match.group("ontology_id"))
+    if ontology is None:
+        raise _FakeNotFound("ONTOLOGY_MISSING")
+    return 200, {"data": ontology}
 
 
 def _mark_created_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
@@ -470,13 +508,42 @@ def _create_action_type(state: _FakeState, match: "re.Match[str]", body: dict) -
     return 201, {"id": action_id, "name": body["name"], "status": "draft"}
 
 
+def _create_mapping(state: _FakeState, match: "re.Match[str]", body: dict) -> tuple[int, Any]:
+    ontology_id = match.group("ontology_id")
+    if not body.get("curated_dataset_id") or not body.get("entity_class"):
+        return 422, {"detail": "curated_dataset_id and entity_class are required"}
+    mapping_id = _uuid_for(f"{ontology_id}:{body['curated_dataset_id']}:curated-records")
+    state.mapping_dataset_ids[mapping_id] = str(body["curated_dataset_id"])
+    return 201, {
+        "mapping_id": mapping_id,
+        "status": "draft",
+    }
+
+
+def _apply_mapping_from_dataset(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
+    ontology_id = match.group("ontology_id")
+    mapping_id = match.group("mapping_id")
+    if mapping_id not in state.mapping_dataset_ids:
+        raise _FakeNotFound("MAPPING_MISSING")
+    concept_id = _uuid_for(f"{ontology_id}:PipelineRecord:concept")
+    state.mapped_concept_ids.setdefault(ontology_id, set()).add(concept_id)
+    state.mapped_instance_counts[concept_id] = state.mapped_instance_counts.get(concept_id, 0) + 12
+    return 200, {"mapping_id": mapping_id, "instances_written": state.mapped_instance_counts[concept_id]}
+
+
 def _publish_ontology(state: _FakeState, match: "re.Match[str]", _body: dict) -> tuple[int, Any]:
     if "ontology_release" in state.dropped:
         raise _FakeNotFound("ONTOLOGY_NOT_FOUND")
     ontology_id = match.group("ontology_id")
+    release_id = _uuid_for(f"{ontology_id}:release")
+    entity_ids = {entity["id"] for entity in state.entities.get(ontology_id, [])}
+    entity_ids.update(state.mapped_concept_ids.get(ontology_id, set()))
+    state.release_visible_instance_counts[release_id] = sum(
+        count for entity_id, count in state.mapped_instance_counts.items() if entity_id in entity_ids
+    )
     return 201, {"data": {
         "ontology_id": ontology_id,
-        "release_id": _uuid_for(f"{ontology_id}:release"),
+        "release_id": release_id,
         "version_no": 1,
         "status": "published",
         "schema_hash": _hash_for(f"{ontology_id}:schema"),
@@ -599,6 +666,7 @@ _ROUTES: list[tuple[str, str, Handler]] = [
     (r"/api/v1/models/(?P<model_id>[^/]+)/versions", "POST", _create_model_version),
     (r"/api/v2/datasets/upload", "POST", _upload_dataset),
     (r"/api/v2/pipelines", "POST", _create_pipeline),
+    (r"/api/v2/pipelines/(?P<pipeline_id>[^/]+)", "GET", _get_pipeline),
     (r"/api/v2/pipelines/(?P<pipeline_id>[^/]+)/run-sync", "POST", _run_pipeline),
     (r"/api/v2/pipelines/runs/(?P<run_id>[^/]+)", "GET", _get_run),
     (r"/api/v2/curated", "GET", _list_curated),
@@ -607,10 +675,13 @@ _ROUTES: list[tuple[str, str, Handler]] = [
     (r"/api/v1/business-journeys/preparations", "POST", _persist_preparation),
     (r"/api/v1/business-journeys/preparations/(?P<run_id>[^/]+)/(?P<journey_id>[^/]+)", "GET", _get_preparation),
     (r"/api/v1/ontologies", "POST", _create_ontology),
+    (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)", "GET", _get_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/entities", "POST", _create_entity),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/graph/relations", "POST", _create_relation),
     (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/logic", "POST", _create_logic_rule),
     (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/actions", "POST", _create_action_type),
+    (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/mappings", "POST", _create_mapping),
+    (r"/api/v2/ontologies/(?P<ontology_id>[^/]+)/mappings/(?P<mapping_id>[^/]+)/apply-from-dataset", "POST", _apply_mapping_from_dataset),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/mark-created", "POST", _mark_created_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/publish", "POST", _publish_ontology),
     (r"/api/v1/ontologies/(?P<ontology_id>[^/]+)/tools", "GET", _ontology_tools),
@@ -875,6 +946,28 @@ def test_prepare_never_creates_agent_or_turn(fake_api):
     assert preparation.logical_model_calls == 1
 
 
+def test_prepare_maps_approved_curated_records_before_their_release(fake_api):
+    """The prepared release must contain the mapping concept that owns its rows."""
+    preparation = prepare_journey(
+        "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-grounded-records",
+    )
+    mapping_path = f"/api/v2/ontologies/{preparation.ontology_id}/mappings"
+    publish_path = f"/api/v1/ontologies/{preparation.ontology_id}/publish"
+    curated_dataset_ids = _curated_dataset_ids(preparation.pipeline.pipeline_run_id)
+
+    for dataset_id in curated_dataset_ids:
+        apply_path = (
+            f"{mapping_path}/{_uuid_for(f'{preparation.ontology_id}:{dataset_id}:curated-records')}"
+            "/apply-from-dataset"
+        )
+        assert f"POST {mapping_path}" in fake_api.requests
+        assert f"POST {apply_path}" in fake_api.requests
+        assert fake_api.requests.index(f"POST {apply_path}") < fake_api.requests.index(f"POST {publish_path}")
+    assert fake_api.curated_reviews == list(curated_dataset_ids)
+    assert fake_api.release_visible_instance_counts[preparation.ontology_release_id] >= 12 * len(curated_dataset_ids)
+
+
 def test_prepare_binding_options_carry_only_release_descriptors_and_model_version(fake_api):
     preparation = prepare_journey(
         "supply_chain", api_base=fake_api.url, api_key="runtime/runtime",
@@ -906,6 +999,23 @@ def test_prepare_uses_exactly_one_deepseek_completion_and_official_origin(fake_a
     assert preparation.correlation_id == "journey-one-call:supply_chain:ontology:1"
     assert JourneyPreparationBudget().logical_model_calls == 1
     assert JourneyPreparationBudget().max_http_attempts == 2
+
+
+def test_all_preparations_prove_simple_llm_and_connector_pipeline_routes(fake_api, prepared_journeys):
+    preparations = prepare_all_journeys(
+        api_base=fake_api.url,
+        api_key="runtime/runtime",
+        output_dir=Path("artifacts"),
+        run_id="journey-creation-routes",
+        before_journey=prepared_journeys,
+    )
+
+    assert {preparation.journey_id for preparation in preparations} == set(JOURNEY_IDS)
+    for preparation in preparations:
+        evidence = preparation.to_dict()
+        assert evidence["ontology_build_mode"] == "simple_llm"
+        assert evidence["pipeline_execution_mode"] == "run-sync"
+        assert evidence["pipeline_connector_count"] == 1
 
 
 def test_prepare_instructs_deepseek_with_the_exact_journey_semantic_minimum(fake_api):
@@ -973,6 +1083,24 @@ def test_ontology_schema_only_declares_simple_numeric_predicate_paths():
     assert "nested_count" not in schema["required"]
     assert "facts.count" not in schema["properties"]
     assert "facts.count" not in schema["required"]
+
+
+def test_ontology_keyword_contract_is_literal_in_schema_and_instruction():
+    manifest = load_journey_manifest("supply_chain", _RUNTIME_DATA_DIR)
+    keywords = tuple(str(keyword) for keyword in manifest.semantic_minima["keywords"])
+
+    answer_description = str(
+        build_ontology_response_schema(manifest)["properties"]["answer"].get("description", "")
+    )
+    instruction = build_ontology_system_instruction(manifest)
+
+    for keyword in keywords:
+        assert keyword in answer_description
+        assert keyword in instruction
+    contract_phrases = ("verbatim", "exact", "case-insensitive", "literal")
+    for phrase in contract_phrases:
+        assert phrase in answer_description
+        assert phrase in instruction
 
 
 def test_prepare_writes_redacted_semantic_failure_diagnostic(fake_api):
@@ -1108,6 +1236,42 @@ def test_prepare_all_journeys_returns_three_in_fixed_order_and_writes_run_manife
     assert read_run_manifest(Path("artifacts"))["run_id"] == "journey-all"
 
 
+def test_staging_run_manifest_excludes_fixture_sources_and_keeps_browser_loader_projection(
+    prepared_journeys, fake_api,
+):
+    """The browser's manifest needs prepared runtime identities, not source fixtures.
+
+    If staging serialization forwards ``JourneyPreparation.to_dict()``
+    unchanged, the fixture id/hash fields make the artifact scanner reject
+    run.json. Removing any browser-required field would instead make its
+    strict fixture loader reject the preparation.
+    """
+    preparations = prepare_all_journeys(
+        api_base=fake_api.url, api_key="runtime/runtime",
+        output_dir=Path("artifacts"), run_id="journey-staging-projection",
+        before_journey=prepared_journeys,
+    )
+
+    document = read_run_manifest(Path("artifacts"))
+    browser_required_fields = {
+        "run_id", "journey_id", "fixture_version", "fixture_manifest_sha256",
+        "pipeline_id", "pipeline_run_id", "dataset_version_id", "pipeline_status",
+        "curated_dataset_id", "curated_review_id", "curated_status", "ontology_id",
+        "ontology_release_id", "release_status", "semantic_snapshot_id", "grant_id",
+        "grant_status", "model_config_id", "model_config_version_id", "model_caller",
+        "model_origin", "preflight_model_id", "requested_model_id", "observed_model_id",
+        "correlation_id", "status",
+    }
+    for entry in document["preparations"]:
+        assert browser_required_fields <= entry.keys()
+        assert "input_fixture_ids" not in entry
+        assert "input_hashes" not in entry
+    # Preparation evidence itself remains complete; only its staged projection
+    # is narrowed.
+    assert all("input_fixture_ids" in preparation.to_dict() for preparation in preparations)
+    assert all("input_hashes" in preparation.to_dict() for preparation in preparations)
+
+
 def test_prepare_writes_the_models_extraction_into_the_ontology_before_publishing(fake_api):
     """The ontology completion is the ONE real model-grounded step in the
     whole plan, and its extraction used to be thrown away: `prepare_journey`
@@ -1219,7 +1383,7 @@ def test_prepare_approves_this_runs_own_curated_dataset_not_the_newest_one(fake_
     )
     own = _curated_dataset_id(preparation.pipeline.pipeline_run_id)
     assert preparation.curated.curated_dataset_id == own
-    assert fake_api.curated_reviews == [own]
+    assert fake_api.curated_reviews == list(_curated_dataset_ids(preparation.pipeline.pipeline_run_id))
     assert fake_api.extra_curated[0]["id"] not in fake_api.curated_reviews
 
 

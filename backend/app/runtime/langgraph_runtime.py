@@ -50,6 +50,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TOOL_ROUNDS = 5
 MODEL_TIMEOUT_SECONDS = 120
+# The checked-in business-journey acceptance sources have at most 180 tabular
+# rows across their two largest mapped outputs (80 + 100).  Keep the one
+# governed read bounded while making its evidence window complete for them.
+JOURNEY_GROUNDED_READ_LIMIT = 200
 
 # model tool name -> gateway descriptor mapping (names must be alphanumeric
 # for the OpenAI function contract; ":"/"-" are escaped deterministically)
@@ -183,7 +187,8 @@ def _agent_final_response_schema(expected_low_risk_action: str) -> dict:
     return schema
 
 
-def journey_system_instruction(call_kind: str, expected_low_risk_action: str) -> str:
+def journey_system_instruction(call_kind: str, expected_low_risk_action: str,
+                               required_keywords: tuple[str, ...] = ()) -> str:
     """The `system` message that tells the model what THIS business-journey
     completion is required to produce.
 
@@ -224,6 +229,9 @@ def journey_system_instruction(call_kind: str, expected_low_risk_action: str) ->
             "when a tool call was made, that tool's JSON result.",
             "Answer using ONLY that tool result, and populate every required field.",
         ]
+        if required_keywords:
+            from evals.business_journeys.api_client import _answer_keyword_contract
+            lines.append(_answer_keyword_contract(required_keywords))
         if expected_low_risk_action:
             lines.extend([
                 "When the tool result contains at least one row you MUST also populate "
@@ -322,6 +330,7 @@ class LangGraphRuntime:
     _caller_info: dict | None = field(default=None, init=False, repr=False)
     _release_by_ontology: dict[str, str | None] = field(default_factory=dict, init=False, repr=False)
     _business_journey: dict | None = field(default=None, init=False, repr=False)
+    _journey_answer_keywords: tuple[str, ...] = field(default_factory=tuple, init=False, repr=False)
 
     # ------------------------------------------------------------------ graph
     async def start_turn(self, context: TurnRuntimeContext) -> list[RuntimeEvent]:
@@ -422,6 +431,7 @@ class LangGraphRuntime:
         self._journey_preflight_model_id = None
         self._journey_security_domain_id = None
         self._journey_low_risk_action = None
+        self._journey_answer_keywords = ()
         if self._business_journey is not None:
             row = self.db.execute(text(
                 "SELECT u.security_domain_id FROM agent_sessions s "
@@ -438,11 +448,19 @@ class LangGraphRuntime:
             # automatic_action` both treat that as "no constraint" rather
             # than failing the turn.
             from evals.business_journeys.contracts import BusinessJourneyModelError
-            from evals.business_journeys.orchestrator import get_journey_low_risk_action
+            from evals.business_journeys.orchestrator import (
+                _RUNTIME_DATA_DIR,
+                get_journey_low_risk_action,
+                load_journey_manifest,
+            )
 
             journey_id = self._business_journey.get("journey_id") or ""
             try:
                 self._journey_low_risk_action = get_journey_low_risk_action(journey_id)
+                manifest = load_journey_manifest(journey_id, _RUNTIME_DATA_DIR)
+                self._journey_answer_keywords = tuple(
+                    str(keyword) for keyword in manifest.semantic_minima.get("keywords") or ()
+                )
             except (ValueError, BusinessJourneyModelError) as exc:
                 raise RuntimeModelError("JOURNEY_MANIFEST_INVALID", str(exc)) from exc
         if self.caller is not None:
@@ -646,7 +664,7 @@ class LangGraphRuntime:
                 self._journey_context(context, call_kind="agent_final", logical_call_index=3),
                 final_parts, response_schema=_agent_final_response_schema(self._journey_low_risk_action or ""),
                 system_instruction=journey_system_instruction(
-                    "agent_final", self._journey_low_risk_action or ""),
+                    "agent_final", self._journey_low_risk_action or "", self._journey_answer_keywords),
             )
         except BusinessJourneyModelError as exc:
             from app.services.business_journey_ledger import fail_runtime_call
@@ -745,6 +763,7 @@ class LangGraphRuntime:
         try:
             return reserve_runtime_call(
                 self.db, run_id=run_id, journey_id=journey_id,
+                turn_id=context.turn_id,
                 logical_call_index=logical_call_index, call_kind=call_kind,
                 correlation_id=f"{run_id}:{journey_id}:{call_kind}:{logical_call_index}",
                 model_config_version_id=context.model_config_version_id,
@@ -798,10 +817,10 @@ class LangGraphRuntime:
         ontology_id = binding["ontology_id"]
         descriptor_id = self._published_query_descriptor_id(ontology_id)
         release_id = self._release_by_ontology.get(ontology_id)
-        query_text = str(tool_call.get("query") or "")
         parameters = {
             "ontology_id": ontology_id, "release_id": release_id,
-            "query": query_text, "limit": 10, "sort_by": None, "sort_order": None,
+            "query": "", "limit": JOURNEY_GROUNDED_READ_LIMIT,
+            "sort_by": None, "sort_order": None,
         }
         canonical_params = json.dumps(
             {"descriptor_id": descriptor_id, "parameters": parameters},

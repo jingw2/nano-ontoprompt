@@ -7,12 +7,14 @@ fence, releases the session pointer and resolves the outbox.  Evidence:
 publisher args/state, persisted events + message + terminal + pointer +
 outbox-resolution, and the fail-closed fence path.
 """
+import asyncio
 import json
 import os
 import subprocess
 import sys
 import threading
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -468,6 +470,149 @@ def test_worker_task_persists_and_finalizes_end_to_end(schema, monkeypatch, mock
     assert outbox["state"] == "resolved_terminal"
     assert outbox["resolution"] == "terminal"
     session.close()
+
+
+def test_worker_heartbeat_keeps_long_running_claim_fenced(schema, monkeypatch):
+    """A runtime that outlives the initial lease can still finalize its turn."""
+
+    session = _session(schema)
+    _seed_worker_graph(session)
+
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+
+    from app.runtime.protocol import RuntimeEvent
+    from app.services.runtime import dispatch as dispatch_service
+    from app.services.runtime.dispatch import publish_pending_dispatch
+    from app.tasks.agent_turn import agent_turn_execute
+
+    original_claim_turn = dispatch_service.claim_turn
+    original_heartbeat_turn = dispatch_service.heartbeat_turn
+    observed_lease_seconds = []
+    observed_claims = []
+    observed_heartbeats = []
+
+    def claim_with_short_lease(db, **kwargs):
+        observed_lease_seconds.append(1)
+        claim = original_claim_turn(db, lease_seconds=1, **kwargs)
+        observed_claims.append(claim)
+        return claim
+
+    monkeypatch.setattr(dispatch_service, "claim_turn", claim_with_short_lease)
+
+    def heartbeat_with_observation(db, **kwargs):
+        observed_heartbeats.append(kwargs)
+        return original_heartbeat_turn(db, **kwargs)
+
+    monkeypatch.setattr(dispatch_service, "heartbeat_turn", heartbeat_with_observation)
+    monkeypatch.setattr("app.tasks.agent_turn._HEARTBEAT_INTERVAL_SECONDS", 0.2)
+
+    async def delayed_runtime_start(self, context):
+        await asyncio.sleep(1.5)
+        # A real runtime may commit while resolving a tool/model path.  End
+        # the worker's pre-runtime transaction so the finalizer evaluates the
+        # lease against the current database clock, rather than PostgreSQL's
+        # transaction-start `now()` from context assembly.
+        self._runtime.db.commit()
+        return [
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="turn_started", sequence=1,
+            ),
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="final_response", sequence=2,
+                payload={"message": "delayed answer"},
+            ),
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="turn_succeeded", sequence=3,
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "app.runtime.langgraph_adapter.LangGraphRuntimeAdapter.start",
+        delayed_runtime_start,
+    )
+
+    try:
+        publish_pending_dispatch(session)
+        result = agent_turn_execute.run("t-1", 1, "test-worker", "test-token")
+
+        assert observed_lease_seconds == [1]
+        assert observed_claims[0]["lease_expires_at"] < datetime.now(timezone.utc)
+        assert observed_heartbeats
+        assert all(heartbeat["turn_id"] == "t-1" for heartbeat in observed_heartbeats)
+        assert all(heartbeat["claim_token"] == "test-token" for heartbeat in observed_heartbeats)
+        assert result["status"] == "succeeded"
+        assert session.execute(text(
+            "SELECT status FROM agent_turns WHERE id = 't-1'"
+        )).scalar_one() == "succeeded"
+    finally:
+        session.close()
+
+
+def test_worker_fails_closed_when_heartbeat_loses_fence(schema, monkeypatch):
+    """A failed heartbeat prevents runtime output from being persisted."""
+
+    session = _session(schema)
+    _seed_worker_graph(session)
+
+    scoped = sessionmaker(bind=create_engine(_scoped_url(schema)))
+    monkeypatch.setattr("app.database.SessionLocal", scoped)
+
+    from app.runtime.protocol import RuntimeEvent
+    from app.services.runtime import dispatch as dispatch_service
+    from app.services.runtime.dispatch import DispatchError, publish_pending_dispatch
+    from app.tasks.agent_turn import agent_turn_execute
+
+    original_claim_turn = dispatch_service.claim_turn
+
+    def claim_with_short_lease(db, **kwargs):
+        return original_claim_turn(db, lease_seconds=1, **kwargs)
+
+    def lost_fence_heartbeat(db, **kwargs):
+        raise DispatchError("TURN_FENCE_LOST")
+
+    monkeypatch.setattr(dispatch_service, "claim_turn", claim_with_short_lease)
+    monkeypatch.setattr(dispatch_service, "heartbeat_turn", lost_fence_heartbeat)
+    monkeypatch.setattr("app.tasks.agent_turn._HEARTBEAT_INTERVAL_SECONDS", 0.2)
+
+    async def delayed_runtime_start(self, context):
+        await asyncio.sleep(0.5)
+        return [
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="turn_started", sequence=1,
+            ),
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="final_response", sequence=2,
+                payload={"message": "must not persist"},
+            ),
+            RuntimeEvent(
+                turn_id=context.turn_id, event_type="turn_succeeded", sequence=3,
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "app.runtime.langgraph_adapter.LangGraphRuntimeAdapter.start",
+        delayed_runtime_start,
+    )
+
+    try:
+        publish_pending_dispatch(session)
+        with pytest.raises(DispatchError, match="TURN_FENCE_LOST"):
+            agent_turn_execute.run("t-1", 1, "test-worker", "test-token")
+
+        assert session.execute(text(
+            "SELECT count(*) FROM agent_runtime_events WHERE turn_id = 't-1'"
+        )).scalar_one() == 0
+        assert session.execute(text(
+            "SELECT count(*) FROM agent_messages WHERE turn_id = 't-1' AND role = 'assistant'"
+        )).scalar_one() == 0
+        turn = session.execute(text(
+            "SELECT status, response_message_id FROM agent_turns WHERE id = 't-1'"
+        )).mappings().one()
+        assert turn["status"] != "succeeded"
+        assert turn["response_message_id"] is None
+    finally:
+        session.close()
 
 
 def test_worker_answer_differs_per_question(schema, monkeypatch, mock_chat_server):

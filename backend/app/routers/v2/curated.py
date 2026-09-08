@@ -228,8 +228,12 @@ def _require_run_curated_dataset(db: Session, pipeline_run_id: str, dataset_id: 
     from app.models.v2.pipeline import PipelineRun
 
     run = db.get(PipelineRun, pipeline_run_id)
-    output = str((run.stats or {}).get("curated_dataset_id") or "") if run else ""
-    if run is None or not run.is_governed or output != dataset_id:
+    stats = run.stats or {} if run else {}
+    outputs = {str(stats.get("curated_dataset_id") or "")}
+    listed_outputs = stats.get("curated_dataset_ids") or ()
+    if isinstance(listed_outputs, (list, tuple)):
+        outputs.update(str(output) for output in listed_outputs if output)
+    if run is None or not run.is_governed or dataset_id not in outputs:
         raise HTTPException(status_code=422, detail="CURATED_DATASET_RUN_MISMATCH")
 
 
