@@ -24,6 +24,7 @@ class SessionOut(BaseModel):
     owner_user_id: str
     status: str
     active_turn_id: Optional[str] = None
+    title: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

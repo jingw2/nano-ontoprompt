@@ -35,20 +35,32 @@ def _correlation(operation: str, turn_id: str) -> str:
     return f"turn:{operation}:{turn_id}"
 
 
+_TITLE_MAX_LENGTH = 60
+
+
+def _derive_title(text_: str) -> str:
+    """A short, human-readable session label from a message's text -- the
+    first line, trimmed and length-capped, never the raw session id."""
+    first_line = text_.strip().splitlines()[0].strip() if text_.strip() else ""
+    if len(first_line) > _TITLE_MAX_LENGTH:
+        return first_line[:_TITLE_MAX_LENGTH] + "…"
+    return first_line
+
+
 def create_session(db: Session, *, agent_id: str, actor_id: str, title: str | None = None) -> dict:
     """Create a session owned by the actor for the agent."""
     session_id = _new_id()
     db.execute(text(
-        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, created_at, updated_at) "
-        "VALUES (:id, :agent, :owner, 'active', now(), now())"
-    ), {"id": session_id, "agent": agent_id, "owner": actor_id})
+        "INSERT INTO agent_sessions (id, agent_id, owner_user_id, status, title, created_at, updated_at) "
+        "VALUES (:id, :agent, :owner, 'active', :title, now(), now())"
+    ), {"id": session_id, "agent": agent_id, "owner": actor_id, "title": title})
     db.commit()
     return _session_out(db, session_id)
 
 
 def _session_out(db: Session, session_id: str) -> dict:
     row = db.execute(text(
-        "SELECT id, agent_id, owner_user_id, status, active_turn_id, created_at, updated_at "
+        "SELECT id, agent_id, owner_user_id, status, active_turn_id, title, created_at, updated_at "
         "FROM agent_sessions WHERE id = :id"
     ), {"id": session_id}).mappings().one()
     return dict(row)
@@ -56,7 +68,7 @@ def _session_out(db: Session, session_id: str) -> dict:
 
 def list_sessions(db: Session, *, agent_id: str, actor_id: str, limit: int = 50) -> dict:
     rows = db.execute(text(
-        "SELECT id, agent_id, owner_user_id, status, active_turn_id, created_at, updated_at "
+        "SELECT id, agent_id, owner_user_id, status, active_turn_id, title, created_at, updated_at "
         "FROM agent_sessions WHERE agent_id = :agent AND owner_user_id = :owner "
         "ORDER BY updated_at DESC LIMIT :limit"
     ), {"agent": agent_id, "owner": actor_id, "limit": limit}).mappings().all()
@@ -65,7 +77,7 @@ def list_sessions(db: Session, *, agent_id: str, actor_id: str, limit: int = 50)
 
 def get_session(db: Session, *, session_id: str, actor_id: str) -> dict:
     row = db.execute(text(
-        "SELECT id, agent_id, owner_user_id, status, active_turn_id, created_at, updated_at "
+        "SELECT id, agent_id, owner_user_id, status, active_turn_id, title, created_at, updated_at "
         "FROM agent_sessions WHERE id = :id"
     ), {"id": session_id}).mappings().one_or_none()
     if row is None or row["owner_user_id"] != actor_id:
@@ -119,7 +131,7 @@ def create_turn(
     active pointer + dispatch outbox, and commit — 202 only after commit.
     A repeated `turn_id` replays the stored Turn (no duplicate rows)."""
     session = db.execute(text(
-        "SELECT id, owner_user_id, status FROM agent_sessions WHERE id = :id FOR UPDATE"
+        "SELECT id, owner_user_id, status, title FROM agent_sessions WHERE id = :id FOR UPDATE"
     ), {"id": session_id}).mappings().one_or_none()
     if session is None or session["owner_user_id"] != actor_id:
         db.rollback()
@@ -158,6 +170,14 @@ def create_turn(
             "VALUES (:id, :sid, :turn, 'user', :ord, :content, now())"
         ), {"id": message_id, "sid": session_id, "turn": final_turn_id,
             "ord": ordinal, "content": user_message})
+        # The session's own first user message becomes its title -- the
+        # sidebar's real replacement for the raw session id (never set once
+        # a session already has a title, including one supplied explicitly
+        # at `create_session` time).
+        if ordinal == 1 and not session["title"]:
+            db.execute(text(
+                "UPDATE agent_sessions SET title = :title WHERE id = :id"
+            ), {"title": _derive_title(user_message), "id": session_id})
         db.execute(text(
             "UPDATE agent_turns SET request_message_id = :mid, updated_at = now() WHERE id = :id"
         ), {"mid": message_id, "id": final_turn_id})

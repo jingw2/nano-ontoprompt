@@ -62,6 +62,9 @@ class AgentSession(Base):
     active_turn_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("agent_turns.id", ondelete="SET NULL"), nullable=True
     )
+    # Set once, from the session's own first user message (see
+    # `runtime.turns.create_turn`) -- never a raw session id in the UI.
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

@@ -6,6 +6,7 @@ export interface AgentSession {
   owner_user_id: string
   status: string
   active_turn_id?: string | null
+  title?: string | null
   created_at?: string | null
   updated_at?: string | null
 }

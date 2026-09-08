@@ -10,6 +10,7 @@ interface Props {
 
 export default function SessionSidebar({ sessions, activeSessionId, onSelect, onNew }: Props) {
   const { t } = useTranslation()
+
   return (
     <div className="border-r w-56 shrink-0 flex flex-col" data-testid="session-sidebar">
       <div className="p-3 border-b">
@@ -22,8 +23,9 @@ export default function SessionSidebar({ sessions, activeSessionId, onSelect, on
         {sessions.map(s => (
           <button key={s.id} type="button"
             onClick={() => onSelect(s.id)}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${activeSessionId === s.id ? 'bg-black text-white' : 'hover:bg-gray-100'}`}>
-            {s.id.slice(0, 8)}
+            title={s.title || undefined}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate ${activeSessionId === s.id ? 'bg-black text-white' : 'hover:bg-gray-100'}`}>
+            {s.title || t('agent.app.new_chat', '新对话')}
             {s.status === 'closed' && <span className="ml-2 text-xs opacity-60">closed</span>}
           </button>
         ))}

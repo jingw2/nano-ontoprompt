@@ -36,7 +36,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-const SESSION = { id: 's-1', agent_id: 'a-1', owner_user_id: 'u-1', status: 'active' }
+const SESSION = { id: 's-1', agent_id: 'a-1', owner_user_id: 'u-1', status: 'active', title: '第一个会话' }
 
 describe('P4B-STREAMUI', () => {
   it('red contract: requires the stream clients, tab, sidebar and panel', () => {
@@ -57,14 +57,16 @@ describe('P4B-STREAMUI', () => {
       http.get('*/api/v1/agents/a-1/sessions', () =>
         HttpResponse.json({ data: { items: [SESSION], next_cursor: null, has_more: false }, message: 'ok' })),
       http.post('*/api/v1/agents/a-1/sessions', () =>
-        HttpResponse.json({ data: { ...SESSION, id: 's-2' }, message: 'ok' }, { status: 201 })),
+        HttpResponse.json({ data: { ...SESSION, id: 's-2', title: null }, message: 'ok' }, { status: 201 })),
       http.get('*/api/v1/agent-sessions/s-2/messages', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
+    await screen.findByText('第一个会话')
     await userEvent.click(screen.getByRole('button', { name: '+ 新会话' }))
-    expect(await screen.findByText(/s-2/)).toBeTruthy()
+    // the new, title-less session shows the fallback label -- never the raw session id
+    expect(await screen.findByText('新对话')).toBeTruthy()
   })
 
   it('sends a message and streams events with clarification answer', async () => {
@@ -98,7 +100,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -148,7 +150,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'approve this order')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -178,7 +180,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -211,7 +213,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(screen.getByText('TOOL_ROUND_LIMIT')).toBeTruthy()
   })
@@ -234,7 +236,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     expect(screen.queryByRole('alert')).toBeNull()
   })
@@ -269,7 +271,7 @@ describe('P4B-STREAMUI', () => {
     await screen.findByTestId('session-sidebar')
     // no turn yet — the trace toggle is disabled
     expect(screen.getByTestId('trace-toggle')).toHaveProperty('disabled', true)
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -332,7 +334,7 @@ describe('P4B-STREAMUI', () => {
     )
     render(<AgentApplicationTab agentId="a-1" />)
     await screen.findByTestId('session-sidebar')
-    await userEvent.click(screen.getByText(/s-1/))
+    await userEvent.click(screen.getByText('第一个会话'))
     await waitFor(() => expect(screen.getByTestId('conversation-panel')).toBeTruthy())
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), 'hello')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))

@@ -19,6 +19,14 @@ interface Props {
 
 const TURN_POLL_INTERVAL_MS = 1500
 const TURN_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
+const TITLE_MAX_LENGTH = 60
+
+/** Mirrors the backend's own title derivation (`turns._derive_title`) so the
+ * sidebar shows the real title immediately, before any session refetch. */
+function deriveTitle(text: string): string {
+  const firstLine = text.trim().split(/\r?\n/)[0]?.trim() ?? ''
+  return firstLine.length > TITLE_MAX_LENGTH ? `${firstLine.slice(0, TITLE_MAX_LENGTH)}…` : firstLine
+}
 
 export default function AgentApplicationTab({ agentId }: Props) {
   const { t } = useTranslation()
@@ -36,6 +44,9 @@ export default function AgentApplicationTab({ agentId }: Props) {
   // persisted events) — the polling fallback takes over from here
   const [sseDone, setSseDone] = useState(false)
   const lastSeqRef = useRef(0)
+  // read inside sendMessage without adding `messages` to its deps
+  const messagesRef = useRef<AgentMessage[]>([])
+  useEffect(() => { messagesRef.current = messages }, [messages])
   // the Agent's bound ontology (for the governed high-risk plan panel's
   // disposable-target listing) — not otherwise loaded by this tab.
   const [boundOntologyId, setBoundOntologyId] = useState<string | null>(null)
@@ -154,6 +165,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
 
   const sendMessage = useCallback((text: string) => {
     if (!activeSessionId) return
+    const isFirstMessage = messagesRef.current.length === 0
     setStream({ ...initialStreamState, phase: 'connecting' })
     setSseDone(false)
     agentStreamApi.createTurn(activeSessionId, text)
@@ -163,6 +175,12 @@ export default function AgentApplicationTab({ agentId }: Props) {
           id: `local-${Date.now()}`, session_id: activeSessionId, role: 'user',
           ordinal: prev.length + 1, content: text,
         }])
+        // the sidebar's title comes from the session's first message -- set
+        // it locally so it shows immediately, without waiting on a refetch
+        if (isFirstMessage) {
+          const title = deriveTitle(text)
+          setSessions(prev => prev.map(s => (s.id === activeSessionId && !s.title) ? { ...s, title } : s))
+        }
         const ticket = await agentStreamApi.streamTicket(accepted.turn_id)
         await openStream(accepted.turn_id, ticket.ticket)
       })
