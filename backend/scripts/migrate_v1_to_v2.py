@@ -4,8 +4,8 @@ v1 (SQLite) → v2 (PostgreSQL + Neo4j + ChromaDB) 数据迁移脚本
 
 用法：
   python scripts/migrate_v1_to_v2.py \
-    --v1-db ./ontoprompt.db \
-    --pg-url postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt \
+    --v1-db ./ontexus.db \
+    --pg-url postgresql://ontexus:ontexus@localhost:5432/ontexus \
     [--dry-run] \
     [--report migration_report.json]
 
@@ -393,7 +393,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--v1-db", default="./ontoprompt.db", help="v1 SQLite 路径")
+    parser.add_argument("--v1-db", default="./ontexus.db", help="v1 SQLite 路径")
     parser.add_argument("--pg-url", required=True, help="v2 PostgreSQL 连接字符串")
     parser.add_argument("--dry-run", action="store_true", help="预演模式（不写入任何数据）")
     parser.add_argument("--report", default="", help="输出报告到 JSON 文件路径")

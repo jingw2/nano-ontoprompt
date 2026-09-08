@@ -30,6 +30,12 @@ interface DatasetRow {
   curatedId: string; curatedName: string; curatedStatus: string
   rowCount: number | null; qualityScore: number | null
 }
+interface BuildResult {
+  total_entities?: number
+  total_relations?: number
+  total_logic?: number
+  total_actions?: number
+}
 
 // Human Review 已移除 — 用户可在本体详情页自行修改
 const BUILD_PHASES = [
@@ -107,7 +113,7 @@ export default function OntologyCreateWizard() {
   // Building state
   const [currentPhase, setCurrentPhase] = useState(0)
   const [phaseStatus, setPhaseStatus] = useState<string[]>(Array(BUILD_PHASES.length).fill('pending'))
-  const [buildResult, setBuildResult] = useState<any>(null)
+  const [buildResult, setBuildResult] = useState<BuildResult | null>(null)
   const [buildError, setBuildError] = useState('')
   const [buildDone, setBuildDone] = useState(false)
 
@@ -123,7 +129,9 @@ export default function OntologyCreateWizard() {
   }
 
   useEffect(() => {
-    if (step === 'select_datasets' || step === 'approve_data') loadDatasets()
+    if (step !== 'select_datasets' && step !== 'approve_data') return
+    const t = setTimeout(loadDatasets, 0)
+    return () => clearTimeout(t)
   }, [step])
 
   // Join pipelines with curated datasets
@@ -173,7 +181,12 @@ export default function OntologyCreateWizard() {
   }, [approvedRows, pipelineFilter, curatedFilter])
 
   const toggleDataset = (id: string) => {
-    setSelectedDatasetIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setSelectedDatasetIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
   }
 
   const allFilteredSelected =
@@ -255,7 +268,7 @@ export default function OntologyCreateWizard() {
     mark(1, 'done'); mark(2, 'running'); setCurrentPhase(2)
 
     try {
-      const res: any = await apiClientV2.post(`/ontologies/${createdOntologyId}/mappings/build-all`)
+      const res = await apiClientV2.post<BuildResult>(`/ontologies/${createdOntologyId}/mappings/build-all`)
       setBuildResult(res)
       mark(2, 'done'); mark(3, 'running'); setCurrentPhase(3); await sleep(500)
       mark(3, 'done'); mark(4, 'running'); setCurrentPhase(4); await sleep(500)
@@ -264,21 +277,22 @@ export default function OntologyCreateWizard() {
       mark(6, 'done'); mark(7, 'running'); await sleep(300)
       mark(7, 'done'); setCurrentPhase(8)
       setBuildDone(true)
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e as { message?: string; detail?: string }
       mark(2, 'failed')
-      setBuildError(e?.message || e?.detail || '构建失败')
+      setBuildError(err?.message || err?.detail || '构建失败')
     }
   }
 
   const createMut = useMutation({
     mutationFn: () => ontologyApi.create({ name, domain, description: desc, build_mode: mode }),
-    onSuccess: (res: any) => {
+    onSuccess: (res: { id: string }) => {
       qc.invalidateQueries({ queryKey: ['ontologies'] })
       qc.invalidateQueries({ queryKey: ['stats'] })
       if (mode === 'simple_llm') navigate(`/ontologies/${res.id}?tab=files`)
       else { setCreatedOntologyId(res.id); setStep('select_datasets') }
     },
-    onError: (e: any) => { setError(e?.message || e?.detail?.message || '创建失败') },
+    onError: (e: { message?: string; detail?: { message?: string } }) => { setError(e?.message || e?.detail?.message || '创建失败') },
   })
 
   // ── Steps ──────────────────────────────────────────────────────────

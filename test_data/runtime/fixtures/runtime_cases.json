@@ -1,0 +1,94 @@
+{
+  "cases": {
+    "runtime-allow-no-matches": {
+      "case_id": "runtime-allow-no-matches",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count": 0
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-03"
+    },
+    "runtime-allow-with-data": {
+      "case_id": "runtime-allow-with-data",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count_min": 1
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-02"
+    },
+    "runtime-evidence-citations": {
+      "case_id": "runtime-evidence-citations",
+      "expected": {
+        "citation_count_min": 1,
+        "decision": "ALLOW"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    },
+    "runtime-expired-plan": {
+      "case_id": "runtime-expired-plan",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "PLAN_EXPIRED"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-08"
+    },
+    "runtime-immutable-read-only-plan": {
+      "case_id": "runtime-immutable-read-only-plan",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_writable": false
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-06"
+    },
+    "runtime-policy-denial": {
+      "case_id": "runtime-policy-denial",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "AGENT_CAPABILITY_DENIED"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-05"
+    },
+    "runtime-rule-outcomes": {
+      "case_id": "runtime-rule-outcomes",
+      "expected": {
+        "decision": "ALLOW",
+        "rule_outcome": "matched"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "runtime-stable-denial-codes": {
+      "case_id": "runtime-stable-denial-codes",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIED"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-09"
+    },
+    "runtime-structured-deny": {
+      "case_id": "runtime-structured-deny",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "POLICY_DENIED"
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-04"
+    },
+    "runtime-writable-plan-binding": {
+      "case_id": "runtime-writable-plan-binding",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_writable": true
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-07"
+    }
+  }
+}

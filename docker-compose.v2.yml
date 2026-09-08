@@ -3,13 +3,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ontoprompt
-      POSTGRES_USER: ontoprompt
-      POSTGRES_PASSWORD: ontoprompt
+      POSTGRES_DB: ontexus
+      POSTGRES_USER: ontexus
+      POSTGRES_PASSWORD: ontexus
     ports: ["5432:5432"]
-    volumes: [pg_data:/var/lib/postgresql/data]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./backend/scripts/postgres-initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ontoprompt"]
+      test: ["CMD-SHELL", "pg_isready -U ontexus"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,7 +31,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: neo4j/ontoprompt123
+      NEO4J_AUTH: neo4j/ontexus123
     volumes: [neo4j_data:/data]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
@@ -63,13 +65,22 @@ services:
       timeout: 5s
       retries: 5
 
+  migration:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes: [./backend:/app]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python scripts/run_migrations.py upgrade head"
+
   backend:
     build: ./backend
     ports: ["8000:8000"]
     env_file: .env
     depends_on:
-      db:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -79,14 +90,174 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
-  celery_worker:
+  # Task 6A: explicit queue-bound worker profiles. The default `docker
+  # compose up` (no --profile) starts none of these — each is gated behind
+  # its own profile so a plain v2 dev-up stays lightweight; enable with
+  # `--profile refresh` / `--profile artifact` / `--profile agent` /
+  # `--profile housekeeping` (or several at once). `celery_beat` below stays
+  # unprofiled since it only ever publishes/schedules, never consumes.
+  refresh_schedule_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.schedule --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_poll_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.poll --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_event_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.event --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  refresh_replay_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["refresh"]
+    environment:
+      REFRESH_WORKER_CONCURRENCY: ${REFRESH_WORKER_CONCURRENCY:-2}
+      REFRESH_WORKER_PREFETCH_MULTIPLIER: ${REFRESH_WORKER_PREFETCH_MULTIPLIER:-1}
+      REFRESH_SOFT_TIME_LIMIT_SECONDS: ${REFRESH_SOFT_TIME_LIMIT_SECONDS:-300}
+      REFRESH_HARD_TIME_LIMIT_SECONDS: ${REFRESH_HARD_TIME_LIMIT_SECONDS:-360}
+      REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    stop_grace_period: ${REFRESH_WORKER_SHUTDOWN_GRACE_SECONDS:-40}s
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q refresh.replay --concurrency=${REFRESH_WORKER_CONCURRENCY:-2} --prefetch-multiplier=1"
+
+  artifact_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["artifact"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q artifact.extraction --prefetch-multiplier=1"
+
+  agent_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["agent"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads, ./test_data:/test_data:ro]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q agent.interactive --prefetch-multiplier=1"
+
+  housekeeping_worker:
+    build: ./backend
+    env_file: .env
+    profiles: ["housekeeping"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q housekeeping --prefetch-multiplier=1"
+
+  celery_beat:
     build: ./backend
     env_file: .env
     depends_on:
-      db:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -96,7 +267,7 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: celery -A app.tasks.extraction worker --loglevel=info
+    command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app beat --loglevel=info"
 
   frontend:
     build: ./frontend

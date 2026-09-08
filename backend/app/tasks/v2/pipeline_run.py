@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
+from typing import Sequence
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -242,23 +244,38 @@ def _collect_sources(db, pl) -> list[dict]:
     return unique_sources
 
 
-def _load_source_rows(db, svc, source: dict, limit: int = 10000) -> list[dict]:
-    from app.models.v2.dataset import DatasetVersion
+def _load_source_rows(
+    db,
+    svc,
+    source: dict,
+    limit: int = 10000,
+    input_dataset_version_ids=None,
+    selected_version=None,
+) -> list[dict]:
+    if selected_version is None:
+        from app.services.v2.incremental.polling import select_pinned_dataset_version
 
+        selected_version = select_pinned_dataset_version(
+            db,
+            dataset_id=source["dataset_id"],
+            input_dataset_version_ids=input_dataset_version_ids,
+        )
+    version = selected_version
     if source["route"] == "C":
-        ver = db.query(DatasetVersion).filter(
-            DatasetVersion.dataset_id == source["dataset_id"]
-        ).order_by(DatasetVersion.version_no.desc()).first()
-        if not ver or not ver.storage_uri:
+        if not version or not version.storage_uri:
             return []
-        raw = svc._storage.get_object(ver.storage_uri)
+        raw = svc._storage.get_object(version.storage_uri)
         return [{
             "filename": source["filename"],
             "content": raw,
-            "storage_uri": ver.storage_uri,
+            "storage_uri": version.storage_uri,
             "source_dataset_id": source["dataset_id"],
         }]
-    return svc.preview(source["dataset_id"], 1, limit=limit)
+    if version is None:
+        return []
+    return svc.preview(
+        source["dataset_id"], version.version_no, limit=limit, version_id=version.id,
+    )
 
 
 def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], object]:
@@ -316,7 +333,7 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     name_parts.append("curated")
     ds_name = " ".join(name_parts)
     curated_ds = svc.create_dataset(name=ds_name, kind="curated")
-    svc.create_version(curated_ds.id, _safe_csv_bytes(data), rowcount=len(data))
+    curated_version = svc.create_version(curated_ds.id, _safe_csv_bytes(data), rowcount=len(data))
 
     if data:
         try:
@@ -339,6 +356,7 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
         "route": source["route"],
         "table_name": table_name,
         "curated_dataset_id": curated_ds.id,
+        "curated_dataset_version_id": curated_version.id,
         "rows_in": ctx.rows_in,
         "rows_out": len(data),
         "meta": ctx.meta,
@@ -357,13 +375,18 @@ def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, mult
     return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source)]
 
 
-def pipeline_run_task(pipeline_id: str, run_id: str):
+def pipeline_run_task(
+    pipeline_id: str, run_id: str,
+    input_dataset_version_ids: Sequence[str] | None = None,
+):
     """Pipeline 执行任务 — 支持 DAG 编译 + 节点状态追踪"""
     from app.database import SessionLocal
-    from app.models.v2.pipeline import Pipeline, PipelineRun
+    from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineRunInput
+    from app.models.v2.dataset import DatasetVersion
     from app.services.v2.pipeline.base import PipelineContext
     from app.services.v2.pipeline.dag_compiler import compile_definition
     from app.services.v2.dataset_service import DatasetService
+    from app.services.v2.incremental.polling import select_pinned_dataset_version
 
     db = SessionLocal()
     try:
@@ -398,6 +421,22 @@ def pipeline_run_task(pipeline_id: str, run_id: str):
         if not sources:
             raise ValueError("Pipeline has no source datasets")
 
+        # Refresh polling pins every input version before dispatch.  Keep the
+        # durable PipelineRunInput order when the worker is replayed without
+        # an explicit argument; otherwise the task payload carries the exact
+        # versions selected by the refresh outcome.
+        if input_dataset_version_ids is None:
+            input_dataset_version_ids = [value for value in db.query(PipelineRunInput.dataset_version_id).filter(
+                PipelineRunInput.pipeline_run_id == run.id,
+            ).order_by(PipelineRunInput.input_ordinal).all()]
+            input_dataset_version_ids = [value[0] for value in input_dataset_version_ids]
+        else:
+            input_dataset_version_ids = list(input_dataset_version_ids)
+        lineage_version_ids = list(input_dataset_version_ids)
+        if input_dataset_version_ids:
+            run.dataset_version_id = input_dataset_version_ids[0]
+            db.commit()
+
         transform_route, runtime_spec = _pipeline_runtime_config(pl)
 
         if sources and not pl.source_dataset_id:
@@ -408,10 +447,27 @@ def pipeline_run_task(pipeline_id: str, run_id: str):
         multi_source = len(sources) > 1
         for source in sources:
             source["route"] = _source_runtime_route(source, transform_route, pl.route)
-            data = _load_source_rows(db, svc, source)
+            source_version_ids = []
+            for version_id in input_dataset_version_ids:
+                version = db.get(DatasetVersion, version_id)
+                if version is not None and version.dataset_id == source["dataset_id"]:
+                    source_version_ids.append(version.id)
+            source_version = select_pinned_dataset_version(
+                db,
+                dataset_id=source["dataset_id"],
+                input_dataset_version_ids=source_version_ids or None,
+            )
+            data = _load_source_rows(
+                db, svc, source,
+                input_dataset_version_ids=source_version_ids or None,
+                selected_version=source_version,
+            )
+            if source_version is not None and source_version.id not in lineage_version_ids:
+                lineage_version_ids.append(source_version.id)
             ctx = PipelineContext(
                 dataset_id=source["dataset_id"],
-                version_no=1,
+                version_no=source_version.version_no if source_version is not None else None,
+                dataset_version_id=source_version.id if source_version is not None else None,
                 route=source["route"],
                 spec=runtime_spec,
             )
@@ -449,6 +505,33 @@ def pipeline_run_task(pipeline_id: str, run_id: str):
             pl.route = sources[0]["route"]
         else:
             pl.route = pl.route or sources[0]["route"] or "A"
+        if outputs:
+            run.dataset_version_id = outputs[0]["curated_dataset_version_id"]
+        existing_lineage = {
+            value[0] for value in db.query(PipelineRunInput.dataset_version_id).filter(
+                PipelineRunInput.pipeline_run_id == run.id,
+            ).all()
+        }
+        next_input_ordinal = db.query(PipelineRunInput.input_ordinal).filter(
+            PipelineRunInput.pipeline_run_id == run.id,
+        ).order_by(PipelineRunInput.input_ordinal.desc()).first()
+        next_input_ordinal = (next_input_ordinal[0] + 1) if next_input_ordinal else 0
+        for version_id in lineage_version_ids:
+            if version_id in existing_lineage:
+                continue
+            db.add(PipelineRunInput(
+                id=str(uuid.uuid4()),
+                pipeline_run_id=run.id,
+                dataset_version_id=version_id,
+                input_ordinal=next_input_ordinal,
+            ))
+            next_input_ordinal += 1
+        if run.dataset_version_id and run.dataset_version_id not in existing_lineage:
+            db.add(PipelineRunInput(
+                id=str(uuid.uuid4()), pipeline_run_id=run.id,
+                dataset_version_id=run.dataset_version_id, input_ordinal=next_input_ordinal,
+                provenance={"pipeline_output": True},
+            ))
         db.commit()
 
         run.status = "success"

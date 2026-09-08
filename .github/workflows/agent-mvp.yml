@@ -1,0 +1,335 @@
+# E0-CI: core Agent verification pipeline.
+#
+# Exact Python 3.11/3.12 matrix whose install/migration/API/worker smoke
+# commands run through the guarded launcher/bootstrap (no pip, migration, or
+# service command precedes the guard), with PostgreSQL 16 + Redis 7 services,
+# frontend test:ci, the artifact evaluation run, and a Python 3.10 negative job
+# that refuses unsupported Python BEFORE any install.  Every core packet
+# command is owned by exactly one job step (scripts/ci/check_agent_plan_contract.py).
+name: agent-mvp
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-floor-negative:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.10"
+      - name: Unsupported Python is refused before any install
+        run: |
+          cd backend
+          set +e
+          uv run --python "3.10" python scripts/guarded_entrypoint.py -- \
+            python -c "print('SHOULD_NOT_RUN')" > /tmp/negative.txt 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q UNSUPPORTED_PYTHON_VERSION /tmp/negative.txt
+          if grep -q SHOULD_NOT_RUN /tmp/negative.txt; then
+            echo "target ran on unsupported Python" >&2
+            exit 1
+          fi
+
+  frontend-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Pin npm 11.2.0
+        run: |
+          npm install -g npm@11.2.0
+          test "$(npm --version)" = "11.2.0"
+      - name: Frontend test:ci
+        working-directory: frontend
+        run: npm ci && npm run test:ci
+      # NOTE (2026-08-31 fix wave, Item 6): all three tests in this spec
+      # unconditionally `test.skip()` — this job starts no backend and sets
+      # no `AGENT_E2E_RUNTIME_*` seed env vars, so this step always exits
+      # green having executed zero tests. Deferring the live-browser proof
+      # to the Task 29-33 backend fixture is intentional (see that spec's
+      # own comments); the step name below only exists so CI output does not
+      # read as if governance coverage runs here today. Do not rename this
+      # back to a name implying real coverage until the seed fixture exists.
+      - name: Runtime governance E2E (self-skips until Task 29-33 backend fixture exists)
+        working-directory: frontend
+        run: |
+          npx playwright test src/test/e2e/runtime-governance.spec.ts --reporter=list
+          echo "::notice::Runtime governance E2E step executed 0 real assertions — all tests self-skip pending the Task 29-33 backend seed fixture. This is expected today, not a passing governance gate."
+
+  m1-stabilization-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: M1 gate — fresh docker compose up against an empty database
+        run: bash scripts/verify_m1_stabilization_gate.sh
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.v2.yml logs --no-color > /tmp/m1-gate-compose.log 2>&1 || true
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1-gate-compose-logs
+          path: /tmp/m1-gate-compose.log
+      - name: Refresh checkpoint — live batch and signed webhook DatasetVersions
+        run: bash scripts/verify_refresh_checkpoint.sh
+      - name: Dump refresh checkpoint compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.v2.yml logs --no-color > /tmp/refresh-checkpoint-compose.log 2>&1 || true
+      - name: Upload refresh checkpoint compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refresh-checkpoint-compose-logs
+          path: /tmp/refresh-checkpoint-compose.log
+
+  # Task 5 (plan 2026-08-27): the blocking real-model business-journey gate.
+  # Trusted, same-repository pull requests only -- the privileged
+  # fork-exposing trigger event is never used here, and neither is a fork
+  # or a plain push. Its own first two steps independently reject any
+  # non-PR/untrusted-fork invocation and a missing DEEPSEEK_API_KEY before
+  # any dependency install or model call could happen.
+  business-journey-real-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require a trusted, same-repository pull request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "TRUSTED_BRANCH_REQUIRED: this gate only runs on pull_request events" >&2
+            exit 1
+          fi
+          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "TRUSTED_BRANCH_REQUIRED: cross-repository (untrusted fork) pull requests are refused" >&2
+            exit 1
+          fi
+      - name: Require DEEPSEEK_API_KEY
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "DEEPSEEK_API_KEY_REQUIRED: configure the repository secret before this gate can run" >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Guarded dependency install
+        run: cd backend && python scripts/bootstrap_backend.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Pin npm 11.2.0
+        run: |
+          npm install -g npm@11.2.0
+          test "$(npm --version)" = "11.2.0"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run the business-journey real gate (deepseek-v4-flash-vision-exp)
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: bash scripts/run_business_journey_gate.sh
+      - id: scan
+        if: always()
+        env:
+          # `evals` lives under `backend/` (backend/pyproject.toml only
+          # packages `app*`); PYTHONPATH, not `working-directory: backend`,
+          # so the command's own relative artifact paths still resolve
+          # against the repo root exactly as written.
+          PYTHONPATH: backend
+        run: python -m evals.business_journeys.artifacts scan --staging artifacts/business_journeys/staging --sanitized-output artifacts/business_journeys/sanitized --failure-summary artifacts/business_journeys/scanner-failure-summary.json --deterministic-report artifacts/runtime/deterministic-cases.json >> "$GITHUB_OUTPUT"
+      - name: Upload sanitized journey evidence
+        if: steps.scan.outputs.scan_safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-journey-sanitized-evidence
+          path: artifacts/business_journeys/sanitized/**
+      - name: Upload safe scanner failure summary
+        if: failure() && steps.scan.outputs.scan_safe != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-journey-scanner-failure-summary
+          path: artifacts/business_journeys/scanner-failure-summary.json
+
+  backend-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ontexus_test
+          POSTGRES_USER: ontexus
+          POSTGRES_PASSWORD: ontexus
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ontexus -d ontexus_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Guarded dependency install
+        run: cd backend && python scripts/bootstrap_backend.py
+      # Installed early (before any step collects backend/tests/) rather than
+      # only in "SDK runtime contract" below: tests/runtime/test_transport_parity.py
+      # imports ontexus_runtime at module level and is collected by plain
+      # `pytest -q` ("Backend core suites") on every matrix run, not just
+      # python-version 3.12. Installing it once here for the whole job avoids
+      # a ModuleNotFoundError wherever that file gets collected first.
+      - name: Install ontexus_runtime SDK
+        run: python -m pip install -e sdk
+      - name: Migration through the guard
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            python scripts/run_migrations.py upgrade head
+      - name: API smoke through the guarded launcher
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            REDIS_URL=redis://localhost:6379/0 \
+            python scripts/guarded_entrypoint.py -- python -m uvicorn app.main:app \
+              --host 127.0.0.1 --port 8000 &
+          API_PID=$!
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$API_PID" 2>/dev/null || true
+          test "$ok" -eq 1
+      - name: Worker smoke through the guarded launcher
+        run: |
+          cd backend
+          # Task 6A: bind the real named-queue topology (not just the
+          # default queue) so a live worker startup proves every queue name
+          # is valid, not only the static Compose/Python assertions.
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            REDIS_URL=redis://localhost:6379/0 \
+            timeout 25 python scripts/guarded_entrypoint.py -- python -m celery \
+              -A app.tasks.celery_app worker --loglevel=warning --concurrency=1 \
+              -Q refresh.schedule,refresh.poll,refresh.event,refresh.replay,artifact.extraction,agent.interactive,housekeeping \
+              --prefetch-multiplier=1 || code=$?
+          test "${code:-0}" -eq 124 || test "${code:-0}" -eq 0
+      - name: Start runtime Postgres/MySQL fixtures
+        # Ungated (not restricted to matrix.python-version == '3.12'):
+        # "Backend core suites" below is a plain `pytest -q` over all of
+        # backend/tests/ that runs on BOTH matrix legs, and it collects and
+        # RUNS tests/runtime/test_acceptance_matrix.py::test_registry_runner_executes_every_deterministic_case_once,
+        # which dispatches the dual-dialect deterministic cases as pytest
+        # subprocesses needing a live Postgres/MySQL fixture on 3.11 too, not
+        # just 3.12. Started once here for the whole job and torn down once
+        # at the very end (see "Stop runtime Postgres/MySQL fixtures" below).
+        run: docker compose -f test_data/runtime/db/docker-compose.yml up -d --wait
+      - name: Backend core suites
+        env:
+          # See "Start runtime Postgres/MySQL fixtures" above: this plain
+          # `pytest -q` collects test_acceptance_matrix.py's registry-runner
+          # test, whose subprocess dialect cases skip (folded into a failure
+          # by run_registered_cases.assert_deterministic_report) without these.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
+            python -m pytest -q
+      - name: Runtime release registry and acceptance gate
+        if: matrix.python-version == '3.12'
+        env:
+          # Consumed directly by the dual-dialect deterministic cases (e.g.
+          # database-row-parity, execution-row-count-zero/two) that
+          # run_registered_cases.py dispatches as pytest subprocesses — those
+          # subprocesses inherit this env, and each dialect test skips
+          # (rather than fails) without it, which run_registered_cases's own
+          # assert_deterministic_report treats as a failure.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
+        run: |
+          python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+          python -m pytest test_data/runtime/test_fixture_manifest.py -q
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
+            python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+          python -m tests.runtime.run_registered_cases \
+            --manifest ../test_data/runtime/manifest.json \
+            --report ../artifacts/runtime/deterministic-cases.json
+      - name: Refresh, queue, and Runtime integration gate
+        if: matrix.python-version == '3.12'
+        env:
+          # `tests/runtime -q` re-collects test_acceptance_matrix.py's
+          # registry-runner test (see above). The fixtures started at job
+          # start are still up here — they're now torn down once, at job
+          # end, not right after the registry gate step.
+          RUNTIME_POSTGRES_URL: postgresql://runtime:runtime@localhost:55432/runtime
+          RUNTIME_MYSQL_URL: mysql+pymysql://runtime:runtime@localhost:53306/runtime
+        run: |
+          cd backend
+          TEST_DATABASE_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            TEST_DATABASE_ADMIN_URL=postgresql://ontexus:ontexus@localhost:5432/postgres \
+            python -m pytest tests/v2/incremental tests/agent/test_celery_topology.py tests/runtime -q
+      - name: SDK runtime contract
+        if: matrix.python-version == '3.12'
+        run: |
+          REPO_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
+          (cd "$REPO_ROOT/sdk" && python -m pytest tests -q)
+      - name: Validate application Compose definitions
+        if: matrix.python-version == '3.12'
+        run: |
+          docker compose -f docker-compose.v2.yml config --quiet
+          docker compose -f docker-compose.agent.yml config --quiet
+      - name: Agent evaluation corpus
+        run: cd backend && python -m evals.agent_ontology.run --manifest core-v1 --adapter fake --seed 141 --output artifacts/evals/result.json
+      - name: Document extraction eval (non-blocking)
+        if: matrix.python-version == '3.12'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          RUN_LIVE_EVALS: "1"
+        run: cd backend && python -m evals.document_extraction.run --manifest core-v1 --adapter deepseek --output artifacts/evals/document_extraction_result.json
+      - name: Frontend E2E suite
+        working-directory: frontend
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          AGENT_E2E_DB_URL=postgresql://ontexus:ontexus@localhost:5432/ontexus_test \
+            AGENT_E2E_REDIS_URL=redis://localhost:6379/0 \
+            bash ../scripts/run_agent_e2e.sh
+      - name: Plan contract check
+        run: cd backend && python scripts/ci/check_agent_plan_contract.py
+      - name: Stop runtime Postgres/MySQL fixtures
+        if: always()
+        run: docker compose -f test_data/runtime/db/docker-compose.yml down -v --remove-orphans

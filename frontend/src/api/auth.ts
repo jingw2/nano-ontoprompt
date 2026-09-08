@@ -1,4 +1,4 @@
-import { apiClient } from './client'
+import { apiClient, readCookie } from './client'
 import type { User } from '@/types/auth'
 
 export const authApi = {
@@ -9,4 +9,14 @@ export const authApi = {
   profile: () => apiClient.get<User>('/auth/profile'),
   changePassword: (current_password: string, new_password: string) =>
     apiClient.put('/auth/password', { current_password, new_password }),
+  // Best-effort server logout: revokes the refresh family and clears the
+  // HttpOnly refresh cookie so a later reload cannot restore the session.
+  logout: async () => {
+    try {
+      const csrf = readCookie('csrf_token') ?? ''
+      await apiClient.post('/auth/logout', null, { headers: { 'X-CSRF-Token': csrf } })
+    } catch {
+      // network/4xx failures must not block the client-side state clear
+    }
+  },
 }

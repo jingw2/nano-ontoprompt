@@ -1,0 +1,39 @@
+{
+  "actions": [
+    "risk_label",
+    "journal_entry"
+  ],
+  "entities": [
+    "Account",
+    "Invoice",
+    "Expense",
+    "CostCenter",
+    "AccountingPeriod"
+  ],
+  "high_risk_action": "journal_entry",
+  "keywords": [
+    "invoice",
+    "expense",
+    "accounting period",
+    "cash flow"
+  ],
+  "low_risk_action": "risk_label",
+  "numeric_predicates": {
+    "duplicate_invoice_amount_tolerance_cny": 0.01,
+    "expense_budget_limit_cny": 50000
+  },
+  "relations": [
+    "POSTED_TO",
+    "BELONGS_TO",
+    "DUPLICATES",
+    "EXCEEDS_BUDGET"
+  ],
+  "rules": [
+    "duplicate_invoice",
+    "expense_over_budget"
+  ],
+  "source_citation_ids": [
+    "input-finance-expense-reports-csv",
+    "input-finance-month-end-close-docx"
+  ]
+}

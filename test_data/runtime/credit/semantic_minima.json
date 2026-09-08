@@ -1,0 +1,38 @@
+{
+  "actions": [
+    "risk_label",
+    "credit_limit_update"
+  ],
+  "entities": [
+    "Borrower",
+    "LoanApplication",
+    "Repayment",
+    "CreditLine",
+    "RiskAssessment"
+  ],
+  "high_risk_action": "credit_limit_update",
+  "keywords": [
+    "borrower",
+    "application",
+    "repayment",
+    "credit limit"
+  ],
+  "low_risk_action": "risk_label",
+  "numeric_predicates": {
+    "credit_limit_increase_cap_cny": 20000,
+    "credit_score_limit": 600
+  },
+  "relations": [
+    "APPLIES_FOR",
+    "HAS_REPAYMENT",
+    "ASSESSED_AS",
+    "USES_CREDIT_LINE"
+  ],
+  "rules": [
+    "credit_score_limit"
+  ],
+  "source_citation_ids": [
+    "input-credit-loan-applications-csv",
+    "input-credit-risk-approval-policy-docx"
+  ]
+}

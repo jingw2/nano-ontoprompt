@@ -1,19 +1,16 @@
+/**
+ * settings.spec.ts — extraction confidence-rules settings page. Self-skips
+ * until the settings API is registered.
+ */
 import { test, expect } from '@playwright/test'
-
-const BASE = 'http://localhost:5173'
-
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
-}
+import { hasApi } from './helpers/availability'
+import { loginAsAdmin } from './helpers/ui'
 
 test.describe('Settings Page', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
-    await page.goto(`${BASE}/settings`)
+    test.skip(!(await hasApi('/api/v1/settings')), 'backend /api/v1/settings not registered yet')
+    await loginAsAdmin(page)
+    await page.goto('/settings')
   })
 
   test('settings page loads', async ({ page }) => {

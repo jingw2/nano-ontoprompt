@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
-from app.deps import get_current_user, require_admin
+from app.deps import get_current_user, require_admin, require_editor
 from app.models.v2.curated import CuratedDataset, CuratedReview
 
 logger = logging.getLogger(__name__)
@@ -215,12 +215,78 @@ class BatchEditRequest(BaseModel):
     edits: list[dict]  # [{row_pk, field_name, old_value, new_value}]
 
 
+class PipelineRunBinding(BaseModel):
+    # Optional: the human curated-review UI (`frontend/src/api/v2/curated.ts`)
+    # sends no body at all -- it has no concept of "which pipeline run", and
+    # predates this binding. Only the business-journey eval harness
+    # (`evals.business_journeys.api_client.JourneyApiClient`) supplies this,
+    # to prove its own review/approval is bound to the run it produced.
+    pipeline_run_id: str | None = None
+
+
+def _require_run_curated_dataset(db: Session, pipeline_run_id: str, dataset_id: str) -> None:
+    from app.models.v2.pipeline import PipelineRun
+
+    run = db.get(PipelineRun, pipeline_run_id)
+    stats = run.stats or {} if run else {}
+    outputs = {str(stats.get("curated_dataset_id") or "")}
+    listed_outputs = stats.get("curated_dataset_ids") or ()
+    if isinstance(listed_outputs, (list, tuple)):
+        outputs.update(str(output) for output in listed_outputs if output)
+    if run is None or not run.is_governed or dataset_id not in outputs:
+        raise HTTPException(status_code=422, detail="CURATED_DATASET_RUN_MISMATCH")
+
+
+def _ensure_curated_dataset_row(db: Session, dataset_id: str) -> None:
+    """`ReviewService` (and therefore this whole review workflow) reads and
+    writes `CuratedDataset`/`v2_curated_datasets` — a separate table from
+    the `Dataset`/`v2_datasets` (`kind="curated"`) rows the real Pipeline DAG
+    engine (`app.tasks.v2.pipeline_run._save_curated_dataset`) actually
+    creates. Nothing links the two today, so `POST /{dataset_id}/reviews`
+    404s for every dataset `GET /api/v2/curated` (which reads `Dataset`) ever
+    lists — confirmed directly by driving a real pipeline run end to end.
+    Bridging them by reusing the SAME id (both are UUID-keyed, and nothing
+    else currently reads or writes `CuratedDataset.id` as anything other
+    than an opaque primary key) is the minimal fix: auto-provision the
+    corresponding `CuratedDataset` row, from the real `Dataset`'s own
+    name/schema metadata, the first time a review is started for it."""
+    from app.models.v2.dataset import Dataset, DatasetVersion
+
+    existing = db.get(CuratedDataset, dataset_id)
+    if existing is not None:
+        return
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or dataset.kind != "curated":
+        raise HTTPException(404, f"Curated dataset {dataset_id} not found")
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset.id
+    ).order_by(DatasetVersion.version_no.desc()).first()
+    quality_score = None
+    if dataset.schema_json and isinstance(dataset.schema_json, dict):
+        quality_score = dataset.schema_json.get("quality_score")
+    db.add(CuratedDataset(
+        id=dataset.id, name=dataset.name, schema_json=dataset.schema_json,
+        latest_version_id=version.id if version else None, quality_score=quality_score,
+        status="pending_review",
+    ))
+    db.commit()
+
+
 @router.post("/{dataset_id}/reviews")
-def start_review(dataset_id: str, db: Session = Depends(get_db)):
+def start_review(
+    dataset_id: str, body: PipelineRunBinding | None = None,
+    db: Session = Depends(get_db), _=Depends(require_editor),
+):
     """为数据集启动审核流程"""
     from app.services.v2.curated.review_service import ReviewService
+    pipeline_run_id = body.pipeline_run_id if body else None
+    if pipeline_run_id:
+        _require_run_curated_dataset(db, pipeline_run_id, dataset_id)
+    _ensure_curated_dataset_row(db, dataset_id)
     svc = ReviewService(db)
     review = svc.start_review(dataset_id)
+    review.pipeline_run_id = pipeline_run_id
+    db.commit()
     return {"review_id": review.id, "status": review.status}
 
 
@@ -234,6 +300,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
     return {
         "id": review.id,
         "curated_dataset_id": review.curated_dataset_id,
+        "pipeline_run_id": review.pipeline_run_id,
         "status": review.status,
         "notes": review.notes,
         "decided_at": review.decided_at,
@@ -241,7 +308,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/reviews/{review_id}/edits")
-def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_db)):
+def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     """批量提交行编辑"""
     from app.services.v2.curated.review_service import ReviewService
     svc = ReviewService(db)
@@ -250,10 +317,20 @@ def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_d
 
 
 @router.post("/reviews/{review_id}/approve")
-def approve_review(review_id: str, notes: str = "", db: Session = Depends(get_db),
-                   _admin=Depends(require_admin)):
+def approve_review(
+    review_id: str, body: PipelineRunBinding | None = None, notes: str = "",
+    db: Session = Depends(get_db), _admin=Depends(require_admin),
+):
     """审核通过"""
     from app.services.v2.curated.review_service import ReviewService
+    review_row = db.get(CuratedReview, review_id)
+    if review_row is None:
+        raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
+    pipeline_run_id = body.pipeline_run_id if body else None
+    if pipeline_run_id:
+        _require_run_curated_dataset(db, pipeline_run_id, review_row.curated_dataset_id)
+        if review_row.pipeline_run_id != pipeline_run_id:
+            raise HTTPException(status_code=422, detail="CURATED_REVIEW_RUN_MISMATCH")
     svc = ReviewService(db)
     review = svc.approve(review_id, notes)
     return {"review_id": review.id, "status": review.status}

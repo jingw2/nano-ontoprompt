@@ -59,7 +59,6 @@ export default function StructuredDataPage() {
   const [deleting, setDeleting] = useState(false)
 
   const load = () => {
-    setLoading(true)
     Promise.all([
       pipelinesApi.list(),
       curatedApi.list() as Promise<CuratedDataset[]>,

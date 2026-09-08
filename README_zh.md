@@ -1,8 +1,28 @@
-# nano-ontoprompt
+# Ontexus
 
 **[English Documentation](./README.md)**
 
 一个轻量级、借鉴 Palantir Foundry 设计的领域本体构建平台。接入数据源,经过可视化转换管道处理,将清洗后的数据集映射为实体类型,最终生成可探索的知识图谱——包含实体、关系、逻辑规则与可执行动作。
+
+
+## 为什么叫 "Ontexus"?
+
+**Ontexus = Ontology + Nexus。**
+
+- **Ont- / Onto-** → Ontology —— 本体、本体论,企业的业务语义模型
+- **Nexus** → 连接点、枢纽,多个事物汇聚之处
+
+Ontexus 并不只是一个知识图谱工具。Ontology 是 Agent 与企业真实业务世界之间的中间层:
+
+```
+数据 / 知识 → Ontology → Context → 逻辑 / 动作 → Agent
+```
+
+这里的 "nexus" 强调的不是图本身,而是连接——把业务对象、关系、规则、动作、上下文和 Agent 连接在一起。
+
+**Ontexus:连接企业知识、业务逻辑与 AI Agent 的本体枢纽。** 我们想做的是企业领域知识的Agent Infra。
+
+---
 
 支持两条构建路径:
 
@@ -15,7 +35,7 @@
 
 本体是特定领域知识的形式化表示——一套共享的概念词汇及概念间的关系。它是把原始数据变成机器可读、可查询知识的结构化骨架。
 
-在 nano-ontoprompt 中,每个本体由以下构件组成:
+在 Ontexus 中,每个本体由以下构件组成:
 
 | 构件 | 含义 | 示例 |
 |---|---|---|
@@ -87,26 +107,29 @@
 ### 方式一 — Docker Compose(完整 v2 栈)
 
 ```bash
-git clone https://github.com/jingw2/nano-ontoprompt.git
-cd nano-ontoprompt
+git clone https://github.com/jingw2/ontexus.git
+cd ontexus
 cp .env.example .env          # 生产环境务必修改密钥
 docker compose -f docker-compose.v2.yml up --build
 ```
 
-将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。轻量 v1 栈可改用 `docker-compose.yml`。
+将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。
+专门的 `migration` 服务会先对空数据库运行 `run_migrations.py upgrade head`;
+后端与 worker 服务会等待该服务成功完成(Compose 的
+`service_completed_successfully`)后才会启动。
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
 
 ### 方式二 — 手动启动(最小化,无需外部服务)
 
-**前置要求:** Python 3.11+、Node.js 18+
+**前置要求:** Python 3.11 或 3.12、Node 22.14.0、npm 11.2.0
 
 ```bash
 # 后端
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head                                  # 开发模式也可依赖启动时自动建表
+python scripts/bootstrap_backend.py
+python scripts/run_migrations.py upgrade head
 uvicorn app.main:app --reload --port 8000
 
 # 前端(另开终端)
@@ -116,6 +139,35 @@ npm run dev
 ```
 
 Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 SQLite 图谱回退、本地文件存储与同步管道执行。
+
+### 本地发布门禁
+
+受控 Runtime 门禁完全确定性执行，不会调用模型。在仓库根目录、启动一次性
+PostgreSQL/Redis 环境后运行：
+
+```bash
+python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+cd backend && python -m tests.runtime.run_registered_cases --manifest ../test_data/runtime/manifest.json --report ../artifacts/runtime/deterministic-cases.json
+cd .. && python -m pip install -e sdk && cd sdk && python -m pytest tests -q
+```
+
+真实刷新检查点只运行 `bash scripts/verify_refresh_checkpoint.sh`。该脚本独占
+Compose refresh profile、合成数据初始化、签名 webhook 和轮询流程；不要在其他
+脚本中重复这些流程。CI 还验证两个应用 Compose 文件以及绑定队列的 Celery
+worker 拓扑。浏览器治理覆盖使用 `cd frontend && npx playwright test
+src/test/e2e/runtime-governance.spec.ts`；它依赖该套件配置的服务，不能宣称为模型测试。
+
+### 真实业务旅程门禁(仅 CI)
+
+`.github/workflows/agent-mvp.yml` 中的 `business-journey-real-gate` 是一个
+阻断式、仅对可信同仓库 Pull Request 生效的任务，针对三条企业业务旅程(供应链、
+财务、信贷)使用真实 DeepSeek 模型和真实的 Agent 创建浏览器流程进行验收——
+确切的阶段顺序见 `test_data/runtime/README.md#the-real-gate-task-5` 与
+`scripts/run_business_journey_gate.sh`。它需要仓库密钥 `DEEPSEEK_API_KEY`，
+绝不在 `pull_request_target` 或 fork 上运行；只有经扫描器批准的脱敏证据才会
+被上传。该门禁需要真实密钥和一次性 Compose 技术栈，因此无法像上面的发布门禁
+那样在纯本地检出环境中运行。
 
 ---
 
@@ -136,7 +188,7 @@ Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 S
 ## 项目结构
 
 ```
-nano-ontoprompt/
+ontexus/
 ├── backend/
 │   ├── alembic/               # 数据库迁移 (0001_full_baseline 覆盖全部表)
 │   ├── app/
@@ -162,8 +214,7 @@ nano-ontoprompt/
 │       └── api/                # Axios 客户端 (v1 + v2)
 ├── scripts/
 │   └── data/                   # 数据导入与实体关联脚本 (SNOMED、供应链)
-├── docker-compose.yml          # v1 轻量栈
-├── docker-compose.v2.yml       # 完整栈: Postgres + Redis + Neo4j + MinIO + Chroma + LiteLLM
+├── docker-compose.v2.yml       # 完整栈: Postgres + Redis + Neo4j + MinIO + Chroma
 ├── litellm_config.yaml         # LiteLLM 代理配置
 ├── ONTOLOGY.md                 # 架构设计指南
 └── test_data/                  # 示例数据集与 E2E 验收脚本
@@ -177,7 +228,7 @@ nano-ontoprompt/
 
 ```env
 ENVIRONMENT=development        # 设为 production 时, 默认密钥未修改将拒绝启动
-DATABASE_URL=sqlite:///./ontoprompt.db
+DATABASE_URL=sqlite:///./ontexus.db
 SECRET_KEY=change-me
 ENCRYPTION_KEY=                # Fernet 密钥, 用于加密存储的 API Key
 FIRST_ADMIN_USER=admin

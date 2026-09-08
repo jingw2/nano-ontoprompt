@@ -115,15 +115,19 @@ export default function ConnectionsTab() {
   const [formSyncMode, setFormSyncMode] = useState<'snapshot' | 'append'>('snapshot')
   const [formFiles, setFormFiles] = useState<File[]>([])
 
-  const loadConnections = () => {
-    setLoading(true)
+  const fetchConnections = () => {
     apiClientV2.get('/connections')
       .then((res: unknown) => setConnections(Array.isArray(res) ? res : ((res as { data?: Connection[] })?.data ?? [])))
       .catch(() => setConnections([]))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { loadConnections() }, [])
+  const loadConnections = () => {
+    setLoading(true)
+    fetchConnections()
+  }
+
+  useEffect(() => { fetchConnections() }, [])
 
   const resetForm = () => {
     setFormName('')

@@ -1,6 +1,6 @@
 # Ontology 优化方案：基于 Palantir Design Principles
 
-> 对照 Palantir Foundry Ontology 设计原则对 nano-ontoprompt 的优化分析。
+> 对照 Palantir Foundry Ontology 设计原则对 Ontexus 的优化分析。
 > 参考: [Palantir Best Practices](https://www.palantir.com/docs/foundry/ontology/ontology-best-practices/) · [Structural Guidance](https://www.palantir.com/docs/foundry/ontology/ontology-structural-guidance/) · [Anti-Patterns](https://www.palantir.com/docs/foundry/ontology/ontology-anti-patterns/)
 
 ---

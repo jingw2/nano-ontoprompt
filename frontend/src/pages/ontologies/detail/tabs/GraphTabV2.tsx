@@ -78,17 +78,17 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
     // 图谱与质量报告决定首屏, 优先加载; 集成状态徽章 (Neo4j/Chroma 探测)
     // 单独异步, 不阻塞图谱渲染 — 否则服务不可用时 heartbeat 超时会拖慢整页数秒。
     Promise.all([
-      apiClientV2.get(`/ontologies/${ontologyId}/graph?limit=300`).catch(() => ({ nodes: [], edges: [], neo4j_available: false })),
-      apiClientV2.get(`/ontologies/${ontologyId}/graph/quality`).catch(() => null),
+      apiClientV2.get<GraphData>(`/ontologies/${ontologyId}/graph?limit=300`).catch(() => ({ nodes: [], edges: [], neo4j_available: false })),
+      apiClientV2.get<GraphQuality | null>(`/ontologies/${ontologyId}/graph/quality`).catch(() => null),
     ])
-      .then(([graph, q]: any[]) => {
+      .then(([graph, q]) => {
         setGraphData(graph)
         setQuality(q)
       })
       .finally(() => setLoading(false))
 
-    apiClientV2.get(`/ontologies/${ontologyId}/integrations/status`)
-      .then((status: any) => setIntegrations(status))
+    apiClientV2.get<IntegrationStatus>(`/ontologies/${ontologyId}/integrations/status`)
+      .then((status) => setIntegrations(status))
       .catch(() => setIntegrations(null))
   }, [ontologyId])
 
@@ -106,8 +106,6 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       degreeMap.set(e.source, (degreeMap.get(e.source) ?? 0) + 1)
       degreeMap.set(e.target, (degreeMap.get(e.target) ?? 0) + 1)
     }
-
-    const isolatedCount = Array.from(degreeMap.values()).filter(d => d === 0).length
 
     // Filter nodes if hiding isolated
     const visibleNodes = hideIsolated
@@ -176,10 +174,10 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
             'font-weight': 'bold',
             'text-valign': 'center',
             'text-halign': 'center',
-            width: 'data(size)' as any,
-            height: 'data(size)' as any,
+            width: 'data(size)',
+            height: 'data(size)',
             'text-wrap': 'wrap',
-            'text-max-width': 'data(textMaxWidth)' as any,
+            'text-max-width': 'data(textMaxWidth)',
             'border-width': '0px',
             'text-outline-width': '2px',
             'text-outline-color': 'data(color)',
@@ -238,7 +236,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
         coolingFactor: 0.95,
         minTemp: 1.0,
         nodeDimensionsIncludeLabels: true,
-      } as any,
+      },
     })
 
     const spreadIsolatedNodes = () => {
@@ -270,7 +268,6 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
     })
 
     cy.on('tap', 'node', evt => {
-      const nodeData = evt.target.data()
       cy.elements().removeClass('highlighted dimmed')
       evt.target.addClass('highlighted')
       evt.target.neighborhood().addClass('highlighted')
@@ -304,14 +301,15 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
     setQueryResult([])
     try {
       if (queryMode === 'natural') {
-        const res: any = await apiClientV2.post(`/ontologies/${ontologyId}/graph/ask`, { question: query })
+        const res = await apiClientV2.post<{ results: unknown[] }>(`/ontologies/${ontologyId}/graph/ask`, { question: query })
         setQueryResult(res.results || [])
       } else {
-        const res: any = await apiClientV2.post(`/ontologies/${ontologyId}/graph/cypher`, { query })
+        const res = await apiClientV2.post<{ results: unknown[] }>(`/ontologies/${ontologyId}/graph/cypher`, { query })
         setQueryResult(res.results || [])
       }
-    } catch (err: any) {
-      setQueryResult([{ error: err?.detail || err?.message || '查询失败' }])
+    } catch (err: unknown) {
+      const e = err as { detail?: unknown; message?: unknown }
+      setQueryResult([{ error: e?.detail || e?.message || '查询失败' }])
     } finally {
       setQueryLoading(false)
     }

@@ -13,6 +13,11 @@ class Dataset(Base):
     kind: Mapped[str] = mapped_column(String(30), nullable=False)  # structured|semi|unstructured
     schema_json: Mapped[dict] = mapped_column(JSON, nullable=True)
     latest_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Resource-level refresh mode/cursor contract override (Task 6); falls
+    # back to the owning Connection's default when unset. Not enforced by a
+    # DB constraint — see Connection.refresh_policy for rationale.
+    refresh_policy: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cursor_contract: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -25,6 +30,9 @@ class DatasetVersion(Base):
     rowcount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)  # MinIO s3://bucket/key
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    refresh_run_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_cursor: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class MediaItem(Base):

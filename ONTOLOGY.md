@@ -38,7 +38,7 @@
     - [存储选型：MongoDB vs 图数据库](#存储选型mongodb-还是图数据库)
     - [两图分离与反哺架构](#两图分离与反哺架构)
     - [生产级上线 Checklist](#生产级上线-checklist)
-    - [nano-ontoprompt 与筛查场景的分工](#nano-ontoprompt-与筛查场景的分工)
+    - [Ontexus 与筛查场景的分工](#ontexus-与筛查场景的分工)
 16. [S1 扩展：多模态采集与分流路径建模](#16-s1-扩展多模态采集与分流路径建模)
     - [ScreeningSession 状态机](#screeningsession-状态机)
     - [新增 Object 设计](#新增-object-设计s1-operational-层)
@@ -820,7 +820,7 @@ clinical_kb 稳定不是缺陷——Reference Layer 本来就不参与「变」�
 
 #### 文档提取的 logic_rules / actions ≠ Foundry Function
 
-nano-ontoprompt 从文档提取的两类产物，在 Ontology 里应区分落位：
+Ontexus 从文档提取的两类产物，在 Ontology 里应区分落位：
 
 | 提取产物 | 本质 | Ontology 落位 | 是否可执行 |
 |---|---|---|---|
@@ -1539,7 +1539,7 @@ Step 2：从 140+ 文档提取关系和元数据（每次文档更新时）
 
 ### 文档提取产物：logic_rules / actions 如何落位
 
-nano-ontoprompt 从文档提取的四类产物，在 Foundry Ontology 中落位如下：
+Ontexus 从文档提取的四类产物，在 Foundry Ontology 中落位如下：
 
 | 提取 JSON 字段 | Ontology 落位 | 存储层 | 说明 |
 |---|---|---|---|
@@ -1957,13 +1957,13 @@ Phase 3（持续）：规模化 + 反哺
 
 **Phase 0 的提取准确率数字，比 storage 选型更决定是否上线。**
 
-### nano-ontoprompt 与筛查场景的分工
+### Ontexus 与筛查场景的分工
 
-精神健康筛查是**在线多轮医患对话**；nano-ontoprompt 是**离线文档 → 结构化知识**的构建工具。二者相关，但不是同一个系统、同一个运行时。
+精神健康筛查是**在线多轮医患对话**；Ontexus 是**离线文档 → 结构化知识**的构建工具。二者相关，但不是同一个系统、同一个运行时。
 
 #### 构建期 vs 运行期
 
-| | 构建期（nano-ontoprompt） | 运行期（筛查对话系统） |
+| | 构建期（Ontexus） | 运行期（筛查对话系统） |
 |---|---|---|
 | **时机** | 离线，文档更新时 | 在线，每轮对话 |
 | **输入** | 140+ 医学指南 PDF/DOCX | 用户自然语言 |
@@ -1973,7 +1973,7 @@ Phase 3（持续）：规模化 + 反哺
 
 ```
 构建期（一次性 / 低频）：
-  医学文档 → nano-ontoprompt 提取 → 临床专家审核 → 导出 clinical_kb
+  医学文档 → Ontexus 提取 → 临床专家审核 → 导出 clinical_kb
 
 运行期（每轮对话）：
   用户说话 → Person Function 写 patient_graph
@@ -1984,7 +1984,7 @@ Phase 3（持续）：规模化 + 反哺
 **对话运行时不会**打开 Entity Tab、不会对用户对话再跑文档提取。  
 **对话运行时仍会** consult 构建期产出的 clinical_kb（症状规范化、方向匹配、危机规则）。
 
-#### nano-ontoprompt 在筛查里的价值
+#### Ontexus 在筛查里的价值
 
 | 能力 | 筛查场景 | 说明 |
 |---|---|---|
@@ -2019,7 +2019,7 @@ person.recordSymptom()      → patient_graph only（写）
 |---|---|
 | SNOMED 症状 + 手工几十条 ClinicalRule | 量表驱动的小范围筛查 |
 | 仅 PHQ-9/GAD-7 条目，无疾病图谱 | 极简 MVP，失去方向匹配与共病推理 |
-| 140+ 文档 + nano-ontoprompt 批量提取 | 有大规模指南库时的正确路径 |
+| 140+ 文档 + Ontexus 批量提取 | 有大规模指南库时的正确路径 |
 
 没有 clinical_kb，筛查仍可跑（LLM + 量表），但失去规范化词表、疾病方向匹配、可审计的危机规则链。
 
@@ -2027,7 +2027,7 @@ person.recordSymptom()      → patient_graph only（写）
 
 ```
 ┌─────────────────────────────┐     导出 / API      ┌─────────────────────────────┐
-│  nano-ontoprompt            │ ──────────────────▶ │  clinical_kb 服务（只读）     │
+│  Ontexus                    │ ──────────────────▶ │  clinical_kb 服务（只读）     │
 │  临床知识库构建              │                     │  TuGraph + Symptom 向量索引   │
 │  实体 / 关系 / 规则 / 审查   │                     └──────────────┬──────────────┘
 └─────────────────────────────┘                                    │ consult
@@ -2049,7 +2049,7 @@ person.recordSymptom()      → patient_graph only（写）
 | 提取的本体在对话里直接用 | 只在构建期用；运行时 consult 导出后的 KB |
 | 362 条实体驱动每一轮提问 | 驱动对话的是 patient_graph + Coverage；KB 做方向/consult |
 | 动作 Tab 的 Function 绑 Disease 执行 | Action 元数据 → 绑 Person 的 FunctionDef |
-| 筛查不需要 nano-ontoprompt | 需要 **KB 构建能力**；可以是本平台，也可以是 SNOMED + 手工替代 |
+| 筛查不需要 Ontexus | 需要 **KB 构建能力**；可以是本平台，也可以是 SNOMED + 手工替代 |
 | 对话中应再跑 LLM 文档提取 | 对话中是 Observation Function 写 patient_graph，不是文档提取 |
 
 ---

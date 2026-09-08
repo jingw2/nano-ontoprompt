@@ -3,8 +3,8 @@
 
 用法：
   python scripts/verify_migration.py \
-    --v1-db ./ontoprompt.db \
-    --pg-url postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt
+    --v1-db ./ontexus.db \
+    --pg-url postgresql://ontexus:ontexus@localhost:5432/ontexus
 
 退出码：
   0 — 所有表数量一致
@@ -98,7 +98,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--v1-db", default="./ontoprompt.db", help="v1 SQLite 路径")
+    parser.add_argument("--v1-db", default="./ontexus.db", help="v1 SQLite 路径")
     parser.add_argument("--pg-url", required=True, help="v2 PostgreSQL 连接字符串")
     args = parser.parse_args()
 

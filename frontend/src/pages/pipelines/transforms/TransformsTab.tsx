@@ -20,13 +20,37 @@ interface Pipeline {
   status: string
 }
 
+interface RunMeta {
+  inferred_schema?: Record<string, unknown>
+  dropped?: number
+  rows_before?: number
+  rows_after?: number
+  wide_table_split?: {
+    skipped?: boolean
+    executed?: boolean
+    suggested?: boolean
+    col_count?: number
+    tables?: Record<string, number>
+    suggestion?: { split_config?: Record<string, unknown> }
+  }
+  json_flatten?: { rows_before?: number; rows_after?: number }
+  document_to_md?: { processed?: number; strategy?: string }
+  md_to_structured?: {
+    skipped?: boolean
+    success?: number
+    processed?: number
+    reason?: string
+    method?: string
+  }
+}
+
 interface RunDetail {
   id: string
   status: string
   stats: {
     rows_in: number
     rows_out: number
-    meta: Record<string, any>
+    meta: RunMeta
     curated_dataset_id: string | null
   } | null
   error_log: string | null
@@ -145,8 +169,8 @@ function buildSteps(route: string, stats: RunDetail['stats'] | null): StepCard[]
         key: 'doc',
         label: '文档 → Markdown',
         icon: <FileText size={13} />,
-        status: doc.processed > 0 ? 'done' : 'skipped',
-        detail: doc.processed > 0
+        status: doc.processed! > 0 ? 'done' : 'skipped',
+        detail: doc.processed! > 0
           ? `策略: ${doc.strategy || 'markitdown'}，处理 ${doc.processed} 个文档`
           : '未处理（无文档行）',
       },
@@ -154,7 +178,7 @@ function buildSteps(route: string, stats: RunDetail['stats'] | null): StepCard[]
         key: 'extract',
         label: 'LLM 结构化提取',
         icon: <Cpu size={13} />,
-        status: extract.skipped ? 'skipped' : extract.success > 0 ? 'done' : 'failed',
+        status: extract.skipped ? 'skipped' : extract.success! > 0 ? 'done' : 'failed',
         detail: extract.skipped
           ? `已跳过：${extract.reason || '无 target_schema'}（旧版本）`
           : extract.method
@@ -211,7 +235,7 @@ export default function TransformsTab() {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [runDetails, setRunDetails] = useState<Record<string, RunDetail | null>>({})
+  const [runDetails, setRunDetails] = useState<Record<string, RunDetail | null | undefined>>({})
 
   const [showCreate, setShowCreate] = useState(false)
   const [datasets, setDatasets] = useState<Array<{id: string; name: string; kind: string}>>([])
@@ -222,16 +246,16 @@ export default function TransformsTab() {
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
-    apiClientV2.get('/pipelines')
-      .then((res: any) => setPipelines(Array.isArray(res) ? res : res.data ?? []))
+    apiClientV2.get<{ data?: Pipeline[] } | Pipeline[]>('/pipelines')
+      .then(res => setPipelines(Array.isArray(res) ? res : res.data ?? []))
       .catch(() => setPipelines([]))
       .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
     if (!showCreate) return
-    apiClientV2.get('/datasets')
-      .then((res: any) => setDatasets(Array.isArray(res) ? res.filter((d: any) => d.kind !== 'curated') : []))
+    apiClientV2.get<Array<{ id: string; name: string; kind: string }>>('/datasets')
+      .then(res => setDatasets(Array.isArray(res) ? res.filter(d => d.kind !== 'curated') : []))
       .catch(() => setDatasets([]))
   }, [showCreate])
 
@@ -243,7 +267,7 @@ export default function TransformsTab() {
       await apiClientV2.post('/pipelines', { name: createName, source_dataset_id: createDatasetId, route: createRoute })
       setShowCreate(false)
       setCreateName(''); setCreateDatasetId(''); setCreateRoute('A'); setCreateError('')
-      const res: any = await apiClientV2.get('/pipelines')
+      const res = await apiClientV2.get<{ data?: Pipeline[] } | Pipeline[]>('/pipelines')
       setPipelines(Array.isArray(res) ? res : res.data ?? [])
     } catch (e: unknown) {
       const err = e as {detail?: string; message?: string}
@@ -256,11 +280,11 @@ export default function TransformsTab() {
   const loadRunDetail = async (plId: string) => {
     if (runDetails[plId] !== undefined) return
     try {
-      const runs: any = await apiClientV2.get(`/pipelines/${plId}/runs`)
+      const runs = await apiClientV2.get<{ data?: PipelineRun[] } | PipelineRun[]>(`/pipelines/${plId}/runs`)
       const runsArr: PipelineRun[] = Array.isArray(runs) ? runs : runs.data ?? []
       const last = runsArr[runsArr.length - 1]
       if (!last) { setRunDetails(p => ({ ...p, [plId]: null })); return }
-      const detail: any = await apiClientV2.get(`/pipelines/runs/${last.id}`)
+      const detail = await apiClientV2.get<RunDetail & { data?: RunDetail }>(`/pipelines/runs/${last.id}`)
       setRunDetails(p => ({ ...p, [plId]: detail.data ?? detail }))
     } catch {
       setRunDetails(p => ({ ...p, [plId]: null }))
@@ -275,7 +299,7 @@ export default function TransformsTab() {
 
   const handleRun = async (id: string) => {
     setRunning(id)
-    setRunDetails(p => ({ ...p, [id]: undefined as any }))
+    setRunDetails(p => ({ ...p, [id]: undefined }))
     try {
       await apiClientV2.post(`/pipelines/${id}/run-sync`)
       setPipelines(prev => prev.map(p => p.id === id ? { ...p, status: 'success' } : p))
@@ -283,7 +307,7 @@ export default function TransformsTab() {
     } catch {
       setPipelines(prev => prev.map(p => p.id === id ? { ...p, status: 'failed' } : p))
     } finally {
-      setRunning(false as any)
+      setRunning(false as unknown as string | null)
       setRunning(null)
     }
   }
@@ -316,7 +340,6 @@ export default function TransformsTab() {
           {pipelines.map(pl => {
             const isExpanded = expanded === pl.id
             const detail = runDetails[pl.id]
-            const steps = isExpanded && detail ? buildSteps(pl.route, detail.stats) : []
             const isRunning = running === pl.id
 
             return (

@@ -1,0 +1,145 @@
+"""SSRF-safe HTTP fetch (P7A external tools, Section 8/10).
+
+Resolves DNS and validates every hop's destination IP before connecting —
+blocks private, loopback, link-local, multicast, reserved, and unspecified
+ranges (this covers the cloud-metadata endpoint 169.254.169.254, which is
+link-local) — and independently validates each redirect hop rather than
+trusting httpx's automatic redirect follower. Streams the response body in
+bounded chunks, aborting the read as soon as the byte cap is exceeded,
+instead of trusting a possibly-absent or dishonest Content-Length header.
+
+Known residual gap: this validates DNS *before* connecting but does not pin
+the validated IP into the actual TCP connect, so a narrow DNS-rebinding
+race (attacker's resolver returns a public IP for the validation lookup,
+then a private IP for the real connect a few milliseconds later) is not
+covered. Closing that gap needs a custom transport that connects directly
+to the validated IP while still sending the correct TLS SNI/Host — out of
+scope for this task; do not describe this guard as rebinding-safe.
+"""
+from __future__ import annotations
+
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
+import httpx
+
+MAX_REDIRECTS = 5
+BLOCKED_PORTS = frozenset({22, 25, 3306, 5432, 6379, 9200, 11211})
+
+
+class SsrfBlockedError(Exception):
+    """A fetch target resolved to a disallowed network destination."""
+
+
+def _validate_host(host: str) -> None:
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise SsrfBlockedError(f"DNS_RESOLUTION_FAILED:{host}") from exc
+    if not infos:
+        raise SsrfBlockedError(f"DNS_RESOLUTION_FAILED:{host}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
+                or ip.is_reserved or ip.is_unspecified):
+            raise SsrfBlockedError(f"SSRF_BLOCKED_TARGET:{host}:{ip}")
+
+
+def _validate_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise SsrfBlockedError(f"SSRF_BLOCKED_SCHEME:{parsed.scheme}")
+    if not parsed.hostname:
+        raise SsrfBlockedError("SSRF_BLOCKED_NO_HOST")
+    if parsed.port and parsed.port in BLOCKED_PORTS:
+        raise SsrfBlockedError(f"SSRF_BLOCKED_PORT:{parsed.port}")
+    _validate_host(parsed.hostname)
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(url)
+    return (parsed.scheme, parsed.hostname or "", parsed.port)
+
+
+def _request(method: str, url: str, *, timeout_seconds: float, max_bytes: int,
+            headers: dict | None = None, json_body: dict | None = None,
+            follow_redirects: bool = True) -> httpx.Response:
+    """Shared per-hop validate/redirect/byte-cap-stream discipline used by
+    both safe_get and safe_post: validates the URL/host, streams the
+    response body with a byte cap, and independently revalidates each
+    redirect hop rather than trusting httpx's automatic redirect follower.
+
+    Credentials never cross an origin change — the SSRF guard validates
+    network destinations, not credential trust. One-way latch: once
+    dropped, headers stay dropped even if a later same-origin hop on the
+    new host would re-attach them. When json_body is provided (the POST
+    case), the cross-origin reset keeps a bare Content-Type header instead
+    of dropping to no headers at all, matching safe_post's documented
+    behavior.
+
+    When follow_redirects is False (safe_post's default), any 3xx response
+    is rejected outright rather than followed — a caller-supplied domain
+    allowlist (e.g. MCP's) is only ever checked against the original
+    endpoint, never re-checked on a redirect hop, so a compromised-but-
+    approved origin could otherwise 302 the request body to an arbitrary
+    host.
+    """
+    current = url
+    hop_headers = headers
+    stream_kwargs: dict = {}
+    cross_origin_reset = None
+    if json_body is not None:
+        hop_headers = dict(headers or {})
+        hop_headers.setdefault("Content-Type", "application/json")
+        stream_kwargs["json"] = json_body
+        cross_origin_reset = {"Content-Type": "application/json"}
+    for _ in range(MAX_REDIRECTS + 1):
+        _validate_url(current)
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
+            with client.stream(method, current, headers=hop_headers, **stream_kwargs) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    if not follow_redirects:
+                        raise SsrfBlockedError("SSRF_BLOCKED_UNEXPECTED_REDIRECT")
+                    location = response.headers.get("location")
+                    if not location:
+                        raise SsrfBlockedError("SSRF_BLOCKED_REDIRECT_NO_LOCATION")
+                    nxt = str(httpx.URL(current).join(location))
+                    prev_origin = _origin(current)
+                    next_origin = _origin(nxt)
+                    hop_headers = hop_headers if prev_origin == next_origin else cross_origin_reset
+                    current = nxt
+                    continue
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise SsrfBlockedError(f"SSRF_BLOCKED_OVERSIZED_RESPONSE:{total}")
+                    chunks.append(chunk)
+                # Seed the fully-read body so the caller's .read()/.json() work
+                # after the streaming context closes (httpx honors `_content`).
+                response._content = b"".join(chunks)
+                return response
+    raise SsrfBlockedError("SSRF_BLOCKED_TOO_MANY_REDIRECTS")
+
+
+def safe_get(url: str, *, timeout_seconds: float, max_bytes: int,
+            headers: dict | None = None) -> httpx.Response:
+    return _request("GET", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, headers=headers,
+                    follow_redirects=True)
+
+
+def safe_post(url: str, *, timeout_seconds: float, max_bytes: int,
+              json_body: dict, headers: dict | None = None) -> httpx.Response:
+    """Same validation/byte-cap discipline as safe_get, but POSTs a JSON
+    body — MCP's Streamable HTTP transport is POST-based JSON-RPC. Unlike
+    safe_get, redirects are never followed: any 3xx response raises
+    SsrfBlockedError outright. A caller-supplied domain allowlist (e.g.
+    MCP's) is only checked against the original endpoint, never re-checked
+    on a redirect hop, so a compromised-but-approved origin could otherwise
+    302 the POST body — which may carry model-supplied arguments — to an
+    arbitrary host. This matches mcp_client.py's documented expectation
+    that MCP servers don't redirect JSON-RPC calls."""
+    return _request("POST", url, timeout_seconds=timeout_seconds, max_bytes=max_bytes,
+                    headers=headers, json_body=json_body, follow_redirects=False)

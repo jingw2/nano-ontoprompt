@@ -1,0 +1,74 @@
+{
+  "input_hashes": {
+    "input-finance-audit-report-page1-png": "440bf42c03c84e30c3064745787664f8b152d94b32ec0296f4718ad6ab7f5cc9",
+    "input-finance-cash-flow-csv": "447d7244e006e192101f26871e3cac0eaeaf7d624d52aa849eb9586fcb8a25e5",
+    "input-finance-expense-reports-csv": "c6502c8981e146bb4f073a34917ce9cc06186824b58627d80f6de6cca3e272d1",
+    "input-finance-financial-data-xlsx": "9c1a33c3358f44e096816380d6e3e7a08b57b2474512efc054498dc6a44334a7",
+    "input-finance-month-end-close-docx": "79b9d034bbd9768d9e511aa27289f7547c7ef87d18ca82f35229944e013f055f"
+  },
+  "inputs": [
+    {
+      "fixture_id": "input-finance-financial-data-xlsx",
+      "kind": "tabular",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "path": "test_data/财务/financial_data.xlsx",
+      "sha256": "9c1a33c3358f44e096816380d6e3e7a08b57b2474512efc054498dc6a44334a7"
+    },
+    {
+      "fixture_id": "input-finance-cash-flow-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/财务/cash_flow.csv",
+      "sha256": "447d7244e006e192101f26871e3cac0eaeaf7d624d52aa849eb9586fcb8a25e5"
+    },
+    {
+      "fixture_id": "input-finance-expense-reports-csv",
+      "kind": "tabular",
+      "media_type": "text/csv",
+      "path": "test_data/财务/expense_reports.csv",
+      "sha256": "c6502c8981e146bb4f073a34917ce9cc06186824b58627d80f6de6cca3e272d1"
+    },
+    {
+      "fixture_id": "input-finance-month-end-close-docx",
+      "kind": "document",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "path": "test_data/财务/month_end_close.docx",
+      "sha256": "79b9d034bbd9768d9e511aa27289f7547c7ef87d18ca82f35229944e013f055f"
+    },
+    {
+      "derived_from": "test_data/财务/audit_report.pdf",
+      "derived_from_sha256": "c2cc6e4d5a6012770a050fb2bdd70133447a44275b8f105aedc76ec62cca8d19",
+      "fixture_id": "input-finance-audit-report-page1-png",
+      "kind": "image",
+      "media_type": "image/png",
+      "path": "test_data/runtime/finance/audit_report_page1.png",
+      "sha256": "440bf42c03c84e30c3064745787664f8b152d94b32ec0296f4718ad6ab7f5cc9"
+    }
+  ],
+  "source_refs": [
+    {
+      "path": "test_data/财务/financial_data.xlsx",
+      "sha256": "9c1a33c3358f44e096816380d6e3e7a08b57b2474512efc054498dc6a44334a7"
+    },
+    {
+      "path": "test_data/财务/cash_flow.csv",
+      "sha256": "447d7244e006e192101f26871e3cac0eaeaf7d624d52aa849eb9586fcb8a25e5"
+    },
+    {
+      "path": "test_data/财务/expense_reports.csv",
+      "sha256": "c6502c8981e146bb4f073a34917ce9cc06186824b58627d80f6de6cca3e272d1"
+    },
+    {
+      "path": "test_data/财务/month_end_close.docx",
+      "sha256": "79b9d034bbd9768d9e511aa27289f7547c7ef87d18ca82f35229944e013f055f"
+    },
+    {
+      "path": "test_data/runtime/finance/audit_report_page1.png",
+      "sha256": "440bf42c03c84e30c3064745787664f8b152d94b32ec0296f4718ad6ab7f5cc9"
+    },
+    {
+      "path": "test_data/财务/audit_report.pdf",
+      "sha256": "c2cc6e4d5a6012770a050fb2bdd70133447a44275b8f105aedc76ec62cca8d19"
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 from app.tasks.celery_app import celery_app
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @celery_app.task(bind=True)
 def run_audit(self, task_id: str):
@@ -12,7 +16,7 @@ def run_audit(self, task_id: str):
     from app.models.logic import LogicRule
     from app.models.action import Action
     from app.services.audit_service import run_react_audit
-    from app.services.encryption_service import decrypt
+    from app.services.model_callers.extraction import resolve_llm_caller, ModelVersionUnavailableError
 
     db = SessionLocal()
     try:
@@ -31,10 +35,20 @@ def run_audit(self, task_id: str):
             db.commit()
             return
 
+        # P2A-CALLERS: pin the immutable active version; never fall back.
+        try:
+            caller = resolve_llm_caller(db, model_cfg.id)
+        except ModelVersionUnavailableError as exc:
+            task.status = "failed"
+            task.error = str(exc)
+            db.commit()
+            return
+
         model_config = {
-            "provider": model_cfg.provider,
-            "api_key": decrypt(model_cfg.api_key_encrypted or ""),
-            "api_base": model_cfg.api_base,
+            "provider": caller["provider"],
+            "api_key": caller["api_key"],
+            "api_base": caller["api_base"],
+            "model": caller["model"],
         }
 
         # Build compact ontology snapshot (only fields needed by audit tools)
@@ -112,11 +126,23 @@ def run_audit(self, task_id: str):
         db.commit()
 
     except Exception as e:
+        logger.exception("audit task %s failed", task_id)
         try:
             task.status = "failed"
             task.error = str(e)
             db.commit()
         except Exception:
-            pass
+            # session 可能已损坏，用新 session 兜底标记失败，避免任务永远卡在 running
+            logger.warning("primary session unusable, retrying with fresh session for task %s", task_id, exc_info=True)
+            try:
+                fresh_db = SessionLocal()
+                task = fresh_db.query(AuditTask).filter(AuditTask.id == task_id).first()
+                if task:
+                    task.status = "failed"
+                    task.error = str(e)
+                    fresh_db.commit()
+                fresh_db.close()
+            except Exception:
+                logger.error("无法将任务 %s 标记为 failed，原始错误: %s", task_id, e, exc_info=True)
     finally:
         db.close()

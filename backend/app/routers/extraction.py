@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import logging
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
+from app.models.user import User
+from app.services.publication.extraction_model_port import default_extraction_model_port
 from app.models.extraction_task import ExtractionTask
 from app.models.file import UploadedFile
 from app.models.ontology import OntologyProject
@@ -14,10 +16,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("")
-def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = Depends(get_db), _=Depends(require_editor)):
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
         raise HTTPException(404, "Ontology not found")
+    # R-1: reject an unknown model id with a stable error instead of a 500 FK violation
+    if default_extraction_model_port.resolve_model(db, body.model_id) is None:
+        raise HTTPException(status_code=422, detail="MODEL_CONFIG_NOT_FOUND")
 
     files_query = db.query(UploadedFile).filter(UploadedFile.ontology_id == ontology_id)
     if body.file_ids:

@@ -1,0 +1,10 @@
+{
+  "fixture_version": "2026-08-27.1",
+  "journey_id": "credit",
+  "logical_model_calls": 3,
+  "max_http_attempts": 6,
+  "max_tool_rounds_per_turn": 1,
+  "model_id": "deepseek-v4-flash-vision-exp",
+  "schema_version": 1,
+  "seed": 20260826
+}

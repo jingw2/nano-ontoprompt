@@ -1,4 +1,4 @@
-﻿import http from 'http';
+import http from 'http';
 import crypto from 'crypto';
 
 async function api(method, endpoint, body, token) {
@@ -42,7 +42,7 @@ console.log('Unique carriers:', carriers.size, 'suppliers:', suppliers.size);
 // 创建承运商实体
 for (const [name] of carriers) {
   const r = await api('POST', '/api/v1/ontologies/' + oid + '/entities', {
-    name_cn: name, name_en: name, type: '承运商', description: 供应链承运商: , confidence: 0.95, properties: { carrier_name: name }
+    name_cn: name, name_en: name, type: '承运商', description: '供应链承运商', confidence: 0.95, properties: { carrier_name: name }
   }, token);
   const id = r.data?.id || r.id;
   carriers.set(name, id);
@@ -54,7 +54,7 @@ let supCount = 0;
 for (const [name] of suppliers) {
   if (supCount >= 15) break;
   const r = await api('POST', '/api/v1/ontologies/' + oid + '/entities', {
-    name_cn: name, name_en: name, type: '供应商', description: 供应链供应商: , confidence: 0.95, properties: { supplier_code: name }
+    name_cn: name, name_en: name, type: '供应商', description: '供应链供应商', confidence: 0.95, properties: { supplier_code: name }
   }, token);
   const id = r.data?.id || r.id;
   suppliers.set(name, id);

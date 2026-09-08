@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["供应商"]},
+  {"category": "logic_rule", "required_keywords": ["交货准时率"]},
+  {"category": "logic_rule", "required_keywords": ["质量合格率"]}
+]

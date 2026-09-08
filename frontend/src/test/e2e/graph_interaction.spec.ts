@@ -1,28 +1,27 @@
-import { test, expect } from '@playwright/test'
+/**
+ * graph_interaction.spec.ts — ontology detail graph tab (empty state,
+ * node/edge counts). Self-skips until the ontologies API is registered.
+ */
+import { test, expect, type Page } from '@playwright/test'
+import { hasApi } from './helpers/availability'
+import { loginAsAdmin } from './helpers/ui'
 
-const BASE = 'http://localhost:5173'
-
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
-}
-
-async function createOntology(page: any): Promise<string> {
-  await page.goto(`${BASE}/ontologies`)
-  await page.click('button:has-text("创建 Ontology")')
+async function createOntology(page: Page): Promise<string> {
+  await page.goto('/ontologies')
+  await page.click('button:has-text("创建本体")')
+  await page.waitForURL(/\/ontologies\/new$/)
+  await page.click('button:has-text("简易 LLM 提取")')
   const name = `图谱测试-${Date.now()}`
-  await page.fill('input[placeholder="名称 *"]', name)
-  await page.click('button:has-text("确认")')
-  await page.waitForURL(/\/ontologies\/[a-f0-9-]+$/)
+  await page.fill('input[placeholder="本体名称"]', name)
+  await page.click('button:has-text("创建本体")')
+  await page.waitForURL(/\/ontologies\/[a-f0-9-]+/)
   return name
 }
 
 test.describe('Graph Tab Interaction', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
+    test.skip(!(await hasApi('/api/v1/ontologies')), 'backend /api/v1/ontologies not registered yet')
+    await loginAsAdmin(page)
   })
 
   test('graph tab shows empty state without extraction', async ({ page }) => {

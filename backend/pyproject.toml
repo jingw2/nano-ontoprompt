@@ -1,0 +1,14 @@
+[project]
+name = "ontexus-backend"
+version = "0.1.0"
+description = "Ontexus backend service"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+# pytest-asyncio==0.24.0 (pinned in requirements.txt) only recognizes
+# asyncio_default_fixture_loop_scope; asyncio_default_test_loop_scope is a
+# later-version option and would emit an "Unknown config option" warning here.
+asyncio_default_fixture_loop_scope = "function"

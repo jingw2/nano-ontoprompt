@@ -9,6 +9,9 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
+import V2DefinitionEditor from './V2DefinitionEditor'
+
+type LogicRuleRow = LogicRule & { name?: string; logic_type?: string }
 
 function parseLinkedEntities(value: unknown): string[] {
   if (Array.isArray(value)) return value
@@ -34,7 +37,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
 
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ['logic', ontologyId],
-    queryFn: () => ontologyApi.listLogic(ontologyId) as any,
+    queryFn: () => ontologyApi.listLogic(ontologyId),
   })
 
   const createMut = useMutation({
@@ -68,6 +71,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
 
   return (
     <div className="space-y-4">
+      <V2DefinitionEditor ontologyId={ontologyId} kind="logic" />
       {/* Search + Actions */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
@@ -106,7 +110,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r: any) => {
+                {(filtered as LogicRuleRow[]).map(r => {
                   const linkedEntities = parseLinkedEntities(r.linked_entities)
                   const status = r.status || 'draft'
                   const enabled = r.enabled !== false

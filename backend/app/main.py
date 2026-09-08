@@ -1,5 +1,5 @@
 """
-OntoPrompt API v2
+Ontexus API v2
 
 架构：FastAPI + PostgreSQL + Neo4j + ChromaDB + MinIO + Celery/Redis
 v2 新增：Pipelines 全链路（Connection→Dataset→Transform→Curated→Mapping）
@@ -7,20 +7,53 @@ v1 兼容：/api/v1/* 路由全部保留
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
+# I-BACKEND: refuse unsupported Python before any third-party import
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from check_python_version import require_supported_python
+
+require_supported_python()
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import logging
-from app.database import engine, Base, SessionLocal
+from app.database import SessionLocal
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit
+from app.routers.models import admin_router as models_admin_router
+from app.routers.ontology_data_grants import router as data_grants_router
+from app.routers.application_state_schemas import router as app_state_schemas_router
+from app.routers import retention
+from app.routers import tool_connections
+from app.routers import skills
+from app.routers import (
+    agents as agents_module,
+    agent_approvals,
+    agent_application_state,
+    agent_clarifications,
+    agent_events,
+    agent_memories,
+    agent_reconciliations,
+    agent_turns,
+    ontology_access_grants,
+    ontology_lifecycle,
+    ontology_remediations,
+    business_journeys,
+    security_domains,
+)
+from app.routers import oauth as oauth_router
+from app.routers import mcp_write_requests as mcp_write_requests_router
+from app.routers import mcp as mcp_router
 from app.routers.v2 import connections as connections_v2
 from app.routers.v2 import datasets as datasets_v2
 from app.routers.v2 import pipelines as pipelines_v2
@@ -29,36 +62,15 @@ from app.routers.v2 import search as search_v2
 from app.routers.v2 import curated as curated_v2
 from app.routers.v2 import mappings as mappings_v2
 from app.routers.v2 import incremental as incremental_v2
+from app.routers.v2 import refresh_events as refresh_events_v2
+from app.routers.v2 import refresh as refresh_v2
 from app.routers.v2 import logic_actions as logic_actions_v2
-
-def _run_schema_migration():
-    """统一 schema 迁移入口。
-
-    生产环境通过 Alembic 管理迁移；开发环境若库未纳入 Alembic 版本管理
-    （如由 create_all 建起的旧库），则回退到 create_all 兜底并 stamp 到最新版本。
-    """
-    import os
-    from alembic import command
-    from alembic.config import Config as AlembicConfig
-
-    alembic_ini = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
-    cfg = AlembicConfig(alembic_ini)
-    if os.environ.get("DATABASE_URL"):
-        cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
-
-    try:
-        # 已存在表但未纳入 alembic 版本管理时，stamp 到基线再升级
-        insp = inspect(engine)
-        existing_tables = set(insp.get_table_names())
-        has_alembic_version = "alembic_version" in existing_tables
-        if existing_tables and not has_alembic_version:
-            command.stamp(cfg, "0001_full_baseline")
-        command.upgrade(cfg, "head")
-    except Exception:
-        # 开发环境兜底：alembic 失败时用 create_all 保证表结构就位
-        logger.warning("alembic upgrade failed; falling back to Base.metadata.create_all", exc_info=True)
-        Base.metadata.create_all(bind=engine)
-
+from app.routers.v2 import runtime as runtime_v2
+from app.services.runtime.credentials import RuntimeAccessError
+from app.services.runtime.execution import ExecutionError
+from app.services.runtime.action_bindings import BindingError, PlanValidationError
+from app.services.runtime.sandbox import SandboxError
+from app.services.runtime.turn_plans import TurnPlanError
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -75,8 +87,6 @@ def _seed_db():
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
         from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
         from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
-        _run_schema_migration()
-
         seed_admin(db)
 
         # 重启时清理遗留的 running 任务 — daemon 线程被杀后 task 会永久卡在 85%
@@ -134,7 +144,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Neo4j index setup skipped (unavailable); startup continues", exc_info=True)
     yield
 
-app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Ontexus API", version="0.1.0", lifespan=lifespan)
 
 # 注册限流器 - 保护 Auth 等敏感端点
 from app.limiter import limiter
@@ -142,6 +152,14 @@ from slowapi.middleware import SlowAPIMiddleware
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+# I-BACKEND: browser-hardening headers (F0-SECURITY export) + 24h idempotency
+# key persistence (Section 12).  The idempotency middleware only inspects
+# mutation requests that carry an Idempotency-Key; reads/SSE pass through.
+from app.middleware.security_headers import create_security_headers_middleware
+from app.middleware.idempotency import create_idempotency_middleware
+app.add_middleware(create_security_headers_middleware())
+app.add_middleware(create_idempotency_middleware())
 
 app.add_middleware(
     CORSMiddleware,
@@ -165,7 +183,32 @@ app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/expor
 app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"])
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
+app.include_router(models_admin_router)
+app.include_router(data_grants_router, prefix="/api/v1/ontology-data-grants", tags=["data-grants"])
+app.include_router(business_journeys.router, prefix="/api/v1/business-journeys", tags=["business-journeys"])
+app.include_router(app_state_schemas_router, prefix="/api/v2/application-state-schemas", tags=["application-state-schemas"])
+app.include_router(agents_module.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
+
+# I-BACKEND: core Agent API routers (Section 12 registration)
+app.include_router(ontology_lifecycle.router, prefix="/api/v1/ontologies", tags=["ontology-lifecycle"])
+app.include_router(ontology_access_grants.router, prefix="/api/v1/ontologies", tags=["ontology-access-grants"])
+app.include_router(ontology_access_grants.admin_router, prefix="/api/v1", tags=["ontology-admin"])
+app.include_router(ontology_remediations.router, prefix="/api/v1/ontologies", tags=["ontology-remediations"])
+app.include_router(security_domains.router, prefix="/api/v1", tags=["security-domains"])
+app.include_router(agent_turns.router, prefix="/api/v1", tags=["agent-turns"])
+app.include_router(agent_events.router, prefix="/api/v1", tags=["agent-events"])
+app.include_router(agent_approvals.router, prefix="/api/v1", tags=["agent-approvals"])
+app.include_router(agent_clarifications.router, prefix="/api/v1", tags=["agent-clarifications"])
+app.include_router(agent_memories.router, prefix="/api/v1", tags=["agent-memories"])
+app.include_router(oauth_router.router, prefix="/api/v1", tags=["oauth"])
+# agent_audit is an alias of agent_application_state.router (same object); the
+# application-state router carries both the state and audit read routes.
+app.include_router(agent_application_state.router, prefix="/api/v1", tags=["agent-application-state"])
+app.include_router(agent_reconciliations.router, prefix="/api/v1", tags=["agent-reconciliations"])
+app.include_router(mcp_write_requests_router.router, prefix="/api/v1", tags=["mcp-write-requests"])
+app.include_router(mcp_router.router, prefix="/api/v1", tags=["mcp"])
+
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"])
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"])
 app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"])
@@ -174,7 +217,23 @@ app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-sear
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"])
 app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"])
 app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"])
+app.include_router(refresh_v2.router, prefix="/api/v2/refresh", tags=["v2-refresh"])
+app.include_router(refresh_events_v2.router, prefix="/api/v2/refresh", tags=["v2-refresh-events"])
 app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"])
+app.include_router(retention.router, prefix="/api/v2", tags=["v2-retention"])
+app.include_router(tool_connections.router, prefix="/api/v2", tags=["tool-connections"])
+app.include_router(skills.router, prefix="/api/v2", tags=["skills"])
+app.include_router(runtime_v2.router, prefix="/api/v2/runtime", tags=["v2-runtime"])
+app.add_exception_handler(RuntimeAccessError, runtime_v2.runtime_access_error_handler)
+# Task 26A: every one of these (Tasks 21/22/26) carries the same stable
+# `.reason_code` convention as `RuntimeAccessError` but is not a subclass of
+# it — `add_exception_handler` can register the SAME handler function for
+# each, so every structured Runtime denial maps to the wire exactly once.
+app.add_exception_handler(ExecutionError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(BindingError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(PlanValidationError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(SandboxError, runtime_v2.runtime_access_error_handler)
+app.add_exception_handler(TurnPlanError, runtime_v2.runtime_access_error_handler)
 
 def get_db():
     db = SessionLocal()

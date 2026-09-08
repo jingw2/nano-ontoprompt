@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_editor
 from app.models.prompt import Prompt
 from app.models.extraction_task import ExtractionTask
 from app.models.user import User
@@ -19,6 +19,13 @@ BUILTIN_PROMPTS = [
 实体类型参考：Organization（组织）、Product（产品）、Material（物料）、Category（类别）、Document（文档/订单）、Process（流程）、Facility（设施）、Concept（概念）
 
 关系类型参考：IS-A、PART-OF、INSTANCE-OF、supply、stores、processes、关联
+
+提取纪律（务必遵守）：
+- 只提取与文档主题直接相关的核心概念，跳过偶然提及与噪音（口号、版权行、纯数字段落、文件名）
+- 每个实体必须填写一句基于本文档的 description（用于消歧）；同一概念出现多种写法（含中英文并列写法）时只保留一个规范实体，禁止为同义写法建重复实体
+- 关系类型必须语义明确（优先 IS-A、PART-OF、INSTANCE-OF、supply、stores、processes），禁止使用"关联"等模糊类型
+- 每条关系的 source/target 必须取自已提取实体的 name_cn，禁止引用未提取的实体
+- 重点识别概念间的层级关系（IS-A、PART-OF）
 
 每个实体必须填写 properties（最多3个关键属性，不得为空）。
 每条逻辑规则必须填写 linked_entities（关联实体name_cn列表，不得为空）。
@@ -307,7 +314,7 @@ def list_prompts(domain: Optional[str] = None, db: Session = Depends(get_db), _=
     return {"data": [PromptOut.model_validate(p).model_dump() for p in prompts]}
 
 @router.post("", status_code=201)
-def create_prompt(body: PromptCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_prompt(body: PromptCreate, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     prompt = Prompt(id=str(uuid.uuid4()), name=body.name, domain=body.domain,
                     content=body.content, version=body.version, created_by=current_user.id)
     db.add(prompt); db.commit(); db.refresh(prompt)
@@ -326,7 +333,7 @@ def get_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(get_curr
     return {"data": PromptOut.model_validate(p).model_dump()}
 
 @router.put("/{prompt_id}")
-def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_db), _=Depends(require_editor)):
     p = db.query(Prompt).filter(Prompt.id == prompt_id).first()
     if not p:
         raise HTTPException(404, "Not found")
@@ -336,7 +343,7 @@ def update_prompt(prompt_id: str, body: PromptUpdate, db: Session = Depends(get_
     return {"data": PromptOut.model_validate(p).model_dump()}
 
 @router.delete("/{prompt_id}", status_code=204)
-def delete_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def delete_prompt(prompt_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     p = db.query(Prompt).filter(Prompt.id == prompt_id).first()
     if not p:
         raise HTTPException(404, "Not found")
@@ -351,21 +358,25 @@ def generate_prompt_template(
     domain: str = Query(..., description="业务域"),
     style: str = Query("ontology_extraction", description="提示词风格"),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_editor),
 ):
     """Use LLM to generate a prompt template for a given business domain"""
     from app.services.llm_service import _call_llm
-    from app.services.encryption_service import decrypt
+    from app.services.model_callers.extraction import resolve_llm_caller, ModelVersionUnavailableError
 
     model_cfg = db.query(ModelConfig).first()
     if not model_cfg:
         raise HTTPException(400, "No model configured. Please add a model in the Models page first.")
 
-    provider = model_cfg.provider
-    api_key = decrypt(model_cfg.api_key_encrypted or "")
-    api_base = model_cfg.api_base
-    models_list = model_cfg.models or []
-    model_name = models_list[0] if models_list else ""
+    try:
+        kwargs = resolve_llm_caller(db, model_cfg.id)
+    except ModelVersionUnavailableError:
+        raise HTTPException(409, "MODEL_VERSION_UNAVAILABLE: configure an active immutable model version first.")
+
+    provider = kwargs["provider"]
+    api_key = kwargs["api_key"]
+    api_base = kwargs["api_base"]
+    model_name = kwargs["model"]
     if not model_name:
         raise HTTPException(400, "Model name not configured.")
 

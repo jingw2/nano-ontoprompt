@@ -11,6 +11,7 @@ class OntologyMapping(Base):
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False)
     curated_dataset_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_curated_datasets.id"), nullable=True)
     entity_class: Mapped[str] = mapped_column(String(200), nullable=False)
+    entity_class_cn: Mapped[str | None] = mapped_column(String(200), nullable=True)
     field_mapping: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

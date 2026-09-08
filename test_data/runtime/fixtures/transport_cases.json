@@ -1,0 +1,31 @@
+{
+  "cases": {
+    "parity-allow-with-data": {
+      "case_id": "parity-allow-with-data",
+      "expected": {
+        "decision": "ALLOW",
+        "row_count_min": 1
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-00"
+    },
+    "parity-denied-result": {
+      "case_id": "parity-denied-result",
+      "expected": {
+        "decision": "DENY",
+        "reason_code": "AGENT_CAPABILITY_DENIED"
+      },
+      "tenant_id": "tenant-beta",
+      "user_id": "user-beta-operator-01"
+    },
+    "parity-writable-plan-hash": {
+      "case_id": "parity-writable-plan-hash",
+      "expected": {
+        "decision": "ALLOW",
+        "plan_hash_stable": true
+      },
+      "tenant_id": "tenant-acme",
+      "user_id": "user-acme-operator-02"
+    }
+  }
+}

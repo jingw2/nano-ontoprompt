@@ -1,6 +1,15 @@
 import json
 import re
+import unicodedata
 from typing import Any
+
+# graph-engineering discipline (per the extraction playbook): vague predicates
+# make a graph untraversable, so relations carrying only a vague type are
+# dropped during normalization instead of polluting the graph
+VAGUE_RELATION_TYPES = frozenset({
+    "关联", "related_to", "related", "有关系", "关联关系", "interacts_with",
+})
+
 
 def extract_ontology(text: str, prompt_content: str, model_config: dict, model_name: str, retry_count: int = 3) -> dict:
     provider = model_config.get("provider", "openai")
@@ -14,8 +23,13 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
             "要求：\n"
             "1. entities 只放概念/类型实体（如供应商分级、产品类别），不要为文中提到的具体公司名、产品名、"
             "物料名等命名实例单独建 entity——这些具体实例请放入 instances 数组\n"
-            "2. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系\n"
-            "3. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
+            "2. 只提取与文档主题直接相关的核心概念，跳过偶然提及与噪音（如口号、版权行、纯数字段落）\n"
+            "3. 每个实体必须写一句基于本文档的一句话描述（用于消歧）；同一概念出现多种写法时只保留一个规范实体，"
+            "不要为同义写法建重复实体\n"
+            "4. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系；"
+            "关系类型必须语义明确（IS-A、PART-OF、INSTANCE-OF、SUPPLIES 等），禁止使用\"关联\"这类模糊类型；"
+            "每条关系的 source/target 必须取自已提取的实体\n"
+            "5. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
             f"文档内容：\n\n{text}"
         )},
     ]
@@ -23,11 +37,219 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
     for attempt in range(retry_count):
         try:
             raw = _call_llm(provider, api_key, api_base, model_name, messages)
-            return _parse_response(raw)
+            return normalize_extracted_ontology(_parse_response(raw))
         except Exception as e:
             if attempt == retry_count - 1:
                 raise
     return {}
+
+
+def normalize_extracted_ontology(parsed: Any) -> dict:
+    """Deterministic post-extraction normalization (graph-engineering
+    discipline, bounded): drop junk entities, merge duplicate surface forms
+    into one canonical entity, drop dangling/vague relations and deduplicate
+    relation triples.  Entities gain a one-line grounded description when the
+    model omitted it."""
+    if not isinstance(parsed, dict):
+        return parsed if isinstance(parsed, dict) else {}
+
+    entities: list[dict] = []
+    seen_names: dict[str, str] = {}  # normalized name -> canonical name_cn
+    for entity in parsed.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        name = _clean_entity_name(entity.get("name_cn"))
+        if not name or _is_junk_entity_name(name):
+            continue
+        key = _normalize_name(name)
+        canonical = seen_names.get(key)
+        if canonical is not None:
+            # duplicate surface form of an existing concept -> keep the first
+            # canonical entity only (its description survives for disambiguation)
+            continue
+        seen_names[key] = name
+        entity["name_cn"] = name
+        if not entity.get("description"):
+            entity["description"] = f"文档中的概念：{name}"
+        entities.append(entity)
+
+    entity_names = set(seen_names.values())
+    relations: list[dict] = []
+    seen_relations: set[tuple] = set()
+    for relation in parsed.get("relations") or []:
+        if not isinstance(relation, dict):
+            continue
+        source = _clean_entity_name(relation.get("source"))
+        target = _clean_entity_name(relation.get("target"))
+        rel_type = str(relation.get("type") or "").strip()
+        if not source or not target or not rel_type:
+            continue
+        # dangling references (an endpoint the model never extracted) are
+        # structural noise — drop them (playbook: every relation must connect
+        # two extracted entities)
+        if source not in entity_names or target not in entity_names:
+            continue
+        if rel_type in VAGUE_RELATION_TYPES:
+            continue
+        key = (source, rel_type, target)
+        if key in seen_relations:
+            continue
+        seen_relations.add(key)
+        relation["source"] = source
+        relation["target"] = target
+        relation["type"] = rel_type
+        relations.append(relation)
+
+    result = dict(parsed)
+    result["entities"] = entities
+    result["relations"] = relations
+    return result
+
+
+def _clean_entity_name(value: Any) -> str:
+    """Trim and strip bracketed transliterations/annotations (e.g. the
+    `（Supplier）` annotation a model may append) so surface forms merge."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    text = re.sub(r"[（(].*?[)）]", "", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _normalize_name(name: str) -> str:
+    """Case/width/space-insensitive key for duplicate detection."""
+    return unicodedata.normalize("NFKC", name).strip().lower()
+
+
+def _is_junk_entity_name(name: str) -> bool:
+    """Names that are pure digits/symbols, whitespace-only, or structural
+    artifacts (file paths, repeated punctuation) add no graph value."""
+    if len(name) < 2:
+        return True
+    if name.isdigit():
+        return True
+    alnum = [ch for ch in name if ch.isalnum()]
+    if not alnum:
+        return True
+    # a name that is a file path or a bare document filename
+    if re.search(r"(?:^|/)[^/\s]+\.(?:md|docx?|csv|xlsx?|pdf|pptx?|json|txt)$", name, re.IGNORECASE):
+        return True
+    return False
+
+
+def resolve_entities(entities: list[dict], model_config: dict, model_name: str) -> dict[str, str]:
+    """Cross-document entity resolution (graph-engineering playbook, resolution
+    stage): within each entity type, cluster surface-form variants of the same
+    real-world concept using the extraction-time descriptions as disambiguation
+    context — catches cases exact-name matching misses (abbreviation vs full
+    name, alias vs formal name across files).  Returns an alias map
+    {raw_name_cn: canonical_name_cn} covering every input name; unmatched names
+    and failed calls fall back to identity so no entity is ever silently lost."""
+    alias_map: dict[str, str] = {}
+    by_type: dict[str, list[dict]] = {}
+    for e in entities:
+        name = e.get("name_cn")
+        if not name:
+            continue
+        alias_map[name] = name
+        by_type.setdefault(e.get("type") or "", []).append(e)
+
+    provider = model_config.get("provider", "openai")
+    api_key = model_config.get("api_key", "")
+    api_base = model_config.get("api_base")
+
+    for etype, group in by_type.items():
+        if len(group) < 2:
+            continue
+        entity_list = "\n".join(
+            f"- {e['name_cn']}: {(e.get('description') or '').strip()[:100]}" for e in group
+        )
+        system_prompt = (
+            f"你是实体消歧专家。下面是同一类型（{etype or '未分类'}）从文档中提取的实体，"
+            "其中部分可能是同一概念的不同写法（如全称/简称、中英文并列、别名）。请聚类："
+            "每个输入名称必须出现在且仅出现在一个簇的 aliases 中；确实不同的概念各自单独成簇；"
+            "结合描述判断，不要仅凭字面相似合并不同概念；canonical 取信息最完整、无歧义的写法。\n\n"
+            '只返回 JSON：{"clusters": [{"canonical": "规范名", "aliases": ["写法1", "写法2"]}]}'
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"实体列表：\n{entity_list}"},
+        ]
+        try:
+            parsed = _parse_response(_call_llm(provider, api_key, api_base, model_name, messages))
+        except Exception:
+            continue  # resolution is best-effort; keep identity mapping on failure
+        group_names = {e["name_cn"] for e in group}
+        for cluster in (parsed.get("clusters") or []) if isinstance(parsed, dict) else []:
+            if not isinstance(cluster, dict):
+                continue
+            canonical = _clean_entity_name(cluster.get("canonical"))
+            if not canonical or canonical not in group_names:
+                continue
+            for alias in cluster.get("aliases") or []:
+                alias = _clean_entity_name(alias)
+                if alias and alias in group_names:
+                    alias_map[alias] = canonical
+    return alias_map
+
+
+def apply_entity_resolution(result: dict, alias_map: dict) -> dict:
+    """Rewrite entities/relations/logic_rules/actions through an alias map from
+    `resolve_entities()`, merging duplicate surface forms into their canonical
+    entity (keeping the richer description/properties) and remapping every
+    downstream name reference so nothing is left pointing at a dropped alias."""
+    if not alias_map or all(k == v for k, v in alias_map.items()):
+        return result  # no-op: nothing to merge
+
+    def _remap(name: Any) -> Any:
+        return alias_map.get(name, name) if isinstance(name, str) else name
+
+    merged: dict[str, dict] = {}
+    for e in result.get("entities") or []:
+        name = e.get("name_cn")
+        if not name:
+            continue
+        canonical = _remap(name)
+        if canonical not in merged:
+            e = dict(e)
+            e["name_cn"] = canonical
+            merged[canonical] = e
+        else:
+            existing = merged[canonical]
+            if len(e.get("description") or "") > len(existing.get("description") or ""):
+                existing["description"] = e["description"]
+            if isinstance(e.get("properties"), dict):
+                existing.setdefault("properties", {})
+                for k, v in e["properties"].items():
+                    existing["properties"].setdefault(k, v)
+
+    result = dict(result)
+    result["entities"] = list(merged.values())
+
+    relations = []
+    seen_rel: set[tuple] = set()
+    for r in result.get("relations") or []:
+        r = dict(r)
+        r["source"] = _remap(r.get("source", ""))
+        r["target"] = _remap(r.get("target", ""))
+        key = (r["source"], r.get("type"), r["target"])
+        if r["source"] and r["target"] and r["source"] != r["target"] and key not in seen_rel:
+            seen_rel.add(key)
+            relations.append(r)
+    result["relations"] = relations
+
+    for coll in ("logic_rules", "actions"):
+        items = []
+        for item in result.get(coll) or []:
+            item = dict(item)
+            linked = item.get("linked_entities")
+            if isinstance(linked, list):
+                item["linked_entities"] = list(dict.fromkeys(_remap(n) for n in linked))
+            items.append(item)
+        result[coll] = items
+
+    return result
 
 
 def infer_relations(entities: list, existing_relations: list, text: str,
@@ -130,6 +352,104 @@ def _call_llm(provider: str, api_key: str, api_base: str | None, model: str, mes
             create_kwargs.pop("seed", None)
             resp = client.chat.completions.create(**create_kwargs)
         return resp.choices[0].message.content or ""
+
+
+def chat_completion(
+    provider: str, api_key: str, api_base: str | None, model: str, messages: list,
+    *, tools: list | None = None, options: dict | None = None, timeout: float = 300,
+) -> dict:
+    """Conversation chat completion (Agent Turn model call).
+
+    OpenAI-compatible chat.completions for `openai`/`compatible` providers
+    (honoring the pinned version's `options` like temperature/max_tokens and
+    the optional `tools` schema for tool calling); `anthropic` maps the
+    messages/tools onto the Messages API.  Returns a normalized dict with
+    `content` (str) and `tool_calls` (list of {id, name, arguments_json}).
+    """
+    if provider == "anthropic":
+        return _anthropic_chat_completion(api_key, model, messages, tools, timeout)
+    import openai
+    kwargs: dict = {"api_key": api_key, "timeout": timeout}
+    if api_base:
+        kwargs["base_url"] = api_base
+    client = openai.OpenAI(**kwargs)
+    create_kwargs: dict = {"model": model, "messages": messages}
+    if tools:
+        create_kwargs["tools"] = tools
+    if options:
+        if options.get("temperature") is not None:
+            create_kwargs["temperature"] = float(options["temperature"])
+        if options.get("max_tokens") is not None:
+            create_kwargs["max_tokens"] = int(options["max_tokens"])
+    try:
+        resp = client.chat.completions.create(**create_kwargs)
+    except TypeError:
+        # options unsupported by this provider surface — retry without them
+        create_kwargs.pop("temperature", None)
+        create_kwargs.pop("max_tokens", None)
+        resp = client.chat.completions.create(**create_kwargs)
+    message = resp.choices[0].message
+    tool_calls = []
+    for call in message.tool_calls or []:
+        tool_calls.append({
+            "id": call.id,
+            "name": call.function.name,
+            "arguments_json": call.function.arguments or "{}",
+        })
+    return {"content": message.content or "", "tool_calls": tool_calls}
+
+
+def _anthropic_chat_completion(api_key: str, model: str, messages: list, tools: list | None,
+                               timeout: float = 300) -> dict:
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+    system = None
+    api_messages = []
+    for message in messages:
+        if message.get("role") == "system":
+            system = (system or "") + (message.get("content") or "")
+        elif message.get("role") == "tool":
+            api_messages.append({
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": message.get("tool_call_id", ""),
+                             "content": message.get("content") or ""}],
+            })
+        else:
+            content = message.get("content") or ""
+            if message.get("tool_calls"):
+                blocks = [{"type": "text", "text": content}]
+                for call in message["tool_calls"]:
+                    try:
+                        import json as _json
+                        payload = _json.loads(call.get("arguments_json") or "{}")
+                    except Exception:
+                        payload = {}
+                    blocks.append({"type": "tool_use", "id": call["id"], "name": call["name"],
+                                   "input": payload})
+                api_messages.append({"role": "user" if message["role"] == "assistant" else message["role"],
+                                     "content": blocks})
+            else:
+                api_messages.append({"role": message["role"], "content": content})
+    api_tools = None
+    if tools:
+        api_tools = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
+                      "input_schema": t["function"]["parameters"]} for t in tools]
+    kwargs: dict = {"model": model, "max_tokens": 8192, "messages": api_messages}
+    if system:
+        kwargs["system"] = system
+    if api_tools:
+        kwargs["tools"] = api_tools
+    resp = client.messages.create(**kwargs)
+    tool_calls = []
+    content_text = ""
+    for block in resp.content:
+        if getattr(block, "type", None) == "tool_use":
+            import json as _json
+            tool_calls.append({"id": block.id, "name": block.name,
+                               "arguments_json": _json.dumps(block.input, ensure_ascii=False)})
+        else:
+            content_text += getattr(block, "text", "") or ""
+    return {"content": content_text, "tool_calls": tool_calls}
 
 
 

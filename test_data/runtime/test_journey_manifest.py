@@ -1,0 +1,325 @@
+"""Contract tests for the three business-journey fixture corpora.
+
+Run with: python -m pytest test_data/runtime/test_journey_manifest.py -q
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from journey_registry import (  # noqa: E402
+    CASE_IDS,
+    DETERMINISTIC_CASE_TARGETS,
+    JOURNEY_IDS,
+    NORMAL_CASE_ID,
+    assert_journey_case,
+    journey_cases,
+    load_journey_manifest,
+    validate_journey_manifest,
+)
+from registry import CASE_REGISTRY, JOURNEY_DETERMINISTIC_TARGET_DEFS, journey_case_id  # noqa: E402
+
+ROOT = Path("test_data/runtime")
+
+
+def test_three_manifests_have_multimodal_inputs_and_governance_states():
+    for journey_id in ("supply_chain", "finance", "credit"):
+        manifest = load_journey_manifest(journey_id, ROOT)
+        assert manifest.model_id == "deepseek-v4-flash-vision-exp"
+        assert {part["kind"] for part in manifest.inputs} >= {"tabular", "document", "image"}
+        assert {item["id"] for item in manifest.governance_outcomes} == {
+            "automatic",
+            "approved",
+            "rejected",
+            "expired",
+        }
+
+
+def test_every_case_has_exactly_one_non_optional_target():
+    for journey_id in ("supply_chain", "finance", "credit"):
+        for case in journey_cases(journey_id):
+            assert case["skip_allowed"] is False
+            assert case["execution_mode"] in {"deterministic", "real_model_browser"}
+            assert len(case["test_targets"]) == 1
+            assert case["test_targets"][0]["kind"] in {"pytest", "playwright"}
+
+
+# --- Additional coverage beyond the plan's minimum given tests --------------
+
+
+def test_each_journey_has_the_exact_15_case_ids():
+    for journey_id in JOURNEY_IDS:
+        case_ids = [case["case_id"] for case in journey_cases(journey_id)]
+        assert set(case_ids) == set(CASE_IDS)
+        assert len(case_ids) == len(CASE_IDS) == 15
+
+
+def test_only_normal_pipeline_release_is_real_model_browser():
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            if case["case_id"] == NORMAL_CASE_ID:
+                assert case["execution_mode"] == "real_model_browser"
+                assert case["test_targets"][0]["kind"] == "playwright"
+            else:
+                assert case["execution_mode"] == "deterministic"
+                assert case["test_targets"][0]["kind"] == "pytest"
+
+
+def test_normal_case_points_at_its_own_journeys_exact_playwright_title():
+    titles = set()
+    for journey_id in JOURNEY_IDS:
+        case = next(c for c in journey_cases(journey_id) if c["case_id"] == NORMAL_CASE_ID)
+        target = case["test_targets"][0]
+        assert target["path"] == "frontend/src/test/e2e/business-journeys.spec.ts"
+        assert journey_id.replace("_", " ") in target["selector"] or journey_id.replace("_", "-") in target["selector"]
+        titles.add(target["selector"])
+    # Each journey's normal case uses a distinct title -- never shared/reused.
+    assert len(titles) == 3
+
+
+def test_all_cases_pass_assert_journey_case():
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            assert_journey_case(case)
+
+
+def test_load_journey_manifest_rejects_unknown_journey():
+    with pytest.raises(ValueError):
+        load_journey_manifest("unknown_journey", ROOT)
+
+
+def test_load_journey_manifest_rejects_wrong_model_id(tmp_path):
+    import json
+    import shutil
+
+    journey_id = "supply_chain"
+    dest = tmp_path / journey_id
+    shutil.copytree(ROOT / journey_id, dest)
+    manifest_path = dest / "manifest.json"
+    doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+    doc["model_id"] = "some-other-model"
+    manifest_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+def test_load_journey_manifest_rejects_non_sha256_hash(tmp_path):
+    import json
+    import shutil
+
+    journey_id = "finance"
+    dest = tmp_path / journey_id
+    shutil.copytree(ROOT / journey_id, dest)
+    inputs_path = dest / "inputs.json"
+    doc = json.loads(inputs_path.read_text(encoding="utf-8"))
+    doc["inputs"][0]["sha256"] = "not-a-sha256-hash"
+    inputs_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("journey_id", "filename", "mutate"),
+    (
+        ("supply_chain", "inputs.json", lambda doc: doc["inputs"][0].__setitem__("sha256", "0" * 64)),
+        ("finance", "inputs.json", lambda doc: doc["source_refs"][0].__setitem__("sha256", "0" * 64)),
+        ("credit", "inputs.json", lambda doc: doc["input_hashes"].__setitem__(next(iter(doc["input_hashes"])), "0" * 64)),
+    ),
+)
+def test_load_journey_manifest_rejects_valid_format_referenced_asset_hash_drift(
+    journey_id, filename, mutate, tmp_path, monkeypatch
+):
+    """A digest-shaped lie must not be accepted merely because it is SHA-256-shaped."""
+    import json
+    import shutil
+
+    shutil.copytree(ROOT / journey_id, tmp_path / journey_id)
+    import journey_registry
+    monkeypatch.setattr(journey_registry, "_repository_root", lambda root: REPO_ROOT)
+    path = tmp_path / journey_id / filename
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    mutate(doc)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash"):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+@pytest.mark.parametrize("journey_id", JOURNEY_IDS)
+def test_load_journey_manifest_rejects_case_matrix_content_drift(journey_id, tmp_path, monkeypatch):
+    """The corpus digest binds case assertions, not only the input documents."""
+    import json
+    import shutil
+
+    shutil.copytree(ROOT / journey_id, tmp_path / journey_id)
+    import journey_registry
+    monkeypatch.setattr(journey_registry, "_repository_root", lambda root: REPO_ROOT)
+    path = tmp_path / journey_id / "case_matrix.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["cases"][1]["expected"]["assertion"] = "tampered but valid"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reproducible"):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+def test_load_journey_manifest_rejects_non_repository_source(tmp_path):
+    import json
+    import shutil
+
+    journey_id = "credit"
+    dest = tmp_path / journey_id
+    shutil.copytree(ROOT / journey_id, dest)
+    inputs_path = dest / "inputs.json"
+    doc = json.loads(inputs_path.read_text(encoding="utf-8"))
+    doc["inputs"][0]["path"] = "/etc/passwd"
+    inputs_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+def test_load_journey_manifest_rejects_non_reproducible_manifest(tmp_path):
+    import json
+    import shutil
+
+    journey_id = "supply_chain"
+    dest = tmp_path / journey_id
+    shutil.copytree(ROOT / journey_id, dest)
+    reproducibility_path = dest / "reproducibility.json"
+    doc = json.loads(reproducibility_path.read_text(encoding="utf-8"))
+    doc["manifest_sha256"] = "0" * 64
+    reproducibility_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_journey_manifest(journey_id, tmp_path)
+
+
+def test_validate_journey_manifest_passes_for_every_journey():
+    for journey_id in JOURNEY_IDS:
+        manifest = load_journey_manifest(journey_id, ROOT)
+        validate_journey_manifest(manifest)
+
+
+def test_semantic_minima_match_the_plan_exactly():
+    from journey_registry import JOURNEY_MINIMA
+
+    expected = {
+        "supply_chain": {
+            "entities": ["Supplier", "PurchaseOrder", "InventoryItem", "Warehouse"],
+            "relations": ["SUPPLIES", "PLACED_WITH", "CONTAINS", "BELOW_SAFETY_STOCK"],
+            "rules": ["inventory_below_safety_stock"],
+            "actions": ["risk_label", "purchase_order_price_update"],
+            "keywords": ["supplier", "inventory", "safety stock", "purchase order"],
+            "low_risk_action": "risk_label",
+            "high_risk_action": "purchase_order_price_update",
+        },
+        "finance": {
+            "entities": ["Account", "Invoice", "Expense", "CostCenter", "AccountingPeriod"],
+            "relations": ["POSTED_TO", "BELONGS_TO", "DUPLICATES", "EXCEEDS_BUDGET"],
+            "rules": ["duplicate_invoice", "expense_over_budget"],
+            "actions": ["risk_label", "journal_entry"],
+            "keywords": ["invoice", "expense", "accounting period", "cash flow"],
+            "low_risk_action": "risk_label",
+            "high_risk_action": "journal_entry",
+        },
+        "credit": {
+            "entities": ["Borrower", "LoanApplication", "Repayment", "CreditLine", "RiskAssessment"],
+            "relations": ["APPLIES_FOR", "HAS_REPAYMENT", "ASSESSED_AS", "USES_CREDIT_LINE"],
+            "rules": ["credit_score_limit"],
+            "actions": ["risk_label", "credit_limit_update"],
+            "keywords": ["borrower", "application", "repayment", "credit limit"],
+            "low_risk_action": "risk_label",
+            "high_risk_action": "credit_limit_update",
+        },
+    }
+    assert JOURNEY_MINIMA == expected
+    for journey_id in JOURNEY_IDS:
+        manifest = load_journey_manifest(journey_id, ROOT)
+        for field in ("entities", "relations", "rules", "actions", "keywords", "low_risk_action", "high_risk_action"):
+            assert manifest.semantic_minima[field] == expected[journey_id][field]
+
+
+def test_high_risk_plan_fixtures_use_distinct_targets_and_identical_reject_expire_hashes():
+    for journey_id in JOURNEY_IDS:
+        manifest = load_journey_manifest(journey_id, ROOT)
+        assert len(manifest.plan_instances) == 3
+        branches = {p["branch"]: p for p in manifest.plan_instances}
+        assert set(branches) == {"approved", "rejected", "expired"}
+        target_ids = {p["target_fixture_id"] for p in manifest.plan_instances}
+        assert len(target_ids) == 3, "each plan instance must use a distinct target_fixture_id"
+        assert branches["approved"]["must_write"] is True
+        assert branches["approved"]["target_before_hash"] != branches["approved"]["target_after_hash"]
+        for branch in ("rejected", "expired"):
+            assert branches[branch]["must_write"] is False
+            assert branches[branch]["target_before_hash"] == branches[branch]["target_after_hash"]
+
+
+def test_inputs_never_carry_raw_bytes_only_paths_and_hashes():
+    for journey_id in JOURNEY_IDS:
+        manifest = load_journey_manifest(journey_id, ROOT)
+        for entry in manifest.inputs:
+            assert set(entry) >= {"kind", "media_type", "path", "sha256", "fixture_id"}
+            for value in entry.values():
+                if isinstance(value, str):
+                    assert len(value) < 300, "input entries must reference, not embed, source content"
+
+
+# --- Finding 2 fix: every deterministic journey case is reachable from the
+# shared registry the real gate's run_registered_cases.py actually reads
+# from, not just from this journey-local namespace. -------------------------
+
+
+def test_every_deterministic_journey_case_is_merged_into_the_shared_registry():
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            if case["case_id"] == NORMAL_CASE_ID:
+                continue
+            shared_id = journey_case_id(journey_id, case["case_id"])
+            assert case["shared_case_id"] == shared_id
+            assert shared_id in CASE_REGISTRY, (
+                f"{shared_id} is not registered in registry.CASE_REGISTRY -- "
+                "it would never be discovered by run_registered_cases.py"
+            )
+            # Same test target on both sides of the merge.
+            target = case["test_targets"][0]
+            assert CASE_REGISTRY[shared_id].path == f"{target['path']}::{target['selector']}"
+
+
+def test_every_journey_case_target_is_final_and_has_no_provisional_allowance():
+    for case_id, target_def in JOURNEY_DETERMINISTIC_TARGET_DEFS.items():
+        assert target_def.target_status is None, case_id
+        assert target_def.proves is None, case_id
+    for journey_id in JOURNEY_IDS:
+        for case in journey_cases(journey_id):
+            assert "target_status" not in case
+            assert "proves" not in case
+
+
+def test_all_deterministic_journey_targets_collect():
+    """Cheap contract check (pytest --collect-only, no execution): every
+    DETERMINISTIC_CASE_TARGETS node actually resolves in this repository's
+    test tree, not just a well-shaped path/selector string. A typo'd or
+    renamed test node would otherwise pass assert_journey_case's shape-only
+    check silently forever.
+    """
+
+    node_ids = sorted(
+        {f"{target.path}::{target.selector}".removeprefix("backend/") for target in DETERMINISTIC_CASE_TARGETS.values()}
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *node_ids],
+        cwd=REPO_ROOT / "backend",
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]

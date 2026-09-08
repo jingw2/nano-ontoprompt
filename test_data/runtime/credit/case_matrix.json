@@ -1,0 +1,433 @@
+{
+  "cases": [
+    {
+      "case_id": "normal-pipeline-release",
+      "coverage": [
+        "business_journey.credit.normal_pipeline_release"
+      ],
+      "execution_mode": "real_model_browser",
+      "expected": {
+        "assertion": "Non-empty Pipeline, approved Curated rows, semantic minima, published release, MCP grant, browser-created Agent binding, cited answer, exactly one tool round, automatic Sandbox receipt, and high-risk plan available."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+        "target_after_hash": "d0e15f8b7d994046d322fd08c6e5ce177dcf3b107b3798fdd6a321a6d339108d",
+        "target_before_hash": "b1a23288828e57002619f7756344368a25320a7459a889907d68fcfa9a389454"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "playwright",
+          "path": "frontend/src/test/e2e/business-journeys.spec.ts",
+          "selector": "credit journey completes the governed browser loop"
+        }
+      ]
+    },
+    {
+      "case_id": "edge-empty-result",
+      "coverage": [
+        "business_journey.credit.edge_empty_result"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "No-match investigation is an explicit empty result with no invented entity or write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-edge-empty-result",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_api.py",
+          "selector": "test_investigate_api_returns_empty_allow_for_no_match"
+        }
+      ]
+    },
+    {
+      "case_id": "edge-duplicate-or-missing",
+      "coverage": [
+        "business_journey.credit.edge_duplicate_or_missing"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Duplicate entities/invoices/applications are deduplicated; missing policy field is an explicit quality/semantic result."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-edge-duplicate-or-missing",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_duplicate_or_missing_is_an_explicit_quality_result"
+        }
+      ]
+    },
+    {
+      "case_id": "security-no-grant",
+      "coverage": [
+        "business_journey.credit.security_no_grant"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Missing, expired, revoked, cross-tenant, or unauthorized grant is denied without protected data or write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-security-no-grant",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_runtime_credentials.py",
+          "selector": "test_invalid_delegation_is_structured_denial[missing]"
+        }
+      ]
+    },
+    {
+      "case_id": "security-stale-release",
+      "coverage": [
+        "business_journey.credit.security_stale_release"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Stale release/snapshot and caller/domain mismatch fail closed with no target mutation."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-security-stale-release",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_snapshot_freshness.py",
+          "selector": "test_stale_policy_is_allow_hitl_or_deny_without_rewriting_snapshot[hard-stale]"
+        }
+      ]
+    },
+    {
+      "case_id": "security-prompt-injection",
+      "coverage": [
+        "business_journey.credit.security_prompt_injection"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Prompt-injection text in an input document cannot change policy, expose data, or create an unapproved action."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-security-prompt-injection",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_prompt_injection_cannot_widen_the_declared_action"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-timeout-retry",
+      "coverage": [
+        "business_journey.credit.resilience_timeout_retry"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "One timeout retry succeeds or the second retry fails; no third attempt/logical call."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-resilience-timeout-retry",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_timeout_retry_is_bounded_to_two_attempts"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-429-retry",
+      "coverage": [
+        "business_journey.credit.resilience_429_retry"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "One 429 retry succeeds or the second 429 fails; no third attempt/logical call."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-resilience-429-retry",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_429_retry_is_bounded_to_two_attempts"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-provider-error",
+      "coverage": [
+        "business_journey.credit.resilience_provider_error"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Non-retryable provider error has one HTTP attempt and a typed failure."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-resilience-provider-error",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/agent/test_mcp_client.py",
+          "selector": "test_call_tool_surfaces_protocol_error"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-mcp-timeout",
+      "coverage": [
+        "business_journey.credit.resilience_mcp_timeout"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "MCP timeout produces traceable failure and no duplicate write."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-resilience-mcp-timeout",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_mcp_timeout_is_typed_and_makes_one_call"
+        }
+      ]
+    },
+    {
+      "case_id": "resilience-sse-reconnect",
+      "coverage": [
+        "business_journey.credit.resilience_sse_reconnect"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "SSE disconnect/reconnect preserves one turn, one tool round, and idempotent durable state."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-resilience-sse-reconnect",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_journey_case_contracts.py",
+          "selector": "test_journey_sse_reconnect_replays_only_events_after_cursor"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-automatic",
+      "coverage": [
+        "business_journey.credit.writeback_automatic"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Low-risk reversible label/Sandbox action is automatic, audited, receipted, and reversible."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+        "target_after_hash": "d0e15f8b7d994046d322fd08c6e5ce177dcf3b107b3798fdd6a321a6d339108d",
+        "target_before_hash": "b1a23288828e57002619f7756344368a25320a7459a889907d68fcfa9a389454"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "automatic",
+      "shared_case_id": "credit-writeback-automatic",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_execution_service.py",
+          "selector": "test_automatic_execution_uses_shared_writer_and_audit[postgresql]"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-approved",
+      "coverage": [
+        "business_journey.credit.writeback_hitl_approved"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Exact immutable plan is approved and writes only the isolated target with a receipt."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+        "target_after_hash": "90b856fd050873687482b9a0dba3d96ca6b9e099d3a0d1363a860316e49330eb",
+        "target_before_hash": "7c69711c7da37fede036fc1133a5a221d7db524a6b0101b771f1cee137f8f9f7"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "human_approved",
+      "shared_case_id": "credit-writeback-hitl-approved",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_high_risk_plan_requires_exact_hash_hitl"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-rejected",
+      "coverage": [
+        "business_journey.credit.writeback_hitl_rejected"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Rejection records the decision and leaves target before/after hashes identical."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+        "target_after_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3",
+        "target_before_hash": "05c6be13d220bbe16039321c6ba018663c2c6de58bd89e088cf477d773071fb3"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "rejected",
+      "shared_case_id": "credit-writeback-hitl-rejected",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_approve_exact_plan_rejects_wrong_hash"
+        }
+      ]
+    },
+    {
+      "case_id": "writeback-hitl-expired",
+      "coverage": [
+        "business_journey.credit.writeback_hitl_expired"
+      ],
+      "execution_mode": "deterministic",
+      "expected": {
+        "assertion": "Expiry records the decision and leaves target before/after hashes identical."
+      },
+      "fixture_hashes": {
+        "input_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+        "target_after_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f",
+        "target_before_hash": "22a10d44e0cc461d8f40d531328e215e77bdfd2cde6c96366b9b4d16ca0edf9f"
+      },
+      "fixture_manifest_sha256": "8f106f435fd9a4cd1b503670f819ffc14b60cdd08ea671d7f150e17cbfaf5764",
+      "journey_id": "credit",
+      "layers": [
+        "business_journey"
+      ],
+      "risk_class": "expired",
+      "shared_case_id": "credit-writeback-hitl-expired",
+      "skip_allowed": false,
+      "test_targets": [
+        {
+          "kind": "pytest",
+          "path": "backend/tests/runtime/test_risk_policy.py",
+          "selector": "test_approve_exact_plan_rejects_expired_plan"
+        }
+      ]
+    }
+  ]
+}

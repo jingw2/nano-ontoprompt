@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { promptApi } from '@/api/ontologies'
 import { DOMAINS } from '@/types/ontology'
@@ -31,17 +31,18 @@ export default function PromptDetailPage() {
 
   const { data: prompt } = useQuery({
     queryKey: ['prompt', id],
-    queryFn: () => promptApi.get(id!) as any,
+    queryFn: () => promptApi.get(id!),
     enabled: !isCreate && !!id,
   })
 
-  const { register, handleSubmit, reset, setValue, watch } = useForm<Partial<Prompt>>({
+  const { register, handleSubmit, reset, setValue, control } = useForm<Partial<Prompt>>({
     defaultValues: { domain: DOMAINS[0], version: 'v1.0' }
   })
 
-  useEffect(() => { if (prompt) reset(prompt) }, [prompt])
+  useEffect(() => { if (prompt) reset(prompt) }, [prompt, reset])
 
-  const selectedDomain = watch('domain')
+  const selectedDomain = useWatch({ control, name: 'domain' }) || DOMAINS[0]
+  const watchedName = useWatch({ control, name: 'name' })
 
   const createMut = useMutation({
     mutationFn: (data: Partial<Prompt>) => promptApi.create(data),
@@ -75,7 +76,7 @@ export default function PromptDetailPage() {
       const tpl = match ?? templates.find(t => t.name === '通用本体提取') ?? templates[0]
       if (tpl) {
         setValue('content', tpl.content, { shouldDirty: true })
-        if (!watch('name')) setValue('name', tpl.name, { shouldDirty: false })
+        if (!watchedName) setValue('name', tpl.name, { shouldDirty: false })
         setGenerateMsg(t('prompt.template_filled', { name: tpl.name }))
         setGenerateError(false)
       } else {

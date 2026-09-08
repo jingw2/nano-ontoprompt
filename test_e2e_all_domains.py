@@ -1,5 +1,5 @@
 """
-nano-ontoprompt v2 全业务域端到端集成测试
+Ontexus v2 全业务域端到端集成测试
 
 覆盖 7 个业务域：供应链, HR, 财务, 营销, 医疗, 法律, 教育
 测试完整的 Palantir 式五阶段 Pipeline：Connections → Datasets → Transforms → Curated → Ontology Mapping

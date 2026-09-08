@@ -1,0 +1,5 @@
+[
+  {"category": "logic_rule", "required_keywords": ["采购"]},
+  {"category": "logic_rule", "required_keywords": ["审批"]},
+  {"category": "logic_rule", "required_keywords": ["付款"]}
+]

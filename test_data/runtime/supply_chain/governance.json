@@ -1,0 +1,66 @@
+{
+  "governance_outcomes": [
+    {
+      "execution_class": "automatic",
+      "expected_status": "succeeded",
+      "id": "automatic",
+      "must_write": true,
+      "required_plan_hash": null,
+      "target_after_hash": "808982109159e3da01d9c3587d3a8936bfd32e7066b0a0bc627435c48e42639f",
+      "target_before_hash": "f755608ca1f329d456528eb85ae2a7af7562eed624a38e2b4cea13efe7dd1f76"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "succeeded",
+      "id": "approved",
+      "must_write": true,
+      "required_plan_hash": "e06b461fc9d9d07866512871b44f6aaa80810782e8920cbbf4623d83aa8b244b",
+      "target_after_hash": "a046886efccff70db5b1fc621170ea9b0d29a62dc3ec2d9993a779635ac2e13c",
+      "target_before_hash": "376ffa4dfe7ab7ee2fb2c7feedd4c258887c7d5d6c84c2092a698146a5f6be19"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "rejected",
+      "id": "rejected",
+      "must_write": false,
+      "required_plan_hash": "db99f0eb84a64e54ad70a4e5b8944555336cead8bce561d774a69d9a7d37dadd",
+      "target_after_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50",
+      "target_before_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50"
+    },
+    {
+      "execution_class": "human_approved",
+      "expected_status": "expired",
+      "id": "expired",
+      "must_write": false,
+      "required_plan_hash": "d739d7bd1e041524f446fc4ce61e73ef62c60346794d5fd6692b45c389b9f196",
+      "target_after_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa",
+      "target_before_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa"
+    }
+  ],
+  "plan_instances": [
+    {
+      "branch": "approved",
+      "expected_status": "succeeded",
+      "must_write": true,
+      "target_after_hash": "a046886efccff70db5b1fc621170ea9b0d29a62dc3ec2d9993a779635ac2e13c",
+      "target_before_hash": "376ffa4dfe7ab7ee2fb2c7feedd4c258887c7d5d6c84c2092a698146a5f6be19",
+      "target_fixture_id": "target-supply_chain-approved"
+    },
+    {
+      "branch": "rejected",
+      "expected_status": "rejected",
+      "must_write": false,
+      "target_after_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50",
+      "target_before_hash": "f5a50b0d02de99876264a0764bfcd60560ab1b8deabf0c042d9c30e3f09b4d50",
+      "target_fixture_id": "target-supply_chain-rejected"
+    },
+    {
+      "branch": "expired",
+      "expected_status": "expired",
+      "must_write": false,
+      "target_after_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa",
+      "target_before_hash": "eac9ac70c9aa216cd4a34a58d87e8b7ea1528a3009eeceb4142395644b463daa",
+      "target_fixture_id": "target-supply_chain-expired"
+    }
+  ]
+}

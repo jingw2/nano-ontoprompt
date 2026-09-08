@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { refreshAccessToken, apiClient } from '@/api/client'
+import type { User } from '@/types/auth'
 import Layout from '@/components/Layout'
 import LoginPage from '@/pages/login/LoginPage'
 import RegisterPage from '@/pages/register/RegisterPage'
@@ -22,6 +25,19 @@ import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
 import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import DataManagementPage from '@/pages/data-management/DataManagementPage'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
+import AgentListPage from '@/pages/agents/list/AgentListPage'
+import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
+import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
+import ApprovalsPage from '@/pages/admin/ApprovalsPage'
+import ToolConnectionsPage from '@/pages/admin/ToolConnectionsPage'
+import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
+import RuntimeInvestigationPage from '@/pages/runtime/RuntimeInvestigationPage'
+import ActionPlanPage from '@/pages/runtime/ActionPlanPage'
+import SandboxPage from '@/pages/runtime/SandboxPage'
+import ApprovalQueuePage from '@/pages/runtime/ApprovalQueuePage'
+import ReconciliationPage from '@/pages/runtime/ReconciliationPage'
+import RefreshOperationsPage from '@/pages/runtime/RefreshOperationsPage'
+import RuntimeDelegationGate from '@/pages/runtime/RuntimeDelegationGate'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } }
@@ -32,13 +48,54 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return token ? <Layout>{children}</Layout> : <Navigate to="/login" replace />
 }
 
+// I-FRONTEND: admin-only guard for operator surfaces (reconciliation).
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore(s => s.user?.role)
+  if (role !== 'admin') return <Navigate to="/agents" replace />
+  return <>{children}</>
+}
+
+// Boot-time session restore: after a reload the in-memory bearer is gone, so
+// reacquire it once through the same-origin rotating refresh cookie (F0
+// contract) — and re-fetch the profile so role-gated navigation (admin
+// surfaces, editor create affordances) survives the reload — before letting
+// the route guards decide. Logout revokes that cookie server-side, so a
+// cleared session stays logged out.
+function SessionRestore({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore(s => s.token)
+  const user = useAuthStore(s => s.user)
+  const setAuth = useAuthStore(s => s.setAuth)
+  const [checked, setChecked] = useState(token !== null && user !== null)
+  useEffect(() => {
+    if (checked) return
+    let cancelled = false
+    refreshAccessToken().then(newToken => {
+      if (cancelled || !newToken) return
+      return apiClient.get<User>('/auth/profile').then(profile => {
+        if (!cancelled) setAuth(profile, newToken)
+      }).catch(() => {})
+    }).finally(() => {
+      if (!cancelled) setChecked(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [checked, setAuth])
+  if (!checked) {
+    return <div className="min-h-screen flex items-center justify-center text-gray-400">…</div>
+  }
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <BrowserRouter>
+        <SessionRestore>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/oauth/consent" element={<OAuthConsentPage />} />
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
 
@@ -66,7 +123,26 @@ export default function App() {
           <Route path="/ontologies/:id/actions/:aid" element={<ProtectedRoute><ActionDetailPage /></ProtectedRoute>} />
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+
+          {/* ── Agent workspaces (I-FRONTEND registration) ── */}
+          <Route path="/agents" element={<ProtectedRoute><AgentListPage /></ProtectedRoute>} />
+          <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
+          <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
+          <Route path="/admin/approvals" element={<ProtectedRoute><AdminRoute><ApprovalsPage /></AdminRoute></ProtectedRoute>} />
+          <Route path="/admin/tool-connections" element={<ProtectedRoute><AdminRoute><ToolConnectionsPage /></AdminRoute></ProtectedRoute>} />
+          {/* Back-compat redirects: 和解操作 + MCP 待审批 merged into one admin-only Approvals menu */}
+          <Route path="/admin/agent-reconciliations" element={<Navigate to="/admin/approvals?tab=reconciliation" replace />} />
+          <Route path="/mcp/write-requests" element={<Navigate to="/admin/approvals?tab=mcp" replace />} />
+
+          {/* ── Runtime governance + refresh operator surfaces (Task 27) ── */}
+          <Route path="/runtime/refresh/:sourceId" element={<ProtectedRoute><RefreshOperationsPage /></ProtectedRoute>} />
+          <Route path="/runtime/investigate" element={<ProtectedRoute><RuntimeDelegationGate><RuntimeInvestigationPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/action-plans/:planId" element={<ProtectedRoute><RuntimeDelegationGate><ActionPlanPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/sandbox/:planId" element={<ProtectedRoute><RuntimeDelegationGate><SandboxPage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/approvals" element={<ProtectedRoute><RuntimeDelegationGate><ApprovalQueuePage /></RuntimeDelegationGate></ProtectedRoute>} />
+          <Route path="/runtime/reconciliation/:reconciliationId" element={<ProtectedRoute><AdminRoute><RuntimeDelegationGate><ReconciliationPage /></RuntimeDelegationGate></AdminRoute></ProtectedRoute>} />
         </Routes>
+        </SessionRestore>
       </BrowserRouter>
     </QueryClientProvider>
   )

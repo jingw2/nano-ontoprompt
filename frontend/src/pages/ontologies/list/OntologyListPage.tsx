@@ -8,6 +8,8 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import type { OntologyListItem } from '@/types/ontology'
 import { X, Plus } from 'lucide-react'
 
+const EMPTY_ITEMS: OntologyListItem[] = []
+
 export default function OntologyListPage() {
   const [idFilter, setIdFilter] = useState('')
   const [nameFilter, setNameFilter] = useState('')
@@ -20,7 +22,7 @@ export default function OntologyListPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['ontologies'],
-    queryFn: () => ontologyApi.list({ page_size: 1000 }) as any,
+    queryFn: () => ontologyApi.list({ page_size: 1000 }),
   })
 
   const deleteMut = useMutation({
@@ -32,7 +34,7 @@ export default function OntologyListPage() {
     },
   })
 
-  const allItems: OntologyListItem[] = data?.items ?? []
+  const allItems: OntologyListItem[] = data?.items ?? EMPTY_ITEMS
 
   const filteredItems = useMemo(() => {
     let list = allItems

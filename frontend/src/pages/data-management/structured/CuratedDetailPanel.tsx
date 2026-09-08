@@ -57,11 +57,10 @@ export default function CuratedDetailPanel({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
-    setLoading(true)
-    setLoadError('')
+    void Promise.resolve().then(() => { setLoading(true); setLoadError('') })
     curatedApi.preview(datasetId, 500)
       .then(res => {
-        const data = (res as any).rows ?? res ?? []
+        const data = res.rows ?? res ?? []
         const rowArr = Array.isArray(data) ? data : []
         setRows(rowArr)
         setCols(rowArr.length > 0 ? Object.keys(rowArr[0]) : [])
@@ -108,7 +107,7 @@ export default function CuratedDetailPanel({
     setSaveMsg('')
     try {
       const session = await curatedApi.startReview(datasetId)
-      const reviewId = (session as any).review_id ?? (session as any).data?.review_id
+      const reviewId = session.review_id ?? (session as { data?: { review_id?: string } }).data?.review_id
       const edits = Array.from(pendingEdits.entries()).map(([key, { old: oldVal, val: newVal }]) => {
         const [rowIdxStr, col] = key.split('::')
         const rowIdx = Number(rowIdxStr)

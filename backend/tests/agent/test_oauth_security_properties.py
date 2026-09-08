@@ -1,0 +1,94 @@
+"""Task 6: explicit, named assertions for every security property this
+plan's Global Constraints require — deliberately redundant with individual
+Task 3/4 tests so a regression here points directly at the requirement it
+broke, not just at a generic flow test."""
+import base64
+import hashlib
+import os
+
+import pytest
+
+
+def _pkce_pair():
+    verifier = base64.urlsafe_b64encode(os.urandom(40)).decode("ascii").rstrip("=")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+    return verifier, challenge
+
+
+def test_plain_pkce_method_is_rejected():
+    from app.services.oauth_flow import InvalidRequestError, validate_code_challenge
+
+    _, challenge = _pkce_pair()
+    with pytest.raises(InvalidRequestError):
+        validate_code_challenge(challenge, "plain")
+
+
+def test_oauth_access_jwt_carries_a_distinguishable_token_use_claim():
+    """Confirms an OAuth access JWT carries a `token_use` claim distinct from
+    an interactive token's (absent), the signal the dependency-level guards
+    rely on (no DB needed — this only exercises signature/claim decoding,
+    not the client/user lookups Task 3's fuller DB-backed tests already
+    cover). The actual dependency-level rejection in both directions is
+    covered by test_oauth_flow.py::test_get_current_user_rejects_oauth_access_token
+    and test_oauth_flow.py::test_get_oauth_context_rejects_interactive_token."""
+    from jose import jwt
+    from app.config import settings
+    from app.services.auth_service import create_access_token, create_oauth_access_token, decode_token
+
+    interactive = create_access_token({"sub": "u-1", "role": "viewer"})
+    oauth = create_oauth_access_token("u-1", "c-1", "a")
+    assert decode_token(interactive).get("token_use") is None
+    assert decode_token(oauth)["token_use"] == "oauth_access"
+    # both decode successfully with the shared secret/algorithm — the
+    # distinguishing signal is the claim, not the signature, which is
+    # exactly why deps/__init__.py and deps/oauth.py both check it explicitly
+    assert jwt.decode(oauth, settings.secret_key, algorithms=["HS256"])["client_id"] == "c-1"
+
+
+def test_runtime_delegated_jwt_carries_a_distinguishable_token_use_claim():
+    """Task 13: a Runtime delegated credential's `token_use` claim
+    (`runtime_delegated`) must be distinct from both an interactive
+    session's (absent) and an OAuth access token's (`oauth_access`) — the
+    signal `verify_delegated_credential` relies on to reject either being
+    replayed as a delegated credential. No DB needed: this only exercises
+    claim decoding, not the client/user/domain lookups
+    tests/runtime/test_runtime_credentials.py already covers."""
+    from app.services.auth_service import create_access_token, create_oauth_access_token, decode_token
+    from app.services.runtime.credentials import RUNTIME_ISSUER, RUNTIME_TOKEN_USE
+
+    interactive = create_access_token({"sub": "u-1", "role": "viewer"})
+    oauth = create_oauth_access_token("u-1", "c-1", "a")
+    assert decode_token(interactive).get("token_use") != RUNTIME_TOKEN_USE
+    assert decode_token(oauth)["token_use"] != RUNTIME_TOKEN_USE
+    # neither pre-existing token type carries the Runtime issuer claim either,
+    # so even a forged token_use could not smuggle a stale claims shape past
+    # verify_delegated_credential's issuer check
+    assert decode_token(interactive).get("iss") != RUNTIME_ISSUER
+    assert decode_token(oauth).get("iss") != RUNTIME_ISSUER
+
+
+def test_scope_resolution_never_grants_more_than_the_client_allowlist():
+    from app.models.oauth import OAuthClient
+
+    client = OAuthClient(id="c-1", client_name="X", redirect_uris=[], allowed_scopes=["read"], is_active=True, created_by="u-1")
+    from app.services.oauth_clients import resolve_scope
+    with pytest.raises(ValueError):
+        resolve_scope(client, "read write")  # "write" is not in allowed_scopes
+
+
+def test_redirect_uri_validation_is_exact_string_match_not_prefix():
+    from app.models.oauth import OAuthClient
+    from app.services.oauth_clients import validate_redirect_uri
+
+    client = OAuthClient(
+        id="c-1", client_name="X", redirect_uris=["https://client.example/cb"],
+        allowed_scopes=[], is_active=True, created_by="u-1",
+    )
+    assert validate_redirect_uri(client, "https://client.example/cb") is True
+    for attack in (
+        "https://client.example/cb.evil.com",
+        "https://client.example/cb/../admin",
+        "https://client.example/cb?redirect=evil",
+        "https://client.example.evil.com/cb",
+    ):
+        assert validate_redirect_uri(client, attack) is False, f"{attack} should not validate"

@@ -1,0 +1,5 @@
+[
+  {"category": "entity", "required_keywords": ["借款人"]},
+  {"category": "entity", "required_keywords": ["信用"]},
+  {"category": "entity", "required_keywords": ["授信额度"]}
+]

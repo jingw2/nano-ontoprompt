@@ -2,6 +2,11 @@
 from __future__ import annotations
 import logging
 import re
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -35,27 +40,74 @@ class CronService:
             "day_of_week": parts[4],
         }
 
-    def schedule_connection_sync(self, connection_id: str, cron_expr: str) -> dict:
-        """为 Connection 注册定时同步任务"""
+    def schedule_connection_sync(self, connection_id: str, cron_expr: str, *, db: "Session | None" = None,
+                                  **schedule_kwargs) -> dict:
+        """为 Connection 注册定时同步任务。
+
+        仅在提供 `db` 会话时才会持久化 `RefreshSchedule` 行并计算 next_due_at,
+        返回 status="scheduled"；未提供 db 时仅完成 cron 语法校验，返回
+        status="validated" —— 校验本身绝不能被上报为"已生效调度"
+        (Task 7 Deliverable)。
+        """
         cron_params = self.parse_cron(cron_expr)
-        logger.info(f"Connection {connection_id} 调度已注册: {cron_expr}")
+        if db is None:
+            logger.info(f"Connection {connection_id} cron 校验通过（未持久化）: {cron_expr}")
+            return {
+                "connection_id": connection_id,
+                "cron": cron_expr,
+                "celery_crontab": cron_params,
+                "status": "validated",
+            }
+
+        schedule = self._persist_schedule(db, target_type="connection", target_id=connection_id,
+                                          cron_expr=cron_expr, **schedule_kwargs)
+        logger.info(f"Connection {connection_id} 调度已持久化: {cron_expr}")
         return {
             "connection_id": connection_id,
             "cron": cron_expr,
             "celery_crontab": cron_params,
             "status": "scheduled",
+            "next_due_at": schedule.next_due_at.isoformat() if schedule.next_due_at else None,
         }
 
-    def schedule_pipeline_run(self, pipeline_id: str, cron_expr: str) -> dict:
-        """为 Pipeline 注册定时运行任务"""
+    def schedule_pipeline_run(self, pipeline_id: str, cron_expr: str, *, db: "Session | None" = None,
+                               **schedule_kwargs) -> dict:
+        """为 Pipeline 注册定时运行任务。语义同 schedule_connection_sync。"""
         cron_params = self.parse_cron(cron_expr)
-        logger.info(f"Pipeline {pipeline_id} 调度已注册: {cron_expr}")
+        if db is None:
+            logger.info(f"Pipeline {pipeline_id} cron 校验通过（未持久化）: {cron_expr}")
+            return {
+                "pipeline_id": pipeline_id,
+                "cron": cron_expr,
+                "celery_crontab": cron_params,
+                "status": "validated",
+            }
+
+        schedule = self._persist_schedule(db, target_type="pipeline", target_id=pipeline_id,
+                                          cron_expr=cron_expr, **schedule_kwargs)
+        logger.info(f"Pipeline {pipeline_id} 调度已持久化: {cron_expr}")
         return {
             "pipeline_id": pipeline_id,
             "cron": cron_expr,
             "celery_crontab": cron_params,
             "status": "scheduled",
+            "next_due_at": schedule.next_due_at.isoformat() if schedule.next_due_at else None,
         }
+
+    @staticmethod
+    def _persist_schedule(db: "Session", *, target_type: str, target_id: str, cron_expr: str,
+                          timezone_name: str = "UTC", business_calendar: list | None = None,
+                          sla_seconds: int = 0, retry_policy: dict | None = None,
+                          backfill_window_seconds: int = 0, max_pending_runs: int = 1,
+                          enabled: bool = True):
+        from app.services.v2.scheduler.schedule_service import ScheduleRequest, upsert_refresh_schedule
+
+        request = ScheduleRequest(
+            target_type=target_type, target_id=target_id, cron_expr=cron_expr, timezone=timezone_name,
+            business_calendar=business_calendar or [], sla_seconds=sla_seconds, retry_policy=retry_policy,
+            backfill_window_seconds=backfill_window_seconds, max_pending_runs=max_pending_runs, enabled=enabled,
+        )
+        return upsert_refresh_schedule(db, request, now=datetime.now(timezone.utc))
 
     def describe_cron(self, expression: str) -> str:
         """将 cron 表达式转换为人类可读描述"""

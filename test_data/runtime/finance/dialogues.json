@@ -1,0 +1,28 @@
+{
+  "dialogue_scenarios": [
+    {
+      "citation_source_ids": [
+        "input-finance-expense-reports-csv",
+        "input-finance-month-end-close-docx"
+      ],
+      "dialogue_id": "finance-governed-dialogue",
+      "expected_keywords": [
+        "invoice",
+        "expense",
+        "accounting period",
+        "cash flow"
+      ],
+      "high_risk_outcome": {
+        "action": "journal_entry",
+        "decision": "ALLOW",
+        "risk_class": "human_approved"
+      },
+      "normal_outcome": {
+        "action": "risk_label",
+        "decision": "ALLOW",
+        "risk_class": "automatic"
+      },
+      "question": "Which expenses exceed the accounting period budget, and what journal entry do you recommend?"
+    }
+  ]
+}

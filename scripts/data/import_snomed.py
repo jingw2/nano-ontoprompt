@@ -1,5 +1,5 @@
 """
-导入 snomed_mental_health.csv 到 nano-ontoprompt 的医疗本体。
+导入 snomed_mental_health.csv 到 Ontexus 的医疗本体。
 
 用法：
   python import_snomed.py [--csv PATH] [--ontology ONTOLOGY_ID] [--dry-run]

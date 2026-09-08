@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
+import { useRuntimeDelegationStore } from '@/stores/runtimeDelegationStore'
+import { authApi } from '@/api/auth'
 import { useUIStore } from '@/stores/uiStore'
 import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard, Network, Cpu, Settings, LogOut,
-  Database, ChevronLeft, ChevronRight, GitBranch, Table2,
+  Database, ChevronLeft, ChevronRight, GitBranch, Table2, Bot, ShieldCheck, Plug,
 } from 'lucide-react'
 
 interface SubItem {
@@ -27,6 +29,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const { t } = useTranslation()
   const { lang, setLang } = useUIStore()
+  const role = useAuthStore(s => s.user?.role)
   const [collapsed, setCollapsed] = useState(false)
 
   const navItems: NavItem[] = [
@@ -41,8 +44,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       ],
     },
     { to: '/ontologies', icon: Network, label: t('nav.ontologies') },
+    { to: '/agents', icon: Bot, label: t('nav.agents', '智能体') },
     { to: '/models', icon: Cpu, label: t('nav.models') },
     { to: '/settings', icon: Settings, label: t('nav.settings') },
+    ...(role === 'admin'
+      ? [
+          { to: '/admin/approvals', icon: ShieldCheck, label: t('nav.approvals', '审批') },
+          { to: '/admin/tool-connections', icon: Plug, label: t('toolConnections.nav_label', '工具连接') },
+        ]
+      : []),
   ]
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
@@ -53,7 +63,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-gray-50">
       <aside className={`bg-white border-r flex flex-col transition-all duration-200 ${collapsed ? 'w-16' : 'w-56'}`}>
         <div className={`p-4 border-b flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
-          {!collapsed && <h1 className="font-bold text-lg">OntoPrompt</h1>}
+          {!collapsed && <h1 className="font-bold text-lg">Ontexus</h1>}
         </div>
 
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
@@ -134,7 +144,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </button>
 
         <button
-          onClick={() => { logout(); navigate('/login') }}
+          onClick={() => { void authApi.logout().finally(() => { logout(); useRuntimeDelegationStore.getState().clear(); navigate('/login') }) }}
           className={`flex items-center gap-2 p-4 text-sm text-gray-500 hover:text-black border-t ${collapsed ? 'justify-center' : ''}`}
         >
           <LogOut size={16} /> {!collapsed && t('nav.logout')}

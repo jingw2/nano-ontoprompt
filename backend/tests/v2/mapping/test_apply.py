@@ -90,6 +90,59 @@ def test_create_mapping_saves_to_db():
     db.commit.assert_called_once()
 
 
+def test_create_mapping_persists_entity_class_cn():
+    db = MagicMock()
+    db.add = MagicMock()
+    db.commit = MagicMock()
+    db.refresh = MagicMock()
+    svc = MappingService(db)
+
+    mapping = svc.create_mapping(
+        ontology_id="ont-1",
+        curated_dataset_id="ds-1",
+        entity_class="SupplierOrder",
+        entity_class_cn="供应商订单",
+        field_mapping={"order_id": "order_id"},
+    )
+
+    assert mapping.entity_class_cn == "供应商订单"
+
+
+def test_apply_mapping_uses_stored_entity_class_cn_over_template():
+    m = make_mapping_obj()
+    m.entity_class = "SupplierOrder"
+    m.entity_class_cn = "供应商订单"
+    db = make_db(m)
+    db.get = MagicMock(return_value=None)
+    svc = MappingService(db)
+    with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_neo4j:
+        mock_neo4j.driver.side_effect = Exception("offline")
+        svc.apply_mapping("map-1", DATA)
+
+    added_entity = next(
+        call.args[0] for call in db.add.call_args_list
+        if call.args and type(call.args[0]).__name__ == "Entity"
+    )
+    assert added_entity.name_cn == "供应商订单"
+
+
+def test_apply_mapping_falls_back_to_template_when_entity_class_cn_absent():
+    m = make_mapping_obj()
+    m.entity_class = "SupplierOrder"
+    db = make_db(m)
+    db.get = MagicMock(return_value=None)
+    svc = MappingService(db)
+    with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_neo4j:
+        mock_neo4j.driver.side_effect = Exception("offline")
+        svc.apply_mapping("map-1", DATA)
+
+    added_entity = next(
+        call.args[0] for call in db.add.call_args_list
+        if call.args and type(call.args[0]).__name__ == "Entity"
+    )
+    assert added_entity.name_cn == "Supplier Order"
+
+
 def test_create_mapping_persists_primary_key_column():
     db = MagicMock()
     db.add = MagicMock()

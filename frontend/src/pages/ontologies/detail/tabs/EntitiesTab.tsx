@@ -27,7 +27,7 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
 
   const { data: entities = [], isLoading } = useQuery({
     queryKey: ['entities', ontologyId],
-    queryFn: () => ontologyApi.listEntities(ontologyId) as any,
+    queryFn: () => ontologyApi.listEntities(ontologyId),
   })
 
   const entityList = entities as Entity[]
@@ -51,7 +51,7 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
       list = list.filter(e => e.type === typeFilter)
     }
     list.sort((a, b) => {
-      let cmp = 0
+      let cmp: number
       if (sortKey === 'confidence') {
         cmp = (a.confidence ?? 0) - (b.confidence ?? 0)
       } else if (sortKey === 'abbr') {

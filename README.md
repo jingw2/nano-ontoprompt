@@ -1,8 +1,29 @@
-# nano-ontoprompt
+# Ontexus
 
 **[中文文档](./README_zh.md)**
 
 A lightweight, Palantir Foundry-inspired platform for building domain ontologies from raw data. Connect your data sources, run them through a visual transform pipeline, map curated datasets to entity types, and explore the resulting knowledge graph — complete with entities, relations, logic rules, and executable actions.
+
+## Why "Ontexus"?
+
+**Ontexus = Ontology + Nexus.**
+
+- **Ont-/Onto-** → Ontology — the business-semantic model: entities, relations, rules, actions
+- **Nexus** → a connection point, a hub, the place where things converge
+
+Ontexus isn't just a knowledge-graph tool. The Ontology is the middle layer between an Agent and an enterprise's real business world:
+
+```
+Data / Knowledge → Ontology → Context → Logic / Actions → Agent
+```
+
+The "nexus" isn't about the graph itself — it's about the connections: business objects, relations, rules, actions, context, and Agents, all meeting at one semantic layer.
+
+**Ontexus = the Ontology Nexus for enterprise Agents.**
+
+What we want to do is Enterprise Domain-Level Agent Infra. 
+
+---
 
 Two build paths are supported:
 
@@ -15,7 +36,7 @@ Two build paths are supported:
 
 An ontology is a formal representation of knowledge in a specific domain — a shared vocabulary of concepts and the relationships between them. Think of it as the structured backbone that turns raw data into machine-readable, queryable knowledge.
 
-In nano-ontoprompt, every ontology is made of these building blocks:
+In Ontexus, every ontology is made of these building blocks:
 
 | Building Block | What it captures | Example |
 |---|---|---|
@@ -47,6 +68,11 @@ In nano-ontoprompt, every ontology is made of these building blocks:
 - **LLM-driven multi-step review** — an AI agent systematically checks ontology quality: isolated entities, broken references, missing relations, low-coverage entity types
 - **Tool-calling architecture** — 8 built-in inspection tools (summary, coverage, ref-check, pattern inference) that the agent can chain together
 - **Findings report** — severity-classified issues with actionable fix suggestions, persisted as audit tasks
+
+### Agent Execution (runtime)
+- **Conversational Agent application** — sessions, reliable SSE streaming with reconnect/replay, clarification, and action approval flows
+- **Ontology-grounded tool access** — released-ontology index, run/data grants, and observable lineage citations (no chain-of-thought)
+- **Reconciliation** — when a tool/action execution's outcome is unknown (lost result, lost fence, unknown result), an admin confirms the external side effect as succeeded / not-run / retry from evidence. Never auto-replays. See [Agent Reconciliation Guide](./docs/agent-reconciliation.md) for a bilingual usage walkthrough.
 
 ### Platform
 - **LLM extraction** — any OpenAI, Anthropic, or OpenAI-compatible model; defense-in-depth against fuzzy relation types
@@ -87,26 +113,29 @@ For a deep dive into the Ontology-as-a-Service architecture — including Object
 ### Option 1 — Docker Compose (full v2 stack)
 
 ```bash
-git clone https://github.com/jingw2/nano-ontoprompt.git
-cd nano-ontoprompt
+git clone https://github.com/jingw2/ontexus.git
+cd ontexus
 cp .env.example .env          # edit secrets before production use
 docker compose -f docker-compose.v2.yml up --build
 ```
 
-This starts PostgreSQL, Redis, Neo4j, MinIO, ChromaDB, backend and frontend. For the lightweight v1 stack use `docker-compose.yml` instead.
+This starts PostgreSQL, Redis, Neo4j, MinIO, ChromaDB, backend and frontend.
+A dedicated `migration` service runs `run_migrations.py upgrade head` against
+an empty database first; backend/worker services wait for it to complete
+successfully (Compose `service_completed_successfully`) before starting.
 
 Open [http://localhost:5173](http://localhost:5173). Default credentials: `admin / admin123`.
 
 ### Option 2 — Manual setup (minimal, no external services)
 
-**Prerequisites:** Python 3.11+, Node.js 18+
+**Prerequisites:** Python 3.11 or 3.12, Node 22.14.0, npm 11.2.0
 
 ```bash
 # Backend
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head                                  # or rely on auto create_all in dev
+python scripts/bootstrap_backend.py
+python scripts/run_migrations.py upgrade head
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (separate terminal)
@@ -116,6 +145,39 @@ npm run dev
 ```
 
 Neo4j / MinIO / ChromaDB / Redis are optional — without them the app uses SQLite graph fallback, local file storage and synchronous pipeline runs.
+
+### Release gate (local)
+
+The governed Runtime gate is deterministic and makes no model calls. Run it
+from the repository root after starting the disposable PostgreSQL/Redis stack:
+
+```bash
+python test_data/runtime/generate_runtime_fixtures.py --seed 20260826 --output test_data/runtime --check
+cd backend && python -m pytest tests/runtime/test_acceptance_matrix.py tests/runtime/test_registered_case_execution.py -q
+cd backend && python -m tests.runtime.run_registered_cases --manifest ../test_data/runtime/manifest.json --report ../artifacts/runtime/deterministic-cases.json
+cd .. && python -m pip install -e sdk && cd sdk && python -m pytest tests -q
+```
+
+For the live refresh checkpoint, run `bash scripts/verify_refresh_checkpoint.sh`.
+It alone owns the Compose refresh profile, synthetic seeding, signed webhook,
+and polling flow; do not duplicate those steps in another local script. The
+main CI gate also validates both application Compose files and the queue-bound
+Celery worker topology. Browser governance coverage is `cd frontend && npx
+playwright test src/test/e2e/runtime-governance.spec.ts`; it requires the
+services configured by that suite and must not be represented as a model test.
+
+### Real business-journey gate (CI only)
+
+`business-journey-real-gate` in `.github/workflows/agent-mvp.yml` is a
+blocking, trusted-pull-request-only job that exercises the three enterprise
+journeys (supply chain, finance, credit) against a real DeepSeek model and
+the real Agent-creation browser flow — see
+`test_data/runtime/README.md#the-real-gate-task-5` and
+`scripts/run_business_journey_gate.sh` for the exact phase order. It requires
+the repository secret `DEEPSEEK_API_KEY` and never runs on `pull_request_target`
+or a fork; only sanitized, scanner-approved evidence is ever uploaded. This
+gate needs a live key and a disposable Compose stack, so it cannot be run
+from a plain local checkout the way the release gate above can.
 
 ---
 
@@ -136,7 +198,7 @@ For the **Simple LLM Extraction** path: create an ontology in `simple_llm` mode,
 ## Project Structure
 
 ```
-nano-ontoprompt/
+ontexus/
 ├── backend/
 │   ├── alembic/               # DB migrations (0001_full_baseline covers all tables)
 │   ├── app/
@@ -162,8 +224,7 @@ nano-ontoprompt/
 │       └── api/                # Axios clients (v1 + v2)
 ├── scripts/
 │   └── data/                   # Data import & entity-linking scripts (SNOMED, supply chain)
-├── docker-compose.yml          # v1 lightweight stack
-├── docker-compose.v2.yml       # Full stack: Postgres + Redis + Neo4j + MinIO + Chroma + LiteLLM
+├── docker-compose.v2.yml       # Full stack: Postgres + Redis + Neo4j + MinIO + Chroma
 ├── litellm_config.yaml         # LiteLLM proxy configuration
 ├── ONTOLOGY.md                 # Comprehensive architecture guide
 └── test_data/                  # Sample datasets and E2E acceptance scripts
@@ -177,7 +238,7 @@ See `.env.example` for the full list. Key settings:
 
 ```env
 ENVIRONMENT=development        # "production" enforces non-default secrets at startup
-DATABASE_URL=sqlite:///./ontoprompt.db
+DATABASE_URL=sqlite:///./ontexus.db
 SECRET_KEY=change-me
 ENCRYPTION_KEY=                # Fernet key for encrypting stored API keys
 FIRST_ADMIN_USER=admin

@@ -1,0 +1,48 @@
+{
+  "cancellation": {
+    "already_terminal": {
+      "already_terminal": true,
+      "run_id": "run-acme-000103",
+      "status": "succeeded"
+    },
+    "cancelled": {
+      "run_id": "run-acme-000102",
+      "status": "cancelled"
+    },
+    "requested": {
+      "run_id": "run-acme-000101",
+      "status": "cancel_requested"
+    }
+  },
+  "config_version": {
+    "source_id": "source-acme-erp",
+    "version": 3
+  },
+  "configuration_drift": {
+    "error_code": "CONFIGURATION_DRIFT",
+    "run_id": "run-acme-000105"
+  },
+  "cursor": {
+    "primary_key": "row-acme-000042",
+    "source_id": "source-acme-erp",
+    "watermark": "2026-08-25T23:00:00Z"
+  },
+  "dead_letter": {
+    "dead_letter_id": "dlq-acme-000001",
+    "reason": "max_retries_exceeded"
+  },
+  "lag": {
+    "source_id": "source-acme-erp",
+    "source_lag_seconds": 42
+  },
+  "replay": {
+    "replay_run_id": "run-acme-000104",
+    "source_dead_letter_id": "dlq-acme-000001"
+  },
+  "schedule": {
+    "cron_expr": "0 2 * * *",
+    "next_due_at": "2026-08-27T02:00:00Z",
+    "source_id": "source-acme-erp",
+    "timezone": "Asia/Shanghai"
+  }
+}

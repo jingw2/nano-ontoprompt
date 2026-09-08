@@ -15,7 +15,7 @@ import os
 import httpx
 
 BASE_URL = "http://localhost:8000"
-DATA_DIR = os.path.join(os.path.dirname(__file__), "test_data", "供应链")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "test_data", "供应链")
 FILES = [
     "inventory_transactions.csv",
     "logistics_performance.csv",

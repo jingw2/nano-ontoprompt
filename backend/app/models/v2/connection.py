@@ -26,6 +26,12 @@ class Connection(Base):
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # 加密后的连接参数
     status: Mapped[str] = mapped_column(String(20), default="inactive")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Default refresh mode/cursor contract for this connection's resources
+    # (Task 6). A resource-level override lives on Dataset. Not enforced by
+    # a DB constraint — RefreshPolicy/cursor-contract validity is enforced
+    # by app.services.v2.incremental.contract at write time.
+    refresh_policy: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cursor_contract: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

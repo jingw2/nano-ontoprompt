@@ -1,4 +1,6 @@
 """MongoConnector 单元测试（完全 Mock，不需要真实 MongoDB）"""
+from datetime import timedelta
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -70,3 +72,37 @@ def test_mongo_registry_registered():
     """registry 中包含 mongo"""
     from app.services.connection.registry import CONNECTOR_REGISTRY
     assert "mongo" in CONNECTOR_REGISTRY
+
+
+def test_mongo_delta_uses_opaque_objectid_cursor_and_returns_delta_page():
+    ObjectId = pytest.importorskip("bson").ObjectId
+    from app.schemas.refresh import SourceCursor
+    from app.services.connection.base import DeltaPage
+    from app.services.connection.mongo_connector import MongoConnector
+
+    conn = MongoConnector({
+        "uri": "mongodb://localhost/testdb",
+        "database": "testdb",
+        "cursor_contract": "opaque_source_cursor",
+        "source_id": "source-001",
+    })
+    mock_db = MagicMock()
+    mock_collection = MagicMock()
+    latest = ObjectId("507f1f77bcf86cd799439012")
+    mock_collection.find.return_value = [{"_id": latest, "id": "101", "value": "new"}]
+    mock_db.__getitem__ = MagicMock(return_value=mock_collection)
+    conn._db = mock_db
+
+    page = conn.pull_delta(
+        "orders",
+        cursor=SourceCursor(
+            source_id="source-001", resource="orders", contract="opaque_source_cursor",
+            watermark=None, primary_key=None, opaque_value="507f1f77bcf86cd799439011", observed_at=None,
+        ),
+        overlap_window=timedelta(seconds=30),
+    )
+
+    assert isinstance(page, DeltaPage)
+    assert page.candidate_cursor.opaque_value == str(latest)
+    query = mock_collection.find.call_args.args[0]
+    assert query == {"_id": {"$gt": ObjectId("507f1f77bcf86cd799439011")}}

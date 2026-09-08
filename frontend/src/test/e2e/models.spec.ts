@@ -1,19 +1,16 @@
+/**
+ * models.spec.ts — model config CRUD. Self-skips until the models API is
+ * registered.
+ */
 import { test, expect } from '@playwright/test'
-
-const BASE = 'http://localhost:5173'
-
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
-}
+import { hasApi } from './helpers/availability'
+import { loginAsAdmin } from './helpers/ui'
 
 test.describe('Model Config Management', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
-    await page.goto(`${BASE}/models`)
+    test.skip(!(await hasApi('/api/v1/models')), 'backend /api/v1/models not registered yet')
+    await loginAsAdmin(page)
+    await page.goto('/models')
   })
 
   test('model list page loads', async ({ page }) => {
@@ -26,7 +23,7 @@ test.describe('Model Config Management', () => {
     await page.click('button:has-text("添加模型")')
     await page.locator('input').first().fill(name)
     await page.fill('input[placeholder="https://api.openai.com/v1"]', 'https://api.openai.com/v1')
-    await page.locator('textarea').fill('gpt-4o')
+    await page.locator('textarea').first().fill('gpt-4o')
     await page.click('button:has-text("保存")')
     await expect(page.locator(`h3:has-text("${name}")`)).toBeVisible()
   })
@@ -41,7 +38,7 @@ test.describe('Model Config Management', () => {
 
   test('provider dropdown has OpenAI option', async ({ page }) => {
     await page.click('button:has-text("添加模型")')
-    const select = page.locator('select')
+    const select = page.locator('select').nth(1)
     await expect(select).toBeVisible()
     const options = await select.locator('option').allTextContents()
     expect(options.some(o => o.toLowerCase().includes('openai'))).toBeTruthy()

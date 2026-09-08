@@ -9,7 +9,7 @@ import json, sys, os, time
 import httpx
 
 BASE_URL = "http://localhost:8000"
-DATA_DIR = os.path.join(os.path.dirname(__file__), "test_data", "供应链")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "test_data", "供应链")
 
 # 文件列表及处理策略
 FILES = [
@@ -417,7 +417,7 @@ def verify(c, token, ontology_id):
     neo4j_ok = False
     try:
         from neo4j import GraphDatabase
-        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "ontoprompt123"))
+        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "ontexus123"))
         with driver.session() as s:
             node_count = s.run("MATCH (n) RETURN count(n) as c").single()["c"]
             rel_count  = s.run("MATCH ()-[r]->() RETURN count(r) as c").single()["c"]

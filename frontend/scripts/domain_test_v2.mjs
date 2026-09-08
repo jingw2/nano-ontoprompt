@@ -1,5 +1,5 @@
 /**
- * nano-ontoprompt v2 — 全领域前端用户模拟测试（修正版）
+ * Ontexus v2 — 全领域前端用户模拟测试（修正版）
  * 基于真实 UI 结构：创建本体 modal → Files 标签上传 → 查看各 Tab
  */
 import { chromium } from '@playwright/test';
@@ -291,7 +291,7 @@ async function finalScreenshot(page) {
 // ── 主流程 ────────────────────────────────────────────────────────────
 async function main() {
   console.log('═══════════════════════════════════════════════════');
-  console.log('  nano-ontoprompt v2 — 全领域模拟用户测试 v2');
+  console.log('  Ontexus v2 — 全领域模拟用户测试 v2');
   console.log('═══════════════════════════════════════════════════\n');
 
   const browser = await chromium.launch({

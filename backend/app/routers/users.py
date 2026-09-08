@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.deps import get_db, require_admin, get_current_user
 from app.schemas.user import UserOut, UserCreate, UserUpdate
+from app.schemas.user_security import UserSecurityResponse
 from app.services.auth_service import hash_password
+from app.services.user_security import UserSecurityError, deactivate_user, soft_delete_user
 from app.models.user import User
 import uuid
 
@@ -39,11 +41,24 @@ def update_user(user_id: str, body: UserUpdate, db: Session = Depends(get_db), _
     db.commit(); db.refresh(user)
     return {"data": UserOut.model_validate(user).model_dump(), "message": "ok"}
 
+@router.post("/{user_id}/deactivate")
+def deactivate_user_route(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        receipt = deactivate_user(db, user_id, actor_id=current_user.id)
+    except UserSecurityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"data": UserSecurityResponse(**receipt).model_dump(), "message": "ok"}
+
 @router.delete("/{user_id}", status_code=204)
 def delete_user(user_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    db.delete(user); db.commit()
+    try:
+        # legacy DELETE becomes an atomic soft deletion: revoke + deactivate, never delete
+        soft_delete_user(db, user_id, actor_id=current_user.id)
+    except UserSecurityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

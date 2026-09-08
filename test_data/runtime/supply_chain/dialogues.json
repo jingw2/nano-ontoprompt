@@ -1,0 +1,28 @@
+{
+  "dialogue_scenarios": [
+    {
+      "citation_source_ids": [
+        "input-supply_chain-inventory-transactions-csv",
+        "input-supply_chain-procurement-policy-docx"
+      ],
+      "dialogue_id": "supply_chain-governed-dialogue",
+      "expected_keywords": [
+        "supplier",
+        "inventory",
+        "safety stock",
+        "purchase order"
+      ],
+      "high_risk_outcome": {
+        "action": "purchase_order_price_update",
+        "decision": "ALLOW",
+        "risk_class": "human_approved"
+      },
+      "normal_outcome": {
+        "action": "risk_label",
+        "decision": "ALLOW",
+        "risk_class": "automatic"
+      },
+      "question": "Which suppliers are below safety stock, and what purchase order action do you recommend?"
+    }
+  ]
+}

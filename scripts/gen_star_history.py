@@ -37,7 +37,7 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.ticker import FuncFormatter
 
-REPO = "jingw2/nano-ontoprompt"
+REPO = "jingw2/ontexus"
 START_DATE = "2026-05-17"  # UTC; stars before this date are excluded
 CACHE = Path(__file__).with_name(".star-history-cache.json")
 

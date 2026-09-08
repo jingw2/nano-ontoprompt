@@ -22,6 +22,7 @@ class CuratedReview(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     curated_dataset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_curated_datasets.id", ondelete="CASCADE"), nullable=False)
+    pipeline_run_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     reviewer_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|approved|rejected|partial
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

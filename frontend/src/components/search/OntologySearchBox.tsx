@@ -25,7 +25,7 @@ export default function OntologySearchBox({ ontologyId }: { ontologyId: string }
       const endpoint = mode === 'semantic'
         ? `/ontologies/${ontologyId}/search/semantic?q=${encodeURIComponent(query)}`
         : `/ontologies/${ontologyId}/search/keyword?q=${encodeURIComponent(query)}`
-      const res: any = await apiClientV2.get(endpoint)
+      const res = await apiClientV2.get<{ results?: SearchResult[] }>(endpoint)
       setResults(res.results || [])
       setSearched(true)
     } catch {

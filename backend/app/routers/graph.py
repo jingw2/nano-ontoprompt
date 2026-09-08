@@ -4,6 +4,8 @@ from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.entity import Entity
 from app.models.relation import Relation
 from app.models.ontology import OntologyProject
+from app.models.user import User
+from app.services.publication.working_copy import OntologyWorkingCopyService
 
 router = APIRouter()
 
@@ -129,25 +131,29 @@ def create_relation(
     ontology_id: str,
     body: dict,
     db: Session = Depends(get_db),
-    _=Depends(require_editor)
+    current_user: User = Depends(require_editor)
 ):
     from app.models.relation import Relation
     import uuid
-    relation = Relation(
-        id=str(uuid.uuid4()),
-        ontology_id=ontology_id,
-        source_entity=body["source_entity"],
-        target_entity=body["target_entity"],
-        type=body.get("type", "关联"),
-        properties=body.get("properties", {}),
-        confidence=body.get("confidence", 1.0),
-    )
-    db.add(relation); db.commit(); db.refresh(relation)
-    return {"data": {"id": relation.id, "source": relation.source_entity, "target": relation.target_entity, "type": relation.type}}
+    def _write():
+        relation = Relation(
+            id=str(uuid.uuid4()),
+            ontology_id=ontology_id,
+            source_entity=body["source_entity"],
+            target_entity=body["target_entity"],
+            type=body.get("type", "关联"),
+            properties=body.get("properties", {}),
+            confidence=body.get("confidence", 1.0),
+        )
+        db.add(relation); db.flush()
+        return {"data": {"id": relation.id, "source": relation.source_entity, "target": relation.target_entity, "type": relation.type}}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="relation.create", callback=_write)
 
 @router.delete("/relations/{relation_id}", status_code=204)
-def delete_relation(ontology_id: str, relation_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
+def delete_relation(ontology_id: str, relation_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     r = db.query(Relation).filter(Relation.id == relation_id, Relation.ontology_id == ontology_id).first()
     if not r:
         raise HTTPException(404, "Not found")
-    db.delete(r); db.commit()
+    def _write():
+        db.delete(r); db.flush()
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="relation.delete", callback=_write)

@@ -184,7 +184,7 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
 # ── Validate ──────────────────────────────────────────────────────
 
 @router.post("/{pipeline_id}/validate", response_model=ValidateResult)
-def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """校验 Pipeline definition 是否合法。"""
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
@@ -261,7 +261,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
 # ── Publish ───────────────────────────────────────────────────────
 
 @router.post("/{pipeline_id}/publish")
-def publish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def publish_pipeline(pipeline_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """发布 Pipeline 为稳定版本。"""
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
@@ -316,7 +316,7 @@ def list_versions(pipeline_id: str, db: Session = Depends(get_db)):
 # ── Run (保留原有) ────────────────────────────────────────────────
 
 @router.post("/{pipeline_id}/run")
-def run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def run_pipeline(pipeline_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
@@ -377,13 +377,18 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
         "status": run.status,
         "stats": run.stats,
         "error_log": run.error_log,
+        # Set by pipeline_run_task once real source rows are resolved (input
+        # lineage) and again to the curated output version on success; a
+        # caller polling for durable completion previously had no way to
+        # read this back at all.
+        "dataset_version_id": run.dataset_version_id,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
 
 
 @router.post("/{pipeline_id}/run-sync")
-def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db)):
+def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db), _=Depends(require_editor)):
     """同步执行 Pipeline（无需 Celery/Redis，适用于开发/测试）"""
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
@@ -415,7 +420,7 @@ class PreviewStepBody(BaseModel):
 
 
 @router.post("/preview-step")
-def preview_step(body: PreviewStepBody):
+def preview_step(body: PreviewStepBody, _=Depends(require_editor)):
     """预览某个 Transform 步骤的输出"""
     try:
         from app.services.v2.pipeline.steps.cleansing import CleansingStep

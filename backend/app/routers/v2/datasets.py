@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_editor
 from app.services.v2.dataset_service import DatasetService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -24,7 +24,7 @@ class DatasetResponse(BaseModel):
         from_attributes = True
 
 @router.post("/upload", status_code=201)
-async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), _=Depends(require_editor)):
     """上传 CSV/Excel 文件，自动创建 raw Dataset + DatasetVersion"""
     import os
     from app.config import settings

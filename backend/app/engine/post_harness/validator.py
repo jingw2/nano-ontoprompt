@@ -1,6 +1,18 @@
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+# ID/numbered-record pattern: a bare letter-prefix+digits code (CUS0001), or
+# any name ending in a run of 3+ digits (客户001) — both are the shape of a
+# specific record identifier, not a concept/type name, and indicate the LLM
+# leaked a per-row instance into the concept-level entities list.
+_INSTANCE_ID_PATTERN = re.compile(r"^[A-Za-z]+\d+$")
+_INSTANCE_TRAILING_DIGITS_PATTERN = re.compile(r"\d{3,}$")
+
+
+def _looks_like_instance_id(name: str) -> bool:
+    return bool(_INSTANCE_ID_PATTERN.match(name)) or bool(_INSTANCE_TRAILING_DIGITS_PATTERN.search(name))
 
 
 class Severity(str, Enum):
@@ -78,6 +90,7 @@ class PostHarnessValidator:
         self._field_check(data, report)
         self._reference_check(data, report)
         self._dedup_check(data, report)
+        self._instance_leakage_check(data, report)
         self._type_check(data, report, allowed_types or self.DEFAULT_ALLOWED_TYPES)
         self._syntax_check(data, report)          # Fix 3: Python syntax validation
         self._linked_ref_check(data, report)      # Fix 3: semantic reference integrity
@@ -200,6 +213,17 @@ class PostHarnessValidator:
                 seen_rels.add(key)
                 new_rels.append(r)
         data["relations"] = new_rels
+
+    # ── 4b. Instance leakage (record-shaped names in entities) ──────────────
+    def _instance_leakage_check(self, data: dict, report: ValidationReport):
+        for e in data.get("entities", []):
+            if not isinstance(e, dict):
+                continue
+            name = e.get("name_cn") or ""
+            if name and _looks_like_instance_id(name):
+                report.add(Severity.WARNING, "ENTITY_LOOKS_LIKE_INSTANCE",
+                           f"实体「{name}」形似具体记录编号，应作为 instance 而非概念 entity",
+                           {"name_cn": name})
 
     # ── 6. Python syntax check on function_code ────────────────────────────
     def _syntax_check(self, data: dict, report: ValidationReport):

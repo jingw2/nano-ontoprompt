@@ -4,6 +4,7 @@ const COLOR: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-600',
   creating: 'bg-blue-100 text-blue-700',
   created: 'bg-green-100 text-green-700',
+  published: 'bg-emerald-100 text-emerald-700',
   archived: 'bg-yellow-100 text-yellow-700',
 }
 

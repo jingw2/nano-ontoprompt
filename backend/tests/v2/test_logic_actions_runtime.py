@@ -1,15 +1,25 @@
 from app.models.entity import Entity
 from app.models.action import Action
 from app.models.logic import LogicRule
+from app.models.ontology import OntologyProject
 from app.models.v2.logic import OntologyLogicRule
 from app.models.v2.action import OntologyActionRun, OntologyActionType
 from app.routers.actions import publish_actions
 from app.routers.logic import publish_logic_rules
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
 from app.routers.v2.logic_actions import (
     ActionReviewRequest,
     ActionRunRequest,
+    ActionTypePatch,
     LogicReviewRequest,
     LogicTestRequest,
+    LogicRulePatch,
+    patch_action_type,
+    patch_logic_rule,
     review_action_type,
     review_logic_rule,
     run_action_type,
@@ -59,6 +69,7 @@ def test_run_published_set_property_action(db):
 
 
 def test_logic_review_and_executable_test(db):
+    db.add(OntologyProject(id="ont-runtime-2", name="ont-runtime-2", domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     rule = OntologyLogicRule(
         id="logic-1",
         ontology_id="ont-runtime-2",
@@ -77,6 +88,7 @@ def test_logic_review_and_executable_test(db):
         "logic-1",
         LogicReviewRequest(status="reviewed", enabled=True, notes="approved"),
         db,
+        SimpleNamespace(id="runtime-editor"),
     )
     result = run_logic_rule_test(
         "ont-runtime-2",
@@ -92,6 +104,7 @@ def test_logic_review_and_executable_test(db):
 
 
 def test_action_review_updates_submission_criteria(db):
+    db.add(OntologyProject(id="ont-runtime-3", name="ont-runtime-3", domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     action = OntologyActionType(
         id="action-review-1",
         ontology_id="ont-runtime-3",
@@ -113,12 +126,56 @@ def test_action_review_updates_submission_criteria(db):
             notes="needs reason",
         ),
         db,
+        SimpleNamespace(id="runtime-editor"),
     )
 
     db.refresh(action)
     assert result["status"] == "reviewed"
     assert action.submission_criteria[0]["name"] == "reason"
     assert action.side_effects[0]["type"] == "review_note"
+
+
+def test_v2_logic_and_action_patches_change_authoritative_definitions(db):
+    ontology_id = "ont-runtime-edit-v2"
+    db.add(OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test", created_by="runtime",
+        security_domain_id="00000000-0000-0000-0000-000000000001",
+    ))
+    rule = OntologyLogicRule(
+        id="logic-edit-v2", ontology_id=ontology_id, name="Amount positive",
+        logic_type="validation", expression={"operator": "gt", "field": "amount", "value": 0},
+        version=1,
+    )
+    action = OntologyActionType(
+        id="action-edit-v2", ontology_id=ontology_id, name="Set status",
+        action_category="state_transition", effects=[{"action": "set_property", "property": "status"}],
+        version=1,
+    )
+    db.add_all([rule, action])
+    db.commit()
+
+    editor = SimpleNamespace(id="runtime-editor")
+    patch_logic_rule(
+        ontology_id, rule.id,
+        LogicRulePatch(expression={"operator": "gte", "field": "amount", "value": 100}),
+        db, editor,
+    )
+    patch_action_type(
+        ontology_id, action.id,
+        ActionTypePatch(
+            effects=[{"action": "set_property", "property": "status", "value": "approved"}],
+            backed_by_function="governed-status-transition",
+        ),
+        db, editor,
+    )
+
+    db.refresh(rule)
+    db.refresh(action)
+    assert rule.expression == {"operator": "gte", "field": "amount", "value": 100}
+    assert rule.version == 2
+    assert action.effects == [{"action": "set_property", "property": "status", "value": "approved"}]
+    assert action.backed_by_function == "governed-status-transition"
+    assert action.version == 2
 
 
 def test_action_runtime_rejects_missing_required_parameter(db):
@@ -146,6 +203,7 @@ def test_action_runtime_rejects_missing_required_parameter(db):
 
 def test_v1_logic_publish_syncs_v2_status(db):
     ontology_id = "ont-runtime-5"
+    db.add(OntologyProject(id=ontology_id, name=ontology_id, domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     db.add(LogicRule(
         id="logic-v1",
         ontology_id=ontology_id,
@@ -166,14 +224,17 @@ def test_v1_logic_publish_syncs_v2_status(db):
     ))
     db.commit()
 
-    publish_logic_rules(ontology_id, db)
-
-    assert db.query(LogicRule).filter_by(id="logic-v1").first().status == "published"
-    assert db.query(OntologyLogicRule).filter_by(id="logic-v2").first().status == "published"
+    with pytest.raises(HTTPException) as exc:
+        publish_logic_rules(ontology_id, db)
+    assert "PUBLICATION_NOT_ENABLED" in str(exc.value.detail)
+    # direct tool publication is closed; nothing is published
+    assert db.query(LogicRule).filter_by(id="logic-v1").first().status == "draft"
+    assert db.query(OntologyLogicRule).filter_by(id="logic-v2").first().status == "draft"
 
 
 def test_v1_action_publish_syncs_v2_status(db):
     ontology_id = "ont-runtime-6"
+    db.add(OntologyProject(id=ontology_id, name=ontology_id, domain="test", created_by="runtime", security_domain_id="00000000-0000-0000-0000-000000000001"))
     db.add(Action(
         id="action-v1",
         ontology_id=ontology_id,
@@ -193,7 +254,9 @@ def test_v1_action_publish_syncs_v2_status(db):
     ))
     db.commit()
 
-    publish_actions(ontology_id, db)
-
-    assert db.query(Action).filter_by(id="action-v1").first().status == "published"
-    assert db.query(OntologyActionType).filter_by(id="action-v2").first().status == "published"
+    with pytest.raises(HTTPException) as exc:
+        publish_actions(ontology_id, db)
+    assert "PUBLICATION_NOT_ENABLED" in str(exc.value.detail)
+    # direct tool publication is closed; nothing is published
+    assert db.query(Action).filter_by(id="action-v1").first().status == "draft"
+    assert db.query(OntologyActionType).filter_by(id="action-v2").first().status == "draft"

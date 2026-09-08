@@ -1,54 +1,56 @@
+/**
+ * ontology_list.spec.ts — ontology list page (create/filter/delete). Self-
+ * skips until the ontologies API is registered.
+ */
 import { test, expect } from '@playwright/test'
-
-const BASE = 'http://localhost:5173'
-
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
-}
+import { hasApi } from './helpers/availability'
+import { loginAsAdmin } from './helpers/ui'
 
 test.describe('Ontology List', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
-    await page.goto(`${BASE}/ontologies`)
+    test.skip(!(await hasApi('/api/v1/ontologies')), 'backend /api/v1/ontologies not registered yet')
+    await loginAsAdmin(page)
+    await page.goto('/ontologies')
   })
 
   test('ontology list page loads', async ({ page }) => {
-    await expect(page.locator('h2')).toContainText('Ontology')
-    await expect(page.locator('button:has-text("创建 Ontology")')).toBeVisible()
+    await expect(page.locator('h2')).toContainText('本体管理')
+    await expect(page.locator('button:has-text("创建本体")')).toBeVisible()
   })
 
-  test('create ontology modal opens', async ({ page }) => {
-    await page.click('button:has-text("创建 Ontology")')
-    await expect(page.locator('text=名称')).toBeVisible()
-    await expect(page.locator('select')).toBeVisible()
+  test('create button opens the build-mode selection wizard', async ({ page }) => {
+    await page.click('button:has-text("创建本体")')
+    await page.waitForURL(/\/ontologies\/new$/)
+    await expect(page.locator('button:has-text("简易 LLM 提取")')).toBeVisible()
+    await expect(page.locator('button:has-text("Pipeline Mapping")')).toBeVisible()
   })
 
   test('create and view ontology', async ({ page }) => {
     const uniqueName = `测试本体-${Date.now()}`
-    await page.click('button:has-text("创建 Ontology")')
-    await page.fill('input[placeholder="名称 *"]', uniqueName)
-    await page.click('button:has-text("确认")')
-    await page.waitForURL(/\/ontologies\/[a-f0-9-]+$/)
+    await page.click('button:has-text("创建本体")')
+    await page.waitForURL(/\/ontologies\/new$/)
+    await page.click('button:has-text("简易 LLM 提取")')
+    await page.fill('input[placeholder="本体名称"]', uniqueName)
+    await page.click('button:has-text("创建本体")')
+    await page.waitForURL(/\/ontologies\/[a-f0-9-]+/)
     await expect(page.locator('h2')).toContainText(uniqueName)
   })
 
   test('filter ontologies by name', async ({ page }) => {
     const filter = page.locator('input[placeholder*="筛选"]')
     await filter.fill('不存在的本体xyz')
-    await expect(page.locator('text=暂无 Ontology')).toBeVisible()
+    await expect(page.locator('text=没有符合筛选条件的本体')).toBeVisible()
   })
 
   test('cancel delete dialog', async ({ page }) => {
     // First create one to delete
-    await page.click('button:has-text("创建 Ontology")')
-    await page.fill('input[placeholder="名称 *"]', `删除测试-${Date.now()}`)
-    await page.click('button:has-text("确认")')
-    await page.waitForURL(/\/ontologies\//)
-    await page.goto(`${BASE}/ontologies`)
+    await page.click('button:has-text("创建本体")')
+    await page.waitForURL(/\/ontologies\/new$/)
+    await page.click('button:has-text("简易 LLM 提取")')
+    await page.fill('input[placeholder="本体名称"]', `删除测试-${Date.now()}`)
+    await page.click('button:has-text("创建本体")')
+    await page.waitForURL(/\/ontologies\/[a-f0-9-]+/)
+    await page.goto('/ontologies')
 
     const deleteBtn = page.locator('button:has-text("删除")').first()
     await deleteBtn.click()

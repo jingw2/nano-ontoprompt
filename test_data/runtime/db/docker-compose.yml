@@ -1,0 +1,49 @@
+# Isolated test-only PostgreSQL/MySQL fixtures for the runtime corpus.
+# These ports, volumes, and credentials are test infrastructure and are
+# never used against production. Always run with a unique -p <project>
+# and tear down with `down -v --remove-orphans`.
+name: runtime-fixture
+
+networks:
+  runtime_fixture:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime
+      POSTGRES_DB: runtime
+    ports:
+      - "55432:5432"
+    networks:
+      - runtime_fixture
+    volumes:
+      - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./postgres/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime -d runtime"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: runtime
+      MYSQL_USER: runtime
+      MYSQL_PASSWORD: runtime
+      MYSQL_DATABASE: runtime
+    ports:
+      - "53306:3306"
+    networks:
+      - runtime_fixture
+    volumes:
+      - ./mysql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./mysql/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u runtime -pruntime"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

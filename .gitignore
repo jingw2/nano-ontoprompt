@@ -41,11 +41,15 @@ celerybeat-schedule
 
 # Test artifacts
 test-results/
+frontend/coverage/
+.playwright-mcp/
 
 # Star history timestamp cache
 scripts/.star-history-cache.json
 
 # Internal / agent-only files (不进行 git 同步)
+# Personal Codex model routing and agent configuration; keep local and do not push to GitHub.
+.codex/
 AGENTS.md
 CLAUDE.md
 nano-ontoprompt-requirements.md
@@ -59,3 +63,14 @@ RELEASE_NOTES_*.md
 # Test screenshots
 frontend/screenshots_*/
 test_data/screenshots/
+
+# Reviewer-owned e2e-review harness (never commit)
+frontend/e2e-review/
+
+# Local git worktrees (subagent-driven-development isolation)
+.worktrees/
+
+# Local service data/binaries (MinIO, ChromaDB)
+bin/
+chroma_data/
+minio_data/
