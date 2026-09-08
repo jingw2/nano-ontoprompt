@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { AgentMessage } from '@/api/agentSessions'
 import type { StreamState } from '@/api/agentStream'
 import { apiClient } from '@/api/client'
+import { renderMarkdown } from '@/security/sanitize'
 import ActionApprovalCard, { GovernedPlanPanel } from './ActionApprovalCard'
 import type { ApprovalResolutionResult } from '@/api/agentApprovals'
 import type { RuntimeEventRecord } from './ExecutionTracePanel'
@@ -108,6 +109,9 @@ export default function ConversationPanel({
   // being present is real evidence of that specific outcome, not a label
   // applied "regardless of actual state".
   const hasAutomaticReceipt = Boolean(realReceiptId && finalEvent?.payload.automatic_action)
+  const journeyProcess = [...journeyEvents]
+    .sort((left, right) => left.sequence - right.sequence)
+    .map(event => event.event_type)
 
   const submit = () => {
     if (!draft.trim()) return
@@ -127,15 +131,22 @@ export default function ConversationPanel({
       <div className="flex-1 overflow-auto p-4 space-y-3">
         {messages.map((m, i) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.role === 'user' ? 'bg-black text-white' : 'bg-gray-100'}`}
-              // Only the LAST assistant message carries the testid — a
-              // real turn has exactly one, but tagging every assistant
-              // bubble would risk a strict-mode multi-match once the
-              // stream-echo bubbles below are also on screen.
-              data-testid={m.role === 'assistant' && i === messages.length - 1 ? 'journey-answer' : undefined}>
-              {displayContent(m.content)}
-            </div>
+            {m.role === 'user' ? (
+              <div className="max-w-[75%] rounded-lg px-3 py-2 text-sm bg-blue-600 text-white whitespace-pre-wrap">
+                {displayContent(m.content)}
+              </div>
+            ) : (
+              <div
+                className="max-w-[75%] rounded-lg px-3 py-2 text-sm bg-gray-100 markdown-body"
+                // Only the LAST assistant message carries the testid — a
+                // real turn has exactly one, but tagging every assistant
+                // bubble would risk a strict-mode multi-match once the
+                // stream-echo bubbles below are also on screen.
+                data-testid={i === messages.length - 1 ? 'journey-answer' : undefined}
+                // `renderMarkdown` always routes through `sanitizeHtml`'s
+                // tag/attribute allowlist before this reaches the DOM.
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(displayContent(m.content)) }} />
+            )}
           </div>
         ))}
         {stream.phase === 'streaming' && (
@@ -145,9 +156,10 @@ export default function ConversationPanel({
         )}
         {stream.events.filter(e => e.event === 'message' || e.event === 'final_response').map((e, i) => (
           <div key={`evt-${i}`} className="flex justify-start">
-            <div className="bg-gray-100 rounded-lg px-3 py-2 text-sm">
-              {displayContent(String((e.data as { message?: string }).message ?? ''))}
-            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-2 text-sm markdown-body"
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(displayContent(String((e.data as { message?: string }).message ?? ''))),
+              }} />
           </div>
         ))}
         {stream.phase === 'error' && stream.error && (
@@ -186,6 +198,7 @@ export default function ConversationPanel({
 
       {turnId && journeyEvents.length > 0 && (
         <div className="border-t p-3 text-xs space-y-1" data-testid="journey-evidence">
+          <p data-testid="journey-process-order">{journeyProcess.join(' → ')}</p>
           {citations.length > 0 && (
             <p data-testid="journey-citation">{citations.join(', ')}</p>
           )}

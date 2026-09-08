@@ -6,6 +6,9 @@
  * link target control.  Outbound HTTP(S) links keep their destination and
  * receive `rel="noopener noreferrer"`.
  */
+import { marked } from 'marked'
+
+marked.setOptions({ gfm: true, breaks: true })
 
 const SAFE_TAGS = new Set([
   'a', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2', 'h3',
@@ -49,6 +52,15 @@ export function sanitizeHtml(html: string, options: SanitizeOptions = {}): strin
   const doc = new DOMParser().parseFromString(String(html), 'text/html')
   walk(doc.body, options)
   return doc.body.innerHTML
+}
+
+/** Untrusted Markdown (an Agent's own response text) -> sanitized HTML,
+ * safe to set as `innerHTML`. `marked` never executes the source, only
+ * produces an HTML string, which still goes through the same `sanitizeHtml`
+ * allowlist as any other untrusted HTML before it reaches the DOM. */
+export function renderMarkdown(text: string, options: SanitizeOptions = {}): string {
+  const html = marked.parse(String(text), { async: false })
+  return sanitizeHtml(html, options)
 }
 
 function walk(parent: ParentNode, options: SanitizeOptions): void {

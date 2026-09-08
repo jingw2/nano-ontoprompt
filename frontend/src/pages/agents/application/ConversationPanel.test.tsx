@@ -1,9 +1,11 @@
 import '@/i18n'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { waitFor } from '@testing-library/react'
 import { render, screen } from '@testing-library/react'
 import ConversationPanel from './ConversationPanel'
 import type { AgentMessage } from '@/api/agentSessions'
 import { initialStreamState, type StreamState } from '@/api/agentStream'
+import { apiClient } from '@/api/client'
 
 function renderPanel(messages: AgentMessage[], stream: StreamState = initialStreamState) {
   return render(<ConversationPanel messages={messages} stream={stream} clarification={null}
@@ -39,5 +41,57 @@ describe('P4A-CONVERSATION', () => {
     }
     renderPanel([], stream)
     expect(screen.getByText('问题')).toBeTruthy()
+  })
+
+  it('renders Markdown in an assistant answer as real formatted elements', () => {
+    const messages: AgentMessage[] = [{
+      id: 'm-3', session_id: 's-1', turn_id: 't-1', role: 'assistant',
+      ordinal: 2, content: '**加粗**内容，以及一个列表：\n\n- 项目一\n- 项目二',
+    }]
+    renderPanel(messages)
+    const bold = screen.getByText('加粗')
+    expect(bold.tagName).toBe('STRONG')
+    expect(screen.getByText('项目一').closest('ul')).toBeTruthy()
+  })
+
+  it('never renders raw Markdown syntax characters for the assistant', () => {
+    const messages: AgentMessage[] = [{
+      id: 'm-4', session_id: 's-1', turn_id: 't-1', role: 'assistant',
+      ordinal: 2, content: '**加粗**',
+    }]
+    renderPanel(messages)
+    expect(screen.queryByText('**加粗**')).toBeNull()
+  })
+
+  it('gives the user bubble the blue fill, and keeps user text un-rendered as Markdown', () => {
+    const messages: AgentMessage[] = [{
+      id: 'm-5', session_id: 's-1', turn_id: 't-1', role: 'user',
+      ordinal: 1, content: '**not bold**',
+    }]
+    renderPanel(messages)
+    const bubble = screen.getByText('**not bold**')
+    expect(bubble.className).toContain('bg-blue-600')
+  })
+
+  it('renders the persisted business-journey process in sequence without payload content', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ items: [
+      { id: 'e1', turn_id: 't-1', sequence: 1, event_type: 'turn_started', payload: {} },
+      { id: 'e2', turn_id: 't-1', sequence: 2, event_type: 'resolve_snapshot', payload: {} },
+      { id: 'e3', turn_id: 't-1', sequence: 3, event_type: 'model_call', payload: { call_kind: 'agent_initial' } },
+      { id: 'e4', turn_id: 't-1', sequence: 4, event_type: 'tool_executed', payload: {} },
+      { id: 'e5', turn_id: 't-1', sequence: 5, event_type: 'model_call', payload: { call_kind: 'agent_final' } },
+      { id: 'e6', turn_id: 't-1', sequence: 6, event_type: 'final_response', payload: {} },
+      { id: 'e7', turn_id: 't-1', sequence: 7, event_type: 'turn_succeeded', payload: {} },
+    ] } as never)
+    try {
+      render(<ConversationPanel messages={[]} stream={{ ...initialStreamState, terminal: true, phase: 'terminal' }} clarification={null}
+        pendingApprovalId={null} onSend={() => {}} onAnswerClarification={() => {}}
+        onApprovalResolved={() => {}} onRetry={() => {}} turnId="t-1" />)
+      await waitFor(() => expect(screen.getByTestId('journey-process-order')).toHaveTextContent(
+        'turn_started → resolve_snapshot → model_call → tool_executed → model_call → final_response → turn_succeeded',
+      ))
+    } finally {
+      get.mockRestore()
+    }
   })
 })
