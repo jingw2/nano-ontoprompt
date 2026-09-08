@@ -1,5 +1,5 @@
 /**
- * nano-ontoprompt v2 — 全领域最终测试
+ * Ontexus v2 — 全领域最终测试
  * 特性：时间戳命名避免冲突、短超时、完整截图流程
  */
 import { chromium } from '@playwright/test';
@@ -202,7 +202,7 @@ async function testDomain(page, domain, idx) {
 
 async function main() {
   console.log('═══════════════════════════════════════════════');
-  console.log('  nano-ontoprompt v2 — 全领域用户模拟测试 FINAL');
+  console.log('  Ontexus v2 — 全领域用户模拟测试 FINAL');
   console.log(`  时间戳: ${TS}`);
   console.log('═══════════════════════════════════════════════\n');
 

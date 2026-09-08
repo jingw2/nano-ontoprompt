@@ -4,6 +4,27 @@
 
 A lightweight, Palantir Foundry-inspired platform for building domain ontologies from raw data. Connect your data sources, run them through a visual transform pipeline, map curated datasets to entity types, and explore the resulting knowledge graph — complete with entities, relations, logic rules, and executable actions.
 
+## Why "Ontexus"?
+
+**Ontexus = Ontology + Nexus.**
+
+- **Ont-/Onto-** → Ontology — the business-semantic model: entities, relations, rules, actions
+- **Nexus** → a connection point, a hub, the place where things converge
+
+Ontexus isn't just a knowledge-graph tool. The Ontology is the middle layer between an Agent and an enterprise's real business world:
+
+```
+Data / Knowledge → Ontology → Context → Logic / Actions → Agent
+```
+
+The "nexus" isn't about the graph itself — it's about the connections: business objects, relations, rules, actions, context, and Agents, all meeting at one semantic layer.
+
+**Ontexus = the Ontology Nexus for enterprise Agents.**
+
+What we want to do is Enterprise Domain-Level Agent Infra. 
+
+---
+
 Two build paths are supported:
 
 - **Pipeline Mapping** (v2) — full data-integration chain: `Data Connection → Raw Storage → Transform → Curated Dataset → Ontology Mapping`
@@ -92,8 +113,8 @@ For a deep dive into the Ontology-as-a-Service architecture — including Object
 ### Option 1 — Docker Compose (full v2 stack)
 
 ```bash
-git clone https://github.com/jingw2/nano-ontoprompt.git
-cd nano-ontoprompt
+git clone https://github.com/jingw2/ontexus.git
+cd ontexus
 cp .env.example .env          # edit secrets before production use
 docker compose -f docker-compose.v2.yml up --build
 ```
@@ -177,7 +198,7 @@ For the **Simple LLM Extraction** path: create an ontology in `simple_llm` mode,
 ## Project Structure
 
 ```
-nano-ontoprompt/
+ontexus/
 ├── backend/
 │   ├── alembic/               # DB migrations (0001_full_baseline covers all tables)
 │   ├── app/

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """本地 OpenAI 兼容 Mock LLM — 用于无真实 API Key 时验证简易提取路径。
 
-启发式从文档文本中提取实体/关系/逻辑规则/动作,返回 nano-ontoprompt
+启发式从文档文本中提取实体/关系/逻辑规则/动作,返回 Ontexus
 期望的 JSON 结构。仅验证链路机械正确性,不代表真实 LLM 提取质量。
 
 用法: python test_data/mock_llm_server.py  (监听 8123)

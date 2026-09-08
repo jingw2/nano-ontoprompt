@@ -16,7 +16,7 @@ concurrency:
 jobs:
   update-chart:
     # Avoid running this upstream-only maintenance task in forks.
-    if: github.repository == 'jingw2/nano-ontoprompt'
+    if: github.repository == 'jingw2/ontexus'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

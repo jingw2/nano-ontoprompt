@@ -359,7 +359,7 @@ async function testSettingsPage(page) {
 
 async function main() {
   console.log('═══════════════════════════════════════════════');
-  console.log('  nano-ontoprompt v2 — 全领域前端测试');
+  console.log('  Ontexus v2 — 全领域前端测试');
   console.log('═══════════════════════════════════════════════');
   console.log(`  后端: ${API_URL}`);
   console.log(`  前端: ${BASE_URL}`);

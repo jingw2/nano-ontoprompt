@@ -4,6 +4,26 @@
 
 一个轻量级、借鉴 Palantir Foundry 设计的领域本体构建平台。接入数据源,经过可视化转换管道处理,将清洗后的数据集映射为实体类型,最终生成可探索的知识图谱——包含实体、关系、逻辑规则与可执行动作。
 
+
+## 为什么叫 "Ontexus"?
+
+**Ontexus = Ontology + Nexus。**
+
+- **Ont- / Onto-** → Ontology —— 本体、本体论,企业的业务语义模型
+- **Nexus** → 连接点、枢纽,多个事物汇聚之处
+
+Ontexus 并不只是一个知识图谱工具。Ontology 是 Agent 与企业真实业务世界之间的中间层:
+
+```
+数据 / 知识 → Ontology → Context → 逻辑 / 动作 → Agent
+```
+
+这里的 "nexus" 强调的不是图本身,而是连接——把业务对象、关系、规则、动作、上下文和 Agent 连接在一起。
+
+**Ontexus:连接企业知识、业务逻辑与 AI Agent 的本体枢纽。** 我们想做的是企业领域知识的Agent Infra。
+
+---
+
 支持两条构建路径:
 
 - **Pipeline Mapping**(v2)— 完整数据集成链路:`数据接入 → 原始存储 → 转换 → Curated 数据集 → 本体映射`
@@ -87,8 +107,8 @@
 ### 方式一 — Docker Compose(完整 v2 栈)
 
 ```bash
-git clone https://github.com/jingw2/nano-ontoprompt.git
-cd nano-ontoprompt
+git clone https://github.com/jingw2/ontexus.git
+cd ontexus
 cp .env.example .env          # 生产环境务必修改密钥
 docker compose -f docker-compose.v2.yml up --build
 ```
@@ -168,7 +188,7 @@ src/test/e2e/runtime-governance.spec.ts`；它依赖该套件配置的服务，�
 ## 项目结构
 
 ```
-nano-ontoprompt/
+ontexus/
 ├── backend/
 │   ├── alembic/               # 数据库迁移 (0001_full_baseline 覆盖全部表)
 │   ├── app/
