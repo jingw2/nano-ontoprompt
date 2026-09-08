@@ -116,8 +116,9 @@ Neither option changes the PEP or storage adapters.
 4. Unknown capabilities, resources, policy fields, operators, or query forms
    fail closed.
 5. Every protected result is filtered before it reaches an Agent or browser.
-6. REST, built-in Agents, MCP, search, graph traversal, aggregation, and export
-   use the same PDP and Secure Ontology Reader.
+6. Protected Ontology object reads through REST, built-in Agents, MCP, search,
+   graph traversal, aggregation, and export use the same PDP and Secure
+   Ontology Reader.
 7. Filtering occurs before pagination, sorting, aggregation, truncation, and
    result counts are calculated.
 8. A visible relation requires an allowed relation type and visible endpoints.
@@ -137,8 +138,9 @@ departments
 - security_domain_id
 - code
 - name
-- parent_id (nullable; simple department tree)
+- parent_id (nullable; display/administration hierarchy only in first release)
 - status: active | inactive
+- department_epoch (monotonically increasing integer)
 - revision
 - created_at / updated_at
 
@@ -148,6 +150,7 @@ user_groups
 - name
 - description
 - status: active | inactive
+- group_epoch (monotonically increasing integer)
 - revision
 - created_at / updated_at
 
@@ -177,8 +180,12 @@ Add these fields to `users`:
 department_id (nullable)
 auth_source: local | oidc | ldap | saml
 external_subject (nullable)
-policy_epoch (monotonically increasing integer)
+user_epoch (monotonically increasing integer)
 ```
+
+The authoritative authorization-version store also maintains one
+`global_policy_epoch` (a monotonically increasing integer) for policy changes
+that apply across subjects in the security domain.
 
 The first release writes `auth_source=local`. Future identity providers map an
 external subject to the same internal user and authorization subject, so the
@@ -194,9 +201,20 @@ the current user subject
 + every active group subject containing the user
 ```
 
-Inactive departments and groups contribute no authority. Membership changes,
-policy publication, and user deactivation increment `policy_epoch` for affected
-users.
+`parent_id` is display and administration metadata only in the first release.
+Effective subject expansion uses only the user's active primary department; no
+ancestor or descendant department grants are inherited. Cross-department access
+is expressed with groups. Hierarchical permission inheritance is a later,
+separately designed feature.
+
+Inactive departments and groups contribute no authority. Department assignment,
+group membership, user status changes, and direct-user policy changes increment
+the affected user's `user_epoch`. A department policy change increments that
+department's `department_epoch` once, and a group policy change increments that
+group's `group_epoch` once; neither change updates every member. Policy changes
+that apply globally increment `global_policy_epoch`. The applicable version
+vector is read with the subject memberships and is used for credential and
+context staleness checks.
 
 ## 7. Policy model and composition
 
@@ -299,7 +317,7 @@ bounded.
 
 `SubjectContextBuilder` produces an immutable trusted context after validating
 the local user, security domain, active organization memberships, Agent client,
-audience, and policy epoch.
+audience, and the applicable authorization version vector.
 
 ```json
 {
@@ -310,11 +328,21 @@ audience, and policy epoch.
   "group_ids": ["group-a", "group-b"],
   "platform_role": "viewer",
   "authentication_time": "2026-09-08T10:00:00Z",
-  "policy_epoch": 17,
+  "user_epoch": 17,
+  "department_epoch": 4,
+  "group_epoch": {"group-a": 9, "group-b": 12},
+  "global_policy_epoch": 3,
   "policy_digest": "sha256:...",
   "audience": "https://ontexus.example.com/mcp"
 }
 ```
+
+The applicable version vector contains the user's `user_epoch`, the active
+primary department's `department_epoch` when present, one `group_epoch` entry
+for each active group, and `global_policy_epoch`. `SubjectContext`, cache keys,
+and delegated credentials carry this vector or an integrity-protected equivalent.
+Each request compares the supplied vector with current authoritative versions;
+any mismatch is stale and is rejected before protected data access.
 
 The PDP interface is transport independent:
 
@@ -359,10 +387,20 @@ and typed query constraints. It never includes protected row values.
 - `SecureOntologyReader` compiles and applies object, property, row, and
   relation constraints to the actual data request.
 
+`GET /preparations/{run_id}/{journey_id}` is not an Ontology object-reader
+endpoint and therefore is not routed through `SecureOntologyReader`. It is
+security-sensitive derived evidence. The dedicated gate identity is required
+for both GET and POST; POST additionally retains its existing `require_editor`
+role prerequisite. No owner or tenant columns are used for this endpoint's
+authorization boundary.
+
 FastAPI route guards alone are insufficient because they cannot safely project
-fields or filter rows. No protected route or tool may directly call SQLAlchemy
-entity queries, `Neo4jService.run_cypher`, or a Chroma collection. They call the
-Secure Ontology Reader.
+fields or filter rows. No protected Ontology object-reader route or tool may
+directly call SQLAlchemy entity queries, `Neo4jService.run_cypher`, or a Chroma
+collection. Those routes and tools call the Secure Ontology Reader.
+Separately secured derived-evidence endpoints are the explicit exception: they
+remain outside the reader and enforce their own dedicated gate and
+service-boundary checks.
 
 ### 9.2 PostgreSQL
 
@@ -384,24 +422,43 @@ query compilation and RLS must be parity-tested. RLS errors fail closed.
 
 ### 9.3 Neo4j
 
-- Compile entity, row, and relation constraints into every Cypher query.
-- Require both endpoints to be visible before returning a relation.
-- Require every node and edge in a returned path to be visible.
-- Do not expose arbitrary raw Cypher to delegated Agents.
-- NL2Cypher produces a restricted query representation; Ontexus injects policy
-  constraints after generation and validates the final query.
-- If Ontexus cannot prove that a query is constrained, it rejects the query.
+- Delegated callers submit a typed, bounded query IR rather than raw Cypher.
+- Ontexus validates the IR, constructs parameterized Cypher, and injects entity,
+  row, and relation policies structurally.
+- Verify coverage for every returned, aggregated, or path node, edge, and
+  property. A visible relation still requires both endpoints to be visible,
+  and every node and edge in a returned path must be visible.
+- Reject unsupported constructs, procedure calls, dynamic Cypher, unsafe
+  subqueries, and any query whose policy coverage cannot be verified with
+  `UNSUPPORTED_SECURE_QUERY`.
+- A separate secure graph-query sub-design gate must pass before Phase 4 Neo4j
+  implementation starts. The gate requires a threat model, adversarial corpus,
+  SQL/Neo4j parity suite, and security review.
 
 ### 9.4 ChromaDB and semantic search
 
 The vector store is a candidate generator, not an authorization authority:
 
 1. Pre-filter by Ontology and allowed entity types.
-2. Retrieve a bounded, over-fetched candidate batch.
+2. Retrieve iterative candidate batches, each bounded by the remaining scan and
+   time budgets.
 3. Authorize candidate object IDs through PostgreSQL/Secure Ontology Reader.
-4. Rank, truncate, count, and return only the authorized candidates.
-5. If the secure scan bound is reached, return an incomplete authorized result
-   rather than filling the page with unauthorized objects.
+4. Continue until the requested authorized count is reached, the source is
+   exhausted, the maximum scanned-candidate budget is exhausted, or the time
+   budget is exhausted.
+5. Rank, truncate, count, and return only authorized candidates. Return an
+   explicit `complete` flag and `termination_reason`, where the termination
+   reason is one of `requested_count`, `source_exhausted`,
+   `scan_budget_exhausted`, or `time_budget_exhausted`. `complete=true` applies
+   only to `requested_count` or `source_exhausted` and describes fulfillment of
+   the request, not corpus completeness.
+6. A budget stop sets `complete=false`; it never claims corpus completeness and
+   never fills a page with unauthorized objects.
+
+Repeated low-density workloads trigger a future authorization-aware index or
+bitmap design, not an unbounded increase in candidate retrieval. Track
+authorization hit rate, scan amplification, incomplete-result rate, and
+latency.
 
 Do not encode the complete authorization policy into the vector index in the
 first release, because policy changes would require unsafe or expensive index
@@ -433,7 +490,12 @@ only minimal identity and lifecycle claims:
   "aud": "https://ontexus.company.example/mcp",
   "scope": "ontexus:context ontexus:ontology:read",
   "jti": "credential-id",
-  "policy_epoch": 17,
+  "authz_version": {
+    "user_epoch": 17,
+    "department_epoch": 4,
+    "group_epoch": {"group-a": 9, "group-b": 12},
+    "global_policy_epoch": 3
+  },
   "iat": 1788832800,
   "exp": 1788833100
 }
@@ -445,8 +507,8 @@ only minimal identity and lifecycle claims:
 - A session-bound rotating refresh token avoids interactive login every five
   minutes.
 - The first release does not grant offline access.
-- Logout, user/Agent deactivation, consent revocation, or policy-epoch change
-  invalidates refresh and delegated credentials.
+- Logout, user/Agent deactivation, consent revocation, or an authorization
+  version mismatch invalidates refresh and delegated credentials.
 - On `401`, a client refreshes and retries at most once.
 - A long-running request authorized at start may finish within a bounded runtime;
   retrieval of an asynchronous result requires fresh authorization.
@@ -616,7 +678,7 @@ value are revoked or archived, not hard-deleted.
 | Insufficient OAuth scope | `403 insufficient_scope` |
 | User/Agent lacks resource authority | `403 ACCESS_DENIED` |
 | Resource existence must be hidden | `404 RESOURCE_NOT_FOUND` |
-| Token policy epoch is stale | `401 AUTHORIZATION_CONTEXT_CHANGED` |
+| Token authorization version vector is stale | `401 AUTHORIZATION_CONTEXT_CHANGED` |
 | Authorized query has no matches | successful empty collection |
 | Policy enforcement is unavailable | `503 POLICY_ENFORCEMENT_UNAVAILABLE` |
 | Query cannot be safely constrained | `403 UNSUPPORTED_SECURE_QUERY` |
@@ -632,11 +694,24 @@ Do not cache final protected query results in the authorization layer.
 Cache keys include:
 
 ```text
-user_id + agent_id + policy_epoch + ontology_id + policy_revision
+user_id + agent_id + user_epoch + department_id + department_epoch
++ sorted(group_id + group_epoch) + global_policy_epoch
++ ontology_id + policy_revision
 ```
 
-An organization or policy transaction increments affected users' policy epochs,
-invalidates Redis cache entries, and revokes affected delegated credentials.
+For REST/UI or other direct-client reads without an Agent, `agent_id` uses the
+stable reserved sentinel `direct-client`. This keeps cache-key construction
+deterministic across transports while retaining Agent isolation when an Agent
+is present.
+
+The department and group components are included only when applicable, and the
+group entries are sorted so the key represents the complete authorization
+version vector rather than membership order.
+
+An organization or policy transaction invalidates Redis cache entries and
+revokes credentials or contexts whose authorization version vector is stale.
+Department and group policy changes update their authoritative subject version
+once; they do not fan out writes to all members.
 
 Audit events cover:
 
@@ -657,14 +732,28 @@ inputs.
 - Subject Context, PDP, and decision contract.
 - Secure Ontology Reader.
 - Enforce existing user grants in SQL reads and relation traversal.
-- Route REST and Tool Gateway through the common reader.
+- Route protected Ontology object-reader REST and Tool Gateway reads through
+  the common reader.
+- Record the verified current path `LangGraphRuntime -> ToolGateway -> execute_ontology_read -> ontology_tools`.
+- Begin implementation with a fresh repository-wide read-call inventory;
+  design-time snapshots are insufficient.
+- Add an architecture/static test that prevents protected Ontology object-reader
+  routes, tools, workers, and new business-journey paths from bypassing
+  `SecureOntologyReader`; separately secured derived-evidence endpoints are
+  excluded and follow their own gate.
+- Inventory derived evidence, export, cache, snapshot, and audit endpoints.
+  Other derived endpoints receive owner, security-domain, and service-identity
+  enforcement outside the reader as appropriate; the preparation endpoint uses
+  the dedicated gate identity described in section 9.1.
 - Decision audit and stable failures.
 
 This phase is a prerequisite for all other phases.
 
 ### Phase 2: Enterprise organization and policy control plane
 
-- Departments, groups, memberships, authorization subjects, and policy epoch.
+- Departments, groups, memberships, authorization subjects, and the
+  authorization version vector (`user_epoch`, `department_epoch`,
+  `group_epoch`, `global_policy_epoch`).
 - Subject-aware Allow/Deny policies.
 - Draft, validation, simulation, publication, rollback, and explanations.
 - Permission Management and Ontology Security frontend surfaces.
@@ -711,7 +800,8 @@ OAuth scope. Required cases include:
 - wrong audience and cross-client token use;
 - token replay, expiry, refresh rotation, logout, and revocation;
 - direct REST access attempting to bypass MCP;
-- arbitrary Cypher and unsafe NL2Cypher;
+- typed query-IR boundary violations, unsupported graph constructs, unsafe
+  procedure/subquery attempts, and unsafe NL2Cypher;
 - inference through ordering, pagination, counts, errors, or relation IDs;
 - sensitive audit-log access.
 
@@ -727,13 +817,18 @@ and compatible reason codes.
 - Connection pool reuse never retains another subject's RLS context.
 - Neo4j or vector-store failure either uses an authorized PostgreSQL fallback
   or returns a closed failure.
-- Vector over-fetch never returns an unauthorized result to fill a page.
+- Adaptive vector retrieval never returns an unauthorized result to fill a
+  page.
 
 ## 17. Proposed performance acceptance targets
 
 - Cached authorization decision P95 at or below 15 ms.
 - Uncached authorization decision P95 at or below 50 ms.
-- Authorization change effective within 2 seconds.
+- Department and group policy changes require O(1) authoritative version writes
+  and must not update all member records.
+- Authorization change effective within 2 seconds, including at the reference
+  scale of a 100,000-member group.
+- Measure invalidation propagation latency and stale-context rejection rate.
 - Ordinary protected list-query P95 overhead no greater than 30 percent against
   the same dataset and query without fine-grained filters.
 - Token refresh is transparent to the user when the user session remains valid.
