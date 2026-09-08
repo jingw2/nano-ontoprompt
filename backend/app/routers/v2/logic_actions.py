@@ -36,6 +36,17 @@ class LogicRuleCreate(BaseModel):
     enabled: bool = True
 
 
+class LogicRulePatch(BaseModel):
+    name: Optional[str] = None
+    logic_type: Optional[str] = None
+    description: Optional[str] = None
+    target_entity_type: Optional[str] = None
+    expression: Optional[dict] = None
+    source_type: Optional[str] = None
+    severity: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
 class LogicReviewRequest(BaseModel):
     enabled: Optional[bool] = None
     status: Optional[str] = None
@@ -89,6 +100,25 @@ def update_logic_rule(ontology_id: str, rule_id: str, body: LogicRuleCreate, db:
         rule.updated_at = datetime.now(timezone.utc)
         return {"id": rule.id, "status": "updated"}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.update", callback=_write)
+
+
+@router.patch("/{ontology_id}/logic/{rule_id}")
+def patch_logic_rule(ontology_id: str, rule_id: str, body: LogicRulePatch, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    rule = db.query(OntologyLogicRule).filter(
+        OntologyLogicRule.id == rule_id, OntologyLogicRule.ontology_id == ontology_id
+    ).first()
+    if not rule:
+        raise HTTPException(404, "Logic rule not found")
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, "At least one editable field is required")
+    def _write():
+        for key, value in changes.items():
+            setattr(rule, key, value)
+        rule.version += 1
+        rule.updated_at = datetime.now(timezone.utc)
+        return {"id": rule.id, "status": "updated", "version": rule.version}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2logic.patch", callback=_write)
 
 
 @router.post("/{ontology_id}/logic/{rule_id}/review")
@@ -257,6 +287,20 @@ class ActionTypeCreate(BaseModel):
     enabled: bool = True
 
 
+class ActionTypePatch(BaseModel):
+    name: Optional[str] = None
+    action_category: Optional[str] = None
+    description: Optional[str] = None
+    target_entity_type: Optional[str] = None
+    parameters: Optional[list] = None
+    submission_criteria: Optional[list] = None
+    effects: Optional[list] = None
+    side_effects: Optional[list] = None
+    permission_rules: Optional[list] = None
+    backed_by_function: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
 class ActionRunRequest(BaseModel):
     target_object_id: Optional[str] = None
     parameters: dict = {}
@@ -298,6 +342,25 @@ def create_action_type(ontology_id: str, body: ActionTypeCreate, db: Session = D
         db.add(act); db.flush()
         return {"id": act.id, "name": act.name, "status": act.status}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.create", callback=_write)
+
+
+@router.patch("/{ontology_id}/actions/{action_id}")
+def patch_action_type(ontology_id: str, action_id: str, body: ActionTypePatch, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    act = db.query(OntologyActionType).filter(
+        OntologyActionType.id == action_id, OntologyActionType.ontology_id == ontology_id
+    ).first()
+    if not act:
+        raise HTTPException(404, "Action type not found")
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, "At least one editable field is required")
+    def _write():
+        for key, value in changes.items():
+            setattr(act, key, value)
+        act.version += 1
+        act.updated_at = datetime.now(timezone.utc)
+        return {"id": act.id, "status": "updated", "version": act.version}
+    return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="v2action.patch", callback=_write)
 
 
 @router.post("/{ontology_id}/actions/{action_id}/review")

@@ -8,6 +8,7 @@ import { apiClient } from '@/api/client'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { Action } from '@/types/ontology'
+import V2DefinitionEditor from './V2DefinitionEditor'
 
 type ActionRow = Action & { action_category?: string }
 
@@ -43,6 +44,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
 
   return (
     <div className="space-y-4">
+      <V2DefinitionEditor ontologyId={ontologyId} kind="actions" />
       <div className="flex items-center gap-3">
         <div className="flex-1" />
         <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}

@@ -204,10 +204,10 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
             {t('lifecycle.mark_created', '标记为已创建')}
           </button>
         )}
-        {(status === 'draft' || status === 'created') && (
+        {(status === 'draft' || status === 'created' || (status === 'published' && isDirty)) && (
           <button type="button" disabled={busy} onClick={() => { setActionError(''); setFindings([]); setDialogOpen(true) }}
             className="px-3 py-1.5 text-xs rounded-lg bg-black text-white hover:bg-gray-800 disabled:opacity-50">
-            {t('lifecycle.publish', '发布')}
+            {status === 'published' ? t('lifecycle.publish_new_version', '发布新版本') : t('lifecycle.publish', '发布')}
           </button>
         )}
         {status === 'created' && (

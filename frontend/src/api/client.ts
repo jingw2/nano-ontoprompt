@@ -6,6 +6,7 @@ type ApiClient = {
   get: <T = unknown>(url: string, config?: AxiosRequestConfig) => Promise<T>
   post: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => Promise<T>
   put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => Promise<T>
+  patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => Promise<T>
   delete: <T = unknown>(url: string, config?: AxiosRequestConfig) => Promise<T>
 }
 
@@ -85,6 +86,8 @@ function createApiClient(baseURL: string, options?: { runtimeDelegation?: boolea
       client.post<T>(url, data, config) as unknown as Promise<T>,
     put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
       client.put<T>(url, data, config) as unknown as Promise<T>,
+    patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      client.patch<T>(url, data, config) as unknown as Promise<T>,
     delete: <T = unknown>(url: string, config?: AxiosRequestConfig) => client.delete<T>(url, config) as unknown as Promise<T>,
   }
 }

@@ -9,6 +9,7 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
+import V2DefinitionEditor from './V2DefinitionEditor'
 
 type LogicRuleRow = LogicRule & { name?: string; logic_type?: string }
 
@@ -70,6 +71,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
 
   return (
     <div className="space-y-4">
+      <V2DefinitionEditor ontologyId={ontologyId} kind="logic" />
       {/* Search + Actions */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">

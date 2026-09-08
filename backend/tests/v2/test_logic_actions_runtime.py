@@ -14,8 +14,12 @@ from fastapi import HTTPException
 from app.routers.v2.logic_actions import (
     ActionReviewRequest,
     ActionRunRequest,
+    ActionTypePatch,
     LogicReviewRequest,
     LogicTestRequest,
+    LogicRulePatch,
+    patch_action_type,
+    patch_logic_rule,
     review_action_type,
     review_logic_rule,
     run_action_type,
@@ -129,6 +133,49 @@ def test_action_review_updates_submission_criteria(db):
     assert result["status"] == "reviewed"
     assert action.submission_criteria[0]["name"] == "reason"
     assert action.side_effects[0]["type"] == "review_note"
+
+
+def test_v2_logic_and_action_patches_change_authoritative_definitions(db):
+    ontology_id = "ont-runtime-edit-v2"
+    db.add(OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test", created_by="runtime",
+        security_domain_id="00000000-0000-0000-0000-000000000001",
+    ))
+    rule = OntologyLogicRule(
+        id="logic-edit-v2", ontology_id=ontology_id, name="Amount positive",
+        logic_type="validation", expression={"operator": "gt", "field": "amount", "value": 0},
+        version=1,
+    )
+    action = OntologyActionType(
+        id="action-edit-v2", ontology_id=ontology_id, name="Set status",
+        action_category="state_transition", effects=[{"action": "set_property", "property": "status"}],
+        version=1,
+    )
+    db.add_all([rule, action])
+    db.commit()
+
+    editor = SimpleNamespace(id="runtime-editor")
+    patch_logic_rule(
+        ontology_id, rule.id,
+        LogicRulePatch(expression={"operator": "gte", "field": "amount", "value": 100}),
+        db, editor,
+    )
+    patch_action_type(
+        ontology_id, action.id,
+        ActionTypePatch(
+            effects=[{"action": "set_property", "property": "status", "value": "approved"}],
+            backed_by_function="governed-status-transition",
+        ),
+        db, editor,
+    )
+
+    db.refresh(rule)
+    db.refresh(action)
+    assert rule.expression == {"operator": "gte", "field": "amount", "value": 100}
+    assert rule.version == 2
+    assert action.effects == [{"action": "set_property", "property": "status", "value": "approved"}]
+    assert action.backed_by_function == "governed-status-transition"
+    assert action.version == 2
 
 
 def test_action_runtime_rejects_missing_required_parameter(db):
