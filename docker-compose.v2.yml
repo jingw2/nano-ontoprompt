@@ -231,7 +231,7 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_healthy
-    volumes: [./backend:/app, ./uploads:/uploads]
+    volumes: [./backend:/app, ./uploads:/uploads, ./test_data:/test_data:ro]
     command: /bin/sh -c "python scripts/verify_build_manifest.py --manifest /manifests/agent.json --alembic-dir /app/alembic && exec python scripts/guarded_entrypoint.py -- python -m celery -A app.tasks.celery_app worker --loglevel=info -Q agent.interactive --prefetch-multiplier=1"
 
   housekeeping_worker:

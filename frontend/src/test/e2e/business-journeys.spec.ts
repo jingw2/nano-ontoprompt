@@ -35,6 +35,20 @@ const RUN_MANIFEST_PATH = process.env.BUSINESS_JOURNEY_RUN_MANIFEST || ''
 
 const API_BASE = process.env.AGENT_E2E_API_BASE || 'http://localhost:8000'
 
+// A journey turn performs one no-retry model preflight, then two serial
+// completions (agent_initial and agent_final). The runtime caller bounds each
+// request at 180 seconds and the completion client permits two HTTP attempts,
+// so the browser must wait through 900 seconds before its answer assertion can
+// fail. Keep a 30-second buffer; `turnStartedAt` still records actual duration.
+const REAL_MODEL_REQUEST_TIMEOUT_MS = 180_000
+const REAL_MODEL_PREFLIGHT_REQUEST_COUNT = 1
+const REAL_MODEL_COMPLETION_COUNT = 2
+const REAL_MODEL_MAX_HTTP_ATTEMPTS = 2
+const REAL_MODEL_ANSWER_WAIT_BUFFER_MS = 30_000
+const REAL_MODEL_ANSWER_WAIT_TIMEOUT_MS = REAL_MODEL_REQUEST_TIMEOUT_MS * REAL_MODEL_PREFLIGHT_REQUEST_COUNT
+  + REAL_MODEL_REQUEST_TIMEOUT_MS * REAL_MODEL_COMPLETION_COUNT * REAL_MODEL_MAX_HTTP_ATTEMPTS
+  + REAL_MODEL_ANSWER_WAIT_BUFFER_MS
+
 test.use({ trace: 'on', screenshot: 'on' })
 
 test.beforeAll(async () => {
@@ -60,6 +74,7 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
   test(titles[journeyId], async ({ page }, testInfo) => {
     assertNoSkippedTests(testInfo)
     const journey = journeyData(journeyId)
+    const governedQueryDescriptorId = `query:${journey.ontology_id}`
     await loginAsAdmin(page)
     await page.goto('/agents/new')
     await page.getByTestId('agent-name').fill(`${journeyId} acceptance agent`)
@@ -126,6 +141,7 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     // fetches from the turn's own event trace on its own — see
     // `api_client.py::read_journey_evidence`) — intercept the real response
     // rather than adding a DOM element that would only exist for this spec.
+    const turnStartedAt = Date.now()
     const [turnResponse] = await Promise.all([
       page.waitForResponse(response =>
         /\/api\/v1\/agent-sessions\/[^/]+\/turns$/.test(new URL(response.url()).pathname)
@@ -136,14 +152,31 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     const turnId = turnBody.data?.turn_id
     const sessionId = turnBody.data?.session_id
     if (!turnId) throw new Error('createTurn response missing turn_id')
-    await expect(page.getByTestId('journey-answer')).toContainText(journey.semantic_minima.keywords[0], { timeout: 90_000 })
+    await expect(page.getByTestId('journey-answer')).toContainText(
+      journey.semantic_minima.keywords[0], { timeout: REAL_MODEL_ANSWER_WAIT_TIMEOUT_MS },
+    )
+    const answer = page.getByTestId('journey-answer')
+    const renderedAnswer = await answer.innerText()
+    const answerKeywordCount = journey.semantic_minima.keywords.filter(keyword =>
+      renderedAnswer.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()),
+    ).length
+    expect(answerKeywordCount).toBe(journey.semantic_minima.keywords.length)
+    const eventTypes = (await page.getByTestId('journey-process-order').textContent() ?? '')
+      .split(' → ').filter(Boolean)
+    expect(eventTypes).toEqual([
+      'turn_started', 'resolve_snapshot', 'model_call', 'tool_executed',
+      'model_call', 'final_response', 'turn_succeeded',
+    ])
+    const turnElapsedMs = Date.now() - turnStartedAt
+    expect(turnElapsedMs).toBeGreaterThan(0)
     // The real runtime citation (`resolve_snapshot`'s `citations`,
     // `app.services.runtime.context`) is grounded in the ontology RELEASE
     // the turn resolved — `{"type":"release","release_id":...,
     // "version_no":...}` — never the Task 1 input-document id; the release
     // id is the same one already asserted in `journey-agent-binding`.
     await expect(page.getByTestId('journey-citation')).toContainText(journey.ontology_release_id)
-    await expect(page.getByTestId('journey-tool-trace')).toContainText(journey.mcp_descriptor_ids[0])
+    expect(journey.mcp_descriptor_ids).toContain(governedQueryDescriptorId)
+    await expect(page.getByTestId('journey-tool-trace')).toContainText(governedQueryDescriptorId)
     // The real, persisted audit event id (a server-generated UUID —
     // unknowable in advance) rather than a fixed fixture string; matches
     // the real value the automatic execution's own governance audit
@@ -229,6 +262,10 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     // 5 of the real gate has no input and fails closed on every run.
     writeBrowserEvidence(RUN_MANIFEST_PATH, journey.runId, journeyId, {
       turnId,
+      answerRendered: true,
+      answerKeywordCount,
+      turnElapsedMs,
+      eventTypes,
       agentId,
       sessionId,
       ontologyReleaseId: journey.ontology_release_id,

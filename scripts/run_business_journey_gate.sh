@@ -37,6 +37,15 @@ if [ -n "${BUSINESS_JOURNEY_API_BASE+x}" ]; then
   exit 2
 fi
 
+# Local developer configuration is intentionally accepted for the real Gate,
+# but never sourced as shell code: only the one credential line is read, and
+# its value is never printed. A CI secret exported into the environment still
+# takes precedence.
+if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -f .env ]; then
+  DEEPSEEK_API_KEY="$(sed -n 's/^DEEPSEEK_API_KEY=//p' .env | tail -n 1)"
+  export DEEPSEEK_API_KEY
+fi
+
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   echo "DEEPSEEK_API_KEY_REQUIRED: set a real DeepSeek credential before running this gate" >&2
   exit 2
@@ -106,7 +115,7 @@ echo "[business-journey-gate] tearing down any stale state for $PROJECT"
 docker compose -p "$PROJECT" -f docker-compose.v2.yml down -v --remove-orphans >/dev/null 2>&1 || true
 
 echo "[business-journey-gate] starting disposable API/worker/frontend stack: $PROJECT"
-COMPOSE_PROFILES=agent docker compose -p "$PROJECT" -f docker-compose.v2.yml up --build -d --wait
+COMPOSE_PROFILES=agent,housekeeping docker compose -p "$PROJECT" -f docker-compose.v2.yml up --build -d --wait
 
 echo "[business-journey-gate] waiting for backend health"
 HEALTH=""

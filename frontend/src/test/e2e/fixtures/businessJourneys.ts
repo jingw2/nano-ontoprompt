@@ -103,6 +103,7 @@ export interface JourneyData {
   journeyId: JourneyId
   runId: string
   model_config_version_id: string
+  ontology_id: string
   ontology_release_id: string
   mcp_descriptor_ids: string[]
   dialogues: { governed_turn: { question: string } }
@@ -117,6 +118,10 @@ export interface BrowserPlanBranchEvidence {
 
 export interface BrowserJourneyEvidence {
   turnId: string
+  answerRendered: boolean
+  answerKeywordCount: number
+  turnElapsedMs: number
+  eventTypes: string[]
   agentId?: string
   sessionId?: string
   ontologyReleaseId?: string
@@ -299,6 +304,7 @@ export function journeyData(journeyId: JourneyId): JourneyData {
     journeyId,
     runId: run.run_id,
     model_config_version_id: preparation.model_config_version_id,
+    ontology_id: preparation.ontology_id,
     ontology_release_id: preparation.ontology_release_id,
     mcp_descriptor_ids: preparation.mcp_descriptor_ids,
     dialogues: { governed_turn: { question: governedTurn.question } },
@@ -330,6 +336,10 @@ export function writeBrowserEvidence(
     run_id: runId,
     journey_id: journeyId,
     turn_id: evidence.turnId,
+    answer_rendered: evidence.answerRendered,
+    answer_keyword_count: evidence.answerKeywordCount,
+    turn_elapsed_ms: evidence.turnElapsedMs,
+    event_types: evidence.eventTypes,
     plan_branches: evidence.planBranches.map(branch => ({
       branch: branch.branch,
       action_plan_id: branch.action_plan_id,
