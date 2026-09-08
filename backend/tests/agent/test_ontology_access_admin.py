@@ -140,6 +140,8 @@ def test_capability_vocabulary_is_closed_and_role_ceilings_are_exact():
 # ── PostgreSQL: backfill, CAS grant ledger, recovery, remediation ────────────
 
 def test_zz_backfill_assigns_creator_grants_and_recovery_findings():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
     from app.services.ontology_access import CAPABILITIES
 
     schema = "p1a_access_backfill_" + uuid.uuid4().hex

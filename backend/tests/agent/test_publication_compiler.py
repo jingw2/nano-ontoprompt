@@ -55,6 +55,8 @@ def _alembic(schema, *args, check=True):
 
 
 def _fresh_schema():
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
     schema = "p1c_compiler_" + uuid.uuid4().hex
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:

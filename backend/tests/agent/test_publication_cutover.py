@@ -110,6 +110,8 @@ def _seed_ontology_user(Session):
 
 def _fresh_cutover_schema():
     """A fresh 0003 schema with its own sessionmaker (latch state must not leak)."""
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL required")
     schema = "p1b_cutover_fresh_" + uuid.uuid4().hex
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
