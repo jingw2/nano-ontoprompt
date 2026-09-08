@@ -92,6 +92,8 @@ class _MockRuntime:
             origin=OFFICIAL_ORIGIN,
             behavior_hash="hash-1",
             frozen_at="2026-08-27T00:00:00Z",
+            temperature=0.0,
+            seed=0,
         )
         self.ledger_impl = ModelCallLedger()
         self.transport = _FakeTransport()

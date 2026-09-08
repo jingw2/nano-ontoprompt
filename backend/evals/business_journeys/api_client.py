@@ -13,18 +13,19 @@ even by accident.
 """
 from __future__ import annotations
 
-import base64
 import json
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import quote
 
 import httpx
 
 from app.services.model_callers.deepseek_vision import DeepSeekVisionCaller
 
 from .contracts import (
+    MODEL_CONTRACT_ENTRY,
     MODEL_ID,
     OFFICIAL_ORIGIN,
     BusinessJourneyModelError,
@@ -92,6 +93,7 @@ _EXTRACTED_ENTITY_TYPE = "concept"
 _EXTRACTED_RELATION_TYPE_FALLBACK = "关联"
 _EXTRACTED_LOGIC_TYPE = "validation"
 _EXTRACTED_ACTION_CATEGORY = "crud"
+_PIPELINE_RECORD_ENTITY_CLASS = "PipelineRecord"
 
 GRANT_CAPABILITIES = (
     "read_schema",
@@ -141,6 +143,8 @@ class PipelineEvidence:
     # between a pipeline run and its curated output, so `approve_curated`
     # never has to guess from list order.
     curated_dataset_id: str
+    execution_mode: str
+    connector_count: int
 
 
 @dataclass(frozen=True)
@@ -173,6 +177,7 @@ class OntologyReleaseEvidence:
     release_id: str
     release_status: str
     schema_hash: str
+    build_mode: str
     content: OntologyContentEvidence
     structured: Mapping[str, Any]
     model_response: ModelResponse
@@ -203,6 +208,8 @@ class ModelConfigEvidence:
     model_id: str
     origin: str
     behavior_hash: str
+    temperature: float = 0.0
+    seed: int = 0
 
     def as_immutable(self) -> ImmutableModelConfigVersion:
         return ImmutableModelConfigVersion(
@@ -212,6 +219,8 @@ class ModelConfigEvidence:
             origin=self.origin,
             behavior_hash=self.behavior_hash,
             frozen_at=None,
+            temperature=self.temperature,
+            seed=self.seed,
         )
 
 
@@ -327,6 +336,7 @@ class JourneyApiClient:
         self._run_id = run_id
         self._timeout_seconds = timeout_seconds
         self._token: str | None = None
+        self._approved_curated_dataset_ids: tuple[str, ...] = ()
         self._client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
 
     # -- lifecycle ---------------------------------------------------------
@@ -440,10 +450,7 @@ class JourneyApiClient:
             json={
                 "api_base": OFFICIAL_ORIGIN,
                 "options": {"temperature": 0, "seed": 0, "business_journey": business_journey_tag},
-                "model_contract": [{
-                    "provider_model_revision": MODEL_ID,
-                    "verified_at": None,
-                }],
+                "model_contract": [MODEL_CONTRACT_ENTRY],
             },
         )
         payload = _dig(version, "data") or version
@@ -457,6 +464,7 @@ class JourneyApiClient:
             raise JourneyAcceptanceError(f"MODEL_ORIGIN_MISMATCH: {api_base!r}")
         if observed_model != MODEL_ID:
             raise JourneyAcceptanceError(f"MODEL_ID_MISMATCH: configuration pins {observed_model!r}")
+        persisted_options = payload.get("options") or {}
         return ModelConfigEvidence(
             model_config_id=str(config_id),
             model_config_version_id=str(version_id),
@@ -464,6 +472,8 @@ class JourneyApiClient:
             model_id=MODEL_ID,
             origin=OFFICIAL_ORIGIN,
             behavior_hash=str(payload.get("behavior_hash") or ""),
+            temperature=float(persisted_options.get("temperature", 0.0)),
+            seed=int(persisted_options.get("seed", 0)),
         )
 
     # -- pipeline ----------------------------------------------------------
@@ -517,6 +527,17 @@ class JourneyApiClient:
         pipeline_id = _dig(created, "id") or _dig(created, "data", "id")
         if not pipeline_id:
             raise JourneyAcceptanceError("PIPELINE_MISSING: no pipeline id")
+        persisted_pipeline = self._get(
+            f"/api/v2/pipelines/{pipeline_id}", reason_code="PIPELINE_MISSING",
+        )
+        nodes = (persisted_pipeline.get("definition") or {}).get("nodes") or []
+        connector_count = sum(
+            1 for node in nodes if isinstance(node, Mapping) and node.get("type") == "connector"
+        )
+        if connector_count != 1 or len(nodes) != 1:
+            raise JourneyAcceptanceError(
+                f"PIPELINE_DEFINITION_INVALID: expected one connector node, got {connector_count}/{len(nodes)}"
+            )
 
         started = self._post(
             f"/api/v2/pipelines/{pipeline_id}/run-sync", reason_code="PIPELINE_RUN_MISSING",
@@ -554,11 +575,13 @@ class JourneyApiClient:
             input_fixture_ids=tuple(str(entry["fixture_id"]) for entry in manifest.inputs),
             input_hashes=dict(manifest.input_hashes),
             curated_dataset_id=str(curated_dataset_id),
+            execution_mode="run-sync",
+            connector_count=connector_count,
         )
 
     # -- curated -----------------------------------------------------------
     def approve_curated(self, run_id: str) -> CuratedEvidence:
-        """Approve only the curated dataset emitted by ``run_id``.
+        """Approve every curated dataset emitted by ``run_id``.
 
         The pipeline-run projection is the authoritative run-to-output
         binding; the global curated list is deliberately never consulted --
@@ -567,26 +590,42 @@ class JourneyApiClient:
         every curated dataset here would only duplicate that check.
         """
         run = self._get(f"/api/v2/pipelines/runs/{run_id}", reason_code="PIPELINE_RUN_MISSING")
-        dataset_id = str((run.get("stats") or {}).get("curated_dataset_id") or "")
+        stats = run.get("stats") or {}
+        dataset_id = str(stats.get("curated_dataset_id") or "")
         if not dataset_id:
             raise JourneyAcceptanceError(f"CURATED_DATASET_MISSING: no curated dataset for run {run_id}")
-        review = self._post(
-            f"/api/v2/curated/{dataset_id}/reviews", reason_code="CURATED_REVIEW_MISSING",
-            json={"pipeline_run_id": run_id},
-        )
-        review_id = _dig(review, "review_id") or _dig(review, "data", "review_id")
-        if not review_id:
-            raise JourneyAcceptanceError("CURATED_REVIEW_MISSING: no review id")
-        approved = self._post(
-            f"/api/v2/curated/reviews/{review_id}/approve", reason_code="CURATED_APPROVAL_FAILED",
-            json={"pipeline_run_id": run_id},
-        )
-        status = _dig(approved, "status") or _dig(approved, "data", "status")
-        if status != "approved":
-            raise JourneyAcceptanceError(f"CURATED_APPROVAL_FAILED: status={status!r}")
-        return CuratedEvidence(
-            curated_dataset_id=dataset_id, review_id=str(review_id), status=str(status),
-        )
+        listed_ids = stats.get("curated_dataset_ids") or ()
+        if isinstance(listed_ids, str):
+            listed_ids = (listed_ids,)
+        dataset_ids = tuple(dict.fromkeys(str(item) for item in listed_ids if item)) or (dataset_id,)
+        if dataset_id not in dataset_ids:
+            raise JourneyAcceptanceError("CURATED_DATASET_MISSING: primary output is not in run outputs")
+
+        primary: CuratedEvidence | None = None
+        for approved_dataset_id in dataset_ids:
+            review = self._post(
+                f"/api/v2/curated/{approved_dataset_id}/reviews", reason_code="CURATED_REVIEW_MISSING",
+                json={"pipeline_run_id": run_id},
+            )
+            review_id = _dig(review, "review_id") or _dig(review, "data", "review_id")
+            if not review_id:
+                raise JourneyAcceptanceError("CURATED_REVIEW_MISSING: no review id")
+            approved = self._post(
+                f"/api/v2/curated/reviews/{review_id}/approve", reason_code="CURATED_APPROVAL_FAILED",
+                json={"pipeline_run_id": run_id},
+            )
+            status = _dig(approved, "status") or _dig(approved, "data", "status")
+            if status != "approved":
+                raise JourneyAcceptanceError(f"CURATED_APPROVAL_FAILED: status={status!r}")
+            evidence = CuratedEvidence(
+                curated_dataset_id=approved_dataset_id, review_id=str(review_id), status=str(status),
+            )
+            if approved_dataset_id == dataset_id:
+                primary = evidence
+        if primary is None:
+            raise JourneyAcceptanceError("CURATED_APPROVAL_FAILED: primary output was not approved")
+        self._approved_curated_dataset_ids = dataset_ids
+        return primary
 
     def persist_preparation_evidence(
         self, *, manifest: Any, pipeline: PipelineEvidence, curated: CuratedEvidence,
@@ -638,6 +677,7 @@ class JourneyApiClient:
         manifest: Any,
         model_version_id: str,
         *,
+        curated_dataset_id: str,
         validate_structured: Callable[[Mapping[str, Any]], None],
     ) -> OntologyReleaseEvidence:
         """Create the ontology, make the ONE ontology completion, write the
@@ -669,6 +709,16 @@ class JourneyApiClient:
         ontology_id = _dig(created, "data", "id") or _dig(created, "id")
         if not ontology_id:
             raise JourneyAcceptanceError("ONTOLOGY_MISSING: no ontology id")
+        persisted_ontology = self._get(
+            f"/api/v1/ontologies/{ontology_id}", reason_code="ONTOLOGY_MISSING",
+        )
+        build_mode = str(
+            _dig(persisted_ontology, "data", "build_mode")
+            or persisted_ontology.get("build_mode")
+            or ""
+        )
+        if build_mode != "simple_llm":
+            raise JourneyAcceptanceError(f"ONTOLOGY_BUILD_MODE_INVALID: {build_mode!r}")
 
         # The model response becomes schema content before publication.  The
         # release compiler therefore snapshots real Entity/Relation rows,
@@ -707,6 +757,9 @@ class JourneyApiClient:
         # so the release the rest of the journey is grounded in has real
         # content traceable to this completion.
         content = self.persist_extraction(str(ontology_id), response.structured)
+        self.materialize_curated_records(
+            str(ontology_id), self._approved_curated_dataset_ids or (curated_dataset_id,),
+        )
 
         published = self._post(
             f"/api/v1/ontologies/{ontology_id}/publish", reason_code="ONTOLOGY_RELEASE_MISSING",
@@ -726,10 +779,34 @@ class JourneyApiClient:
             release_id=str(release_id),
             release_status=status,
             schema_hash=str(release.get("schema_hash") or ""),
+            build_mode=build_mode,
             content=content,
             structured=dict(response.structured),
             model_response=response,
         )
+
+    def materialize_curated_records(self, ontology_id: str, curated_dataset_ids: Sequence[str]) -> None:
+        """Map the approved pipeline output before its ontology is published."""
+        for curated_dataset_id in curated_dataset_ids:
+            created = self._post(
+                f"/api/v2/ontologies/{ontology_id}/mappings", reason_code="ONTOLOGY_MAPPING_WRITE_FAILED",
+                json={
+                    "curated_dataset_id": curated_dataset_id,
+                    "entity_class": _PIPELINE_RECORD_ENTITY_CLASS,
+                    "field_mapping": {},
+                },
+            )
+            mapping = _dig(created, "data") or created
+            mapping_id = mapping.get("mapping_id") or mapping.get("id")
+            if not mapping_id:
+                raise JourneyAcceptanceError("ONTOLOGY_MAPPING_WRITE_FAILED: no mapping id")
+            applied = self._post(
+                f"/api/v2/ontologies/{ontology_id}/mappings/{mapping_id}/apply-from-dataset",
+                reason_code="ONTOLOGY_INSTANCE_WRITE_FAILED", json={},
+            )
+            result = _dig(applied, "data") or applied
+            if int(result.get("instances_written") or 0) < 1:
+                raise JourneyAcceptanceError("ONTOLOGY_INSTANCE_WRITE_FAILED: no curated records mapped")
 
     # -- ontology content --------------------------------------------------
     def persist_extraction(
@@ -1088,9 +1165,14 @@ class JourneyApiClient:
             plan_branches=tuple(branches),
         )
 
-    def read_preparation_evidence(self, run_id: str, journey_id: str) -> Mapping[str, Any]:
+    def read_preparation_evidence(
+        self, run_id: str, journey_id: str, *, turn_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        path = f"/api/v1/business-journeys/preparations/{run_id}/{journey_id}"
+        if turn_id:
+            path += f"?turn_id={quote(str(turn_id), safe='')}"
         body = self._get(
-            f"/api/v1/business-journeys/preparations/{run_id}/{journey_id}",
+            path,
             reason_code="PREPARATION_EVIDENCE_NOT_PERSISTED",
         )
         record = _dig(body, "data") or body
@@ -1150,6 +1232,7 @@ def build_ontology_system_instruction(manifest: Any) -> str:
     validates every field before writing any ontology rows.
     """
     minima = manifest.semantic_minima
+    answer_keyword_contract = _answer_keyword_contract(minima.get("keywords") or ())
     numeric_predicates = _normalized_numeric_predicates(minima.get("numeric_predicates") or {})
 
     requirements = {
@@ -1167,7 +1250,7 @@ def build_ontology_system_instruction(manifest: Any) -> str:
         "JSON object, and no omitted required fields. Follow the JSON schema "
         "provided after this instruction exactly. Every required entity, "
         "relation, rule, action, and citation must be included verbatim. "
-        "The answer must mention every answer keyword. For every relation, "
+        f"{answer_keyword_contract} For every relation, "
         "include one relation_edges entry with the same relation name and "
         "source/target names that are present in entities. Include every "
         "numeric predicate field at its named path with a numeric value that "
@@ -1175,6 +1258,17 @@ def build_ontology_system_instruction(manifest: Any) -> str:
         "identifiers or replace required names with synonyms. Exact semantic "
         f"minimum for journey {manifest.journey_id}: "
         f"{json.dumps(requirements, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _answer_keyword_contract(keywords: Sequence[object]) -> str:
+    """State the literal answer-keyword requirement for both model contracts."""
+    answer_keywords = [str(keyword) for keyword in keywords]
+    return (
+        "The answer must contain every listed answer keyword as a verbatim, exact "
+        "literal substring (case-insensitive matching). Do not paraphrase, "
+        "translate, split, or replace any keyword. Required answer keyword set "
+        f"(exact literals): {json.dumps(answer_keywords, ensure_ascii=False)}."
     )
 
 
@@ -1209,6 +1303,11 @@ def build_ontology_response_schema(manifest: Any) -> Mapping[str, object]:
     schema = dict(ONTOLOGY_RESPONSE_SCHEMA)
     properties = dict(ONTOLOGY_RESPONSE_SCHEMA["properties"])
     required = list(ONTOLOGY_RESPONSE_SCHEMA["required"])
+    answer = dict(properties["answer"])
+    answer["description"] = _answer_keyword_contract(
+        manifest.semantic_minima.get("keywords") or ()
+    )
+    properties["answer"] = answer
     for predicate in _normalized_numeric_predicates(
         manifest.semantic_minima.get("numeric_predicates") or {}
     ).values():
@@ -1254,7 +1353,7 @@ def build_input_parts(manifest: Any) -> tuple[InputPart, ...]:
         else:
             parts.append(InputPart(
                 kind="text", media_type=str(entry["media_type"]),
-                content=_as_text(data, str(entry["media_type"])), sha256=digest,
+                content=_as_text(data, str(entry["media_type"]), path), sha256=digest,
             ))
     return tuple(parts)
 
@@ -1277,12 +1376,24 @@ def _unique_names(value: Any) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _as_text(data: bytes, media_type: str) -> str:
-    """Text-decodable inputs go as text; anything binary goes as base64 so a
-    decode error can never silently truncate an input."""
+def _as_text(data: bytes, media_type: str, path: Path) -> str:
+    """Text-decodable inputs go as text. Binary office documents (`.xlsx`,
+    `.docx`, ...) are converted to real readable text via the same
+    `document_service.convert_document` the production extraction pipeline
+    uses -- sending their raw bytes as base64 put an opaque blob in the
+    model's text context with no readable content at all (confirmed
+    directly: the model reported fixture data as missing when the real
+    fixture file had it, because the "text" it received was unparseable
+    base64 noise). A conversion failure fails closed rather than silently
+    degrading back to that same unusable blob."""
     if media_type.startswith("text/"):
         return data.decode("utf-8", errors="replace")
-    return base64.b64encode(data).decode("ascii")
+    from app.services.document_service import convert_document
+
+    result = convert_document(str(path), mime_type=media_type)
+    if not result.ok:
+        raise JourneyAcceptanceError(f"FIXTURE_INPUT_UNREADABLE: {path.name}: {result.error}")
+    return result.content
 
 
 def _json_body(response: httpx.Response, reason_code: str) -> Any:

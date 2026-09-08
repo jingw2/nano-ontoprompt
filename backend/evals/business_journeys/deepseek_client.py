@@ -91,7 +91,13 @@ class DeepSeekVisionClient:
 
     _sleep = staticmethod(time.sleep)
 
-    def __init__(self, api_key: str, *, timeout_seconds: float = 45.0, transport: httpx.BaseTransport | None = None) -> None:
+    # 45s (the old default) was confirmed too short against the real
+    # deployment: this is a reasoning-tier model that legitimately takes
+    # well over a minute per completion, and 45s made real journey runs
+    # fail on `DEEPSEEK_RETRY_EXHAUSTED_TIMEOUT` even though the model was
+    # still going to answer. 180s was confirmed sufficient against a real
+    # call.
+    def __init__(self, api_key: str, *, timeout_seconds: float = 180.0, transport: httpx.BaseTransport | None = None) -> None:
         if not api_key:
             raise ModelConfigurationError("DEEPSEEK_API_KEY_REQUIRED: empty api key")
         self._api_key = api_key
@@ -165,6 +171,8 @@ class DeepSeekVisionClient:
         response_schema: Mapping[str, object],
         correlation_id: str,
         system_instruction: str | None = None,
+        temperature: float = 0.0,
+        seed: int = 0,
     ) -> ModelResponse:
         """``system_instruction``, when supplied, is sent as a leading
         ``system`` role message on the SAME completion -- it never adds a
@@ -173,14 +181,40 @@ class DeepSeekVisionClient:
         unaffected."""
         url = f"{OFFICIAL_ORIGIN}{_CHAT_COMPLETIONS_PATH}"
         validate_official_url(url)
-        messages: list[Mapping[str, object]] = []
-        if system_instruction:
-            messages.append({"role": "system", "content": system_instruction})
+        # This deployment rejects `response_format: {"type": "json_schema"}`
+        # ("This response_format type is unavailable now") -- confirmed
+        # directly against the real endpoint. `json_object` mode works, but
+        # DeepSeek requires the literal word "json" somewhere in the
+        # messages or it 400s ("Prompt must contain the word 'json'..."),
+        # and drops provider-side schema enforcement entirely -- so the
+        # schema is restated here as an explicit instruction instead. Real
+        # conformance is still checked downstream by
+        # `semantic_validators.validate_semantic_minimum`.
+        schema_instruction = (
+            "Respond with a single valid JSON object only, matching this JSON "
+            f"schema exactly, with no other text: {json.dumps(dict(response_schema))}"
+        )
+        messages: list[Mapping[str, object]] = [{
+            "role": "system",
+            "content": f"{system_instruction}\n\n{schema_instruction}" if system_instruction else schema_instruction,
+        }]
         messages.append({"role": "user", "content": [_encode_part(part) for part in parts]})
         body = {
             "model": MODEL_ID,
             "messages": messages,
-            "response_format": {"type": "json_schema", "json_schema": {"schema": dict(response_schema)}},
+            "response_format": {"type": "json_object"},
+            "temperature": temperature,
+            "seed": seed,
+            # This deployment's reasoning tokens share the completion's
+            # `max_tokens` budget with the final JSON content (confirmed via
+            # `usage.completion_tokens_details.reasoning_tokens`). Confirmed
+            # directly against the real API: the credit journey's larger
+            # fixture set exhausted a 16000 ceiling entirely on reasoning
+            # (`finish_reason: "length"`, `reasoning_tokens: 16000`, empty
+            # `content`) before writing any answer. 32000 gives 2x headroom
+            # over that observed failure point; the API accepts values well
+            # above this (confirmed up to 65536).
+            "max_tokens": 32000,
         }
 
         retry_count = 0

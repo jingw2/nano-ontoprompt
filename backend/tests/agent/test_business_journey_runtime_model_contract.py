@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -52,6 +53,7 @@ JOURNEY_ID = "supply_chain"
 # round), so any test that supplies `automatic_action` must use this exact
 # string or the schema/server-side validation rejects it.
 JOURNEY_LOW_RISK_ACTION = "risk_label"
+RUNTIME_ROOT = Path(__file__).resolve().parents[3] / "test_data" / "runtime"
 
 
 @pytest.fixture(autouse=True)
@@ -279,7 +281,13 @@ def test_business_journey_completions_carry_the_protocol_instruction_on_the_wire
     # ...and it did not displace the user's own question.
     user_parts = [m for m in initial_body["messages"] if m["role"] == "user"][0]["content"]
     assert any(part["text"] == context.user_message for part in user_parts)
-    assert initial_body["response_format"]["json_schema"]["schema"]["properties"]["tool_call"]["description"]
+    # This deployment rejects `response_format: {"type": "json_schema"}`
+    # (confirmed against the real API), so the schema travels as text in
+    # the system message instead of a structured `json_schema` field --
+    # extract it back out to assert on it the same way.
+    assert initial_body["response_format"] == {"type": "json_object"}
+    initial_schema = json.loads(initial_text.split("with no other text: ", 1)[1])
+    assert initial_schema["properties"]["tool_call"]["description"]
 
     # -- the final completion: a system message that requires the automatic
     #    action, names THIS journey's action, and bridges instance_id
@@ -293,7 +301,8 @@ def test_business_journey_completions_carry_the_protocol_instruction_on_the_wire
     assert "`automatic_action: null` only when the tool result contains no rows" in final_text
 
     # -- and the same two facts are ALSO on the response schema itself
-    final_schema = final_body["response_format"]["json_schema"]["schema"]
+    assert final_body["response_format"] == {"type": "json_object"}
+    final_schema = json.loads(final_text.split("with no other text: ", 1)[1])
     # nullable, but the key can no longer be silently omitted
     assert "automatic_action" in final_schema["required"]
     automatic_action = final_schema["properties"]["automatic_action"]
@@ -306,6 +315,44 @@ def test_business_journey_completions_carry_the_protocol_instruction_on_the_wire
     # -- the instruction rides the two completions that already exist: no
     #    third call, no extra HTTP attempt (budget contract unchanged).
     assert deepseek_transport.calls == ["/chat/completions", "/chat/completions"]
+
+
+def test_business_journey_final_completion_requires_every_manifest_keyword_on_the_wire(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """The real final completion must receive the manifest's literal-answer contract.
+
+    Removing keyword propagation from the runtime prompt must make this fail:
+    the model would otherwise be free to paraphrase, translate, or omit a
+    semantic-minimum keyword even though the post-run validator rejects it.
+    """
+    required_keywords = json.loads(
+        (RUNTIME_ROOT / JOURNEY_ID / "semantic_minima.json").read_text(encoding="utf-8")
+    )["keywords"]
+    deepseek_transport.queue.append({
+        "tool_call": {"descriptor_id": "query:ontology-001", "query": "below safety stock"},
+        "answer": None,
+    })
+    deepseek_transport.queue.append({
+        "answer": "Supplier inventory safety stock purchase order.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+    })
+    context = _context(
+        model_config_version_id=pinned_model_config_version_id,
+        extra={
+            "user_id": str(uuid.uuid4()),
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+            "ontology_tool_selection": [{"ontology_id": "ontology-001", "selected_tools": []}],
+        },
+    )
+
+    _run(LangGraphRuntime(db=db, gateway=_FakeGateway({"items": []}), max_tool_rounds=1), context)
+
+    final_body = deepseek_transport.bodies[1]
+    final_system = next(message["content"] for message in final_body["messages"] if message["role"] == "system")
+    assert "verbatim, exact literal substring (case-insensitive matching)" in final_system
+    assert "Do not paraphrase, translate, split, or replace any keyword" in final_system
+    assert json.dumps(required_keywords, ensure_ascii=False) in final_system
 
 
 def test_journey_system_instruction_is_journey_specific_and_rejects_unknown_call_kinds():
@@ -380,6 +427,87 @@ def test_business_journey_turn_makes_exactly_one_governed_tool_call_when_the_mod
 
     final_event = next(e for e in events if e.event_type == "final_response")
     assert final_event.payload["message"] == "Supplier MAT001 is below safety stock."
+
+
+def test_business_journey_governed_read_grounds_all_mapped_rows_not_the_model_query(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """The journey's single read must include every small mapped source even
+    when the model's English keywords do not occur in its governed rows.
+
+    This catches a regression that forwards the model-produced query or a
+    short generic page into the one-read journey protocol.  Generic runtime
+    tool dispatch deliberately retains model-directed query behavior; only
+    this separate business-journey protocol grounds its final answer from the
+    bounded complete fixture set.
+    """
+    deepseek_transport.queue.append({
+        "tool_call": {"descriptor_id": "query:ontology-001", "query": "below safety stock"},
+        "answer": None,
+    })
+    deepseek_transport.queue.append({
+        "answer": "Supplier MAT001 is below safety stock.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+    })
+    gateway = _FakeGateway({"items": [{"id": "mapped-chinese-row"}]})
+    context = _context(
+        model_config_version_id=pinned_model_config_version_id,
+        extra={
+            "user_id": str(uuid.uuid4()),
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+            "ontology_tool_selection": [{"ontology_id": "ontology-001", "selected_tools": []}],
+        },
+    )
+
+    events = _run(LangGraphRuntime(db=db, gateway=gateway, max_tool_rounds=1), context)
+
+    assert len(gateway.requests) == 1
+    assert gateway.requests[0].parameters["query"] == ""
+    assert gateway.requests[0].parameters["limit"] == 200
+    assert len([event for event in events if event.event_type == "tool_executed"]) == 1
+
+
+def test_business_journey_final_completion_receives_rows_from_every_mapped_source(
+    db, deepseek_transport, deepseek_api_key, pinned_model_config_version_id,
+):
+    """The one bounded governed read is the final completion's complete
+    evidence window, not a representative row selected by the runtime."""
+    deepseek_transport.queue.append({
+        "tool_call": {"descriptor_id": "query:ontology-001", "query": "below safety stock"},
+        "answer": None,
+    })
+    deepseek_transport.queue.append({
+        "answer": "Supplier MAT001 is below safety stock.",
+        "entities": ["Supplier"], "relations": [], "rules": [], "actions": [], "citations": [],
+    })
+    gateway = _FakeGateway({
+        "items": [
+            {"instance_id": "source-80", "row_data": {"source_marker": "mapped-source-80"}},
+            {"instance_id": "source-100", "row_data": {"source_marker": "mapped-source-100"}},
+        ],
+    })
+    context = _context(
+        model_config_version_id=pinned_model_config_version_id,
+        extra={
+            "user_id": str(uuid.uuid4()),
+            "business_journey": {"run_id": RUN_ID, "journey_id": JOURNEY_ID},
+            "ontology_tool_selection": [{"ontology_id": "ontology-001", "selected_tools": []}],
+        },
+    )
+
+    _run(LangGraphRuntime(db=db, gateway=gateway, max_tool_rounds=1), context)
+
+    assert len(gateway.requests) == 1
+    assert gateway.requests[0].parameters == {
+        "ontology_id": "ontology-001", "release_id": context.release_id,
+        "query": "", "limit": 200, "sort_by": None, "sort_order": None,
+    }
+    final_body = deepseek_transport.bodies[1]
+    final_parts = [message for message in final_body["messages"] if message["role"] == "user"][0]["content"]
+    tool_result = json.loads(final_parts[1]["text"])
+    assert [item["row_data"]["source_marker"] for item in tool_result["items"]] == [
+        "mapped-source-80", "mapped-source-100",
+    ]
 
 
 def test_business_journey_turn_rejects_a_pinned_config_that_is_not_deepseek(

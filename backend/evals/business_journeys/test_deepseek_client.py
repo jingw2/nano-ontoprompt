@@ -42,6 +42,7 @@ class FakeDeepSeekTransport(httpx.BaseTransport):
         self._get_responses: dict[str, httpx.Response] = {}
         self._post_queue: list[object] = []
         self.post_attempts = 0
+        self.last_request: httpx.Request | None = None
 
     def get(self, path: str, *, json: object) -> None:
         self._get_responses[path] = httpx.Response(200, json=json)
@@ -67,6 +68,7 @@ class FakeDeepSeekTransport(httpx.BaseTransport):
             return response if response is not None else httpx.Response(200, json={"data": [{"id": MODEL_ID}]})
         if request.method == "POST":
             self.post_attempts += 1
+            self.last_request = request
             if not self._post_queue:
                 return _chat_response()
             item = self._post_queue.pop(0)
@@ -112,6 +114,21 @@ def test_timeout_and_429_retry_exactly_once(mock_http):
         DeepSeekVisionClient("runtime/runtime", transport=mock_http).complete(
             [], response_schema={"type": "object"}, correlation_id="journey:test-2"
         )
+
+
+def test_complete_forwards_pinned_temperature_and_seed_and_uses_json_object_mode(mock_http):
+    DeepSeekVisionClient("runtime/runtime", transport=mock_http).complete(
+        [InputPart("text", "text/plain", "question", sha256_text("question"))],
+        response_schema={"type": "object"},
+        correlation_id="journey:test-determinism",
+        temperature=0.0, seed=0,
+    )
+    sent = json.loads(mock_http.last_request.content)
+    assert sent["temperature"] == 0.0
+    assert sent["seed"] == 0
+    assert sent["response_format"] == {"type": "json_object"}
+    assert "json" in sent["messages"][0]["content"].lower()
+    assert sent["max_tokens"] > 4096  # generous headroom over reasoning tokens
 
 
 def test_non_retryable_provider_error_makes_only_one_http_attempt(mock_http):

@@ -35,7 +35,7 @@ class DeepSeekVisionCaller:
         model_config: ImmutableModelConfigVersion,
         ledger: ModelCallLedger,
         *,
-        timeout_seconds: float = 45.0,
+        timeout_seconds: float = 180.0,
     ) -> None:
         self._api_key = api_key
         self._model_config = model_config
@@ -80,6 +80,7 @@ class DeepSeekVisionCaller:
             response = self._client.complete(
                 parts, response_schema=response_schema, correlation_id=context.correlation_id,
                 system_instruction=system_instruction,
+                temperature=self._model_config.temperature, seed=self._model_config.seed,
             )
         except DeepSeekRetryExhausted as exc:
             for attempt_no in range(1, getattr(exc, "http_attempts", 2) + 1):

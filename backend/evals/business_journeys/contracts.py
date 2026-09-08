@@ -22,6 +22,25 @@ from pydantic import ConfigDict as PydanticConfigDict
 MODEL_ID: Final[str] = "deepseek-v4-flash-vision-exp"
 OFFICIAL_ORIGIN: Final[str] = "https://api.deepseek.com"
 
+# The models API's `_validate_contract` (app/services/model_version.py)
+# requires a complete, closed contract entry -- it never accepts a guessed
+# tokenizer/window. This harness pins one exact model for every run (see
+# the module docstring), so these fields describe THIS harness's own fixed
+# baseline for that pinned model, not an independently-verified provider
+# spec pulled from DeepSeek. `verified_maximum_output_tokens` matches the
+# real `max_tokens` this harness actually requests (`deepseek_client.py`)
+# rather than understating it -- a mismatch here would make this contract's
+# own numbers internally inconsistent with what the harness does.
+MODEL_CONTRACT_ENTRY: Final[dict] = {
+    "provider_model_revision": MODEL_ID,
+    "tokenizer_family": "deepseek-v4",
+    "tokenizer_revision": "harness-pinned-baseline",
+    "verified_context_window_tokens": 65536,
+    "verified_maximum_output_tokens": 32000,
+    "provider_contract_revision": "harness-pinned-v1",
+    "provider_contract_hash": hashlib.sha256(MODEL_ID.encode()).hexdigest(),
+}
+
 CallKind = Literal["ontology", "agent_initial", "agent_final"]
 
 
@@ -144,6 +163,12 @@ class ImmutableModelConfigVersion:
     origin: str
     behavior_hash: str
     frozen_at: object
+    # Persisted on `model_config_versions.options` for reproducibility, but
+    # previously never read back out of `ModelConfigEvidence` or forwarded
+    # to the real completion request -- every real call silently ran at
+    # DeepSeek's default sampling instead of this pinned baseline.
+    temperature: float = 0.0
+    seed: int = 0
 
 
 # ---------------------------------------------------------------------------
