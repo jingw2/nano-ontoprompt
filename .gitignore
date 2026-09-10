@@ -64,7 +64,13 @@ RELEASE_NOTES_*.md
 # Test screenshots
 frontend/screenshots_*/
 frontend/full_creation_screenshots/
+frontend/detail_pages_screenshots/
+frontend/debug_wizard.png
 test_data/screenshots/
+
+# Scratch / generated demo assets (not for GitHub)
+artifacts/
+deck_assets/
 
 # Reviewer-owned e2e-review harness (never commit)
 frontend/e2e-review/
