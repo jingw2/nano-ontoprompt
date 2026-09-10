@@ -99,7 +99,7 @@ def full_schema():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    result = _alembic(schema, "upgrade", "0004_roles_model_versions")
+    result = _alembic(schema, "upgrade", "head")
     assert result.returncode == 0, result.stderr
     # M-3: alembic_version must live in the scoped schema (isolation proof)
     assert engine.connect().execute(text(
@@ -211,7 +211,9 @@ def test_llm_caller_kwargs_pin_immutable_version_and_never_fallback(pg):
     row = pg.query(ModelConfig).filter(ModelConfig.id == model_id).one()
     row_kwargs = llm_call_kwargs(row, db=pg)
     assert row_kwargs["model"] == "gpt-4.1"
-    assert row_kwargs["behavior_hash"] == kwargs["behavior_hash"]
+    # llm_call_kwargs deliberately narrows to the four keys _call_llm accepts
+    # (see model_config_selector.py) — behavior_hash isn't part of that contract.
+    assert "behavior_hash" not in row_kwargs
     blocked_id = _seed_llm_config(pg, models=[])
     _migrate_rows(pg)
     with pytest.raises(ModelVersionUnavailableError):

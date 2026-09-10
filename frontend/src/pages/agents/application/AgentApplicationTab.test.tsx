@@ -341,8 +341,9 @@ describe('P4B-STREAMUI', () => {
     // the SSE delivered nothing; the polling fallback surfaces the answer
     expect(await screen.findByText('轮询得到的答案', {}, { timeout: 5000 })).toBeTruthy()
     // the turn reaches terminal via the poll: the composer becomes usable
-    // again without a manual reload
-    await waitFor(() => expect(screen.queryByTestId('stream-indicator')).toBeNull(), { timeout: 6000 })
+    // again without a manual reload, and the thinking panel settles from its
+    // active "thinking…" state into its completed summary
+    await waitFor(() => expect(screen.getByTestId('thinking-toggle').textContent).not.toMatch(/思考中/), { timeout: 6000 })
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), '再问一句')
     expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(false)
   })

@@ -8,9 +8,8 @@ import { apiClient } from '@/api/client'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { Action } from '@/types/ontology'
-import V2DefinitionEditor from './V2DefinitionEditor'
 
-type ActionRow = Action & { action_category?: string }
+type ActionRow = Action
 
 export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
   const { t } = useTranslation()
@@ -44,7 +43,6 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
 
   return (
     <div className="space-y-4">
-      <V2DefinitionEditor ontologyId={ontologyId} kind="actions" />
       <div className="flex items-center gap-3">
         <div className="flex-1" />
         <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
@@ -64,7 +62,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
               <thead className="bg-gray-50 border-b">
                 <tr>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类别</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">规则</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
@@ -75,7 +73,8 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
               <tbody>
               {(actions as ActionRow[]).map(a => {
                 const le = (typeof a.linked_entities === 'string' ? JSON.parse(a.linked_entities || '[]') : a.linked_entities) || []
-                const category = a.action_category || a.execution_rule || 'crud'
+                const rules = a.rules || []
+                const rulesSummary = rules.length ? `${rules[0].operation} ${rules[0].target}${rules.length > 1 ? ` +${rules.length - 1}` : ''}` : '—'
                 const status = a.status || 'draft'
                 const enabled = a.enabled !== false
                 const description = a.description || ''
@@ -83,7 +82,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
                   <tr key={a.id} className="group border-b hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium">{a.name_cn}</td>
                     <td className="px-4 py-3">
-                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{category}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600 font-mono" title={rulesSummary}>{rulesSummary}</span>
                     </td>
                     <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={description}>{description || '—'}</td>
                       <td className="px-4 py-3">
@@ -127,8 +126,8 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
             <form onSubmit={handleSubmit(data => createMut.mutate(data))} className="space-y-3">
               <input {...register('name_cn', { required: true })} placeholder={t('entities.ph_name_cn')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input {...register('name_en')} placeholder={t('entities.ph_name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <textarea {...register('execution_rule')} placeholder={t('actions.ph_exec')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
               <textarea {...register('description')} placeholder={t('entities.ph_desc')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
+              <p className="text-xs text-gray-400">参数 / 规则 / 提交条件 / 副作用可在创建后进入详情页编辑</p>
               <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" placeholder={t('entities.ph_confidence')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <div className="flex justify-end gap-3 pt-2">
                 <button type="button" onClick={() => { setShowCreate(false); reset() }} className="px-4 py-2 border rounded-lg text-sm">取消</button>

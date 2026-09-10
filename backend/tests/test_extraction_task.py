@@ -61,10 +61,11 @@ def _valid_result():
              "confidence": 0.9},
         ],
         "logic_rules": [
-            {"name_cn": "规则一", "formula": "score > 0", "linked_entities": ["供应商A"]},
+            {"name_cn": "规则一", "function_type": "derived_property", "definition": "score > 0",
+             "linked_entities": ["供应商A"]},
         ],
         "actions": [
-            {"name_cn": "动作一", "function_code": "def run(x):\n    return x",
+            {"name_cn": "动作一", "rules": [{"operation": "Modify", "target": "供应商A.score", "value": "0"}],
              "linked_entities": ["供应商A"], "linked_logic_names": ["规则一"]},
         ],
     }

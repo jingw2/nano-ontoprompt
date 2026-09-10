@@ -24,13 +24,15 @@ interface Props {
   onUnbind: (ontologyId: string) => void
   onToggleCategory: (ontologyId: string, category: ToolCategory, on: boolean) => void
   onToggleTool: (ontologyId: string, descriptorId: string, on: boolean) => void
+  onSetToolCatalogLimit: (ontologyId: string, limit: number | null) => void
   /** When the caller has its own ontology-fetch error, suppress the "no ontologies" empty
    * state so the two messages don't render at once (caller still renders its own error text). */
   error?: string
 }
 
 export default function OntologyToolSelector({
-  ontologies, bindings, toolsByOntology, canEdit, onBind, onUnbind, onToggleCategory, onToggleTool, error,
+  ontologies, bindings, toolsByOntology, canEdit, onBind, onUnbind, onToggleCategory, onToggleTool,
+  onSetToolCatalogLimit, error,
 }: Props) {
   const { t } = useTranslation()
   // one Agent binds at most one Ontology: once bound, the picker is disabled —
@@ -94,6 +96,22 @@ export default function OntologyToolSelector({
                 ))}
               </div>
               <p className="text-xs text-gray-400 mb-2">{t('agent.tools.category_tools_note', '勾选的类别默认全部启用')}</p>
+              <label className="flex items-center gap-2 text-xs mb-3">
+                {t('agent.tools.catalog_limit', '工具目录上限（可选）')}
+                <input type="number" min={1} max={500}
+                  data-testid={`tool-catalog-limit-${binding.ontology_id}`}
+                  disabled={!canEdit}
+                  value={binding.tool_catalog_limit ?? ''}
+                  onChange={e => {
+                    const raw = e.target.value
+                    onSetToolCatalogLimit(binding.ontology_id, raw === '' ? null : Number(raw))
+                  }}
+                  placeholder={t('agent.tools.catalog_limit_placeholder', '不限制')}
+                  className="border rounded px-2 py-1 w-24" />
+                <span className="text-gray-400">
+                  {t('agent.tools.catalog_limit_note', '本体逻辑规则/动作过多时，按此数量截断，超出显式勾选的工具不受影响')}
+                </span>
+              </label>
               {TOOL_CATEGORIES.map(cat => {
                 const catTools = tools.filter(d => categoryOf(d) === cat)
                 if (catTools.length === 0) return null

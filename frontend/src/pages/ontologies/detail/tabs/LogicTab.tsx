@@ -9,9 +9,10 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Pencil, Trash2, Plus, Search, ToggleLeft, ToggleRight, CheckCircle, Loader2 } from 'lucide-react'
 import type { LogicRule } from '@/types/ontology'
-import V2DefinitionEditor from './V2DefinitionEditor'
 
-type LogicRuleRow = LogicRule & { name?: string; logic_type?: string }
+type LogicRuleRow = LogicRule & { name?: string }
+
+const FUNCTION_TYPES = ['derived_property', 'aggregation', 'complex_edit', 'external_query'] as const
 
 function parseLinkedEntities(value: unknown): string[] {
   if (Array.isArray(value)) return value
@@ -65,19 +66,18 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
     if (!q) return rules as LogicRule[]
     return (rules as LogicRule[]).filter(r =>
       r.name_cn?.toLowerCase().includes(q) || r.name_en?.toLowerCase().includes(q) ||
-      r.description?.toLowerCase().includes(q) || r.formula?.toLowerCase().includes(q)
+      r.description?.toLowerCase().includes(q) || r.definition?.toLowerCase().includes(q)
     )
   }, [rules, searchQ])
 
   return (
     <div className="space-y-4">
-      <V2DefinitionEditor ontologyId={ontologyId} kind="logic" />
       {/* Search + Actions */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
-            placeholder="搜索规则名称 / 公式…"
+            placeholder="搜索规则名称 / 定义…"
             className="w-full border rounded-lg pl-8 pr-3 py-2 text-sm" />
         </div>
         <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
@@ -99,9 +99,9 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
               <thead className="bg-gray-50 border-b">
                 <tr>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">公式</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类型</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">定义</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
                   <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">置信度</th>
@@ -114,16 +114,18 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
                   const linkedEntities = parseLinkedEntities(r.linked_entities)
                   const status = r.status || 'draft'
                   const enabled = r.enabled !== false
-                  const formula = r.formula || ''
+                  const definition = r.definition || ''
                   const description = r.description || ''
                   return (
                     <tr key={r.id} className="group border-b hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium">{r.name_cn || r.name || '—'}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate" title={formula}>{formula || '—'}</td>
-                      <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={description}>{description || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">{r.logic_type || 'rule'}</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">
+                          {r.function_type ? t(`logic.type_${r.function_type}`, r.function_type) : '—'}
+                        </span>
                       </td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-xs truncate" title={definition}>{definition || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={description}>{description || '—'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1 flex-wrap">
                           {linkedEntities.map((e: string) => (
@@ -168,7 +170,10 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
             <form onSubmit={handleSubmit(data => createMut.mutate(data))} className="space-y-3">
               <input {...register('name_cn', { required: true })} placeholder={t('entities.ph_name_cn')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input {...register('name_en')} placeholder={t('entities.ph_name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <input {...register('formula')} placeholder={t('logic.ph_formula')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+              <select {...register('function_type')} defaultValue="derived_property" className="w-full border rounded-lg px-3 py-2 text-sm">
+                {FUNCTION_TYPES.map(ft => <option key={ft} value={ft}>{t(`logic.type_${ft}`)}</option>)}
+              </select>
+              <textarea {...register('definition')} placeholder={t('logic.ph_definition')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-none" />
               <textarea {...register('description')} placeholder={t('entities.ph_desc')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
               <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" placeholder={t('entities.ph_confidence')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <div className="flex justify-end gap-3 pt-2">

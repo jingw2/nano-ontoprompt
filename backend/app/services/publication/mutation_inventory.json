@@ -140,6 +140,13 @@
     },
     {
       "router": "app/routers/v2/logic_actions.py",
+      "method": "PATCH",
+      "path": "/{ontology_id}/logic/{rule_id}",
+      "operation": "v2logic.patch",
+      "closure": "mutate"
+    },
+    {
+      "router": "app/routers/v2/logic_actions.py",
       "method": "POST",
       "path": "/{ontology_id}/logic/{rule_id}/review",
       "operation": "v2logic.review",
@@ -171,6 +178,13 @@
       "method": "POST",
       "path": "/{ontology_id}/actions",
       "operation": "v2action.create",
+      "closure": "mutate"
+    },
+    {
+      "router": "app/routers/v2/logic_actions.py",
+      "method": "PATCH",
+      "path": "/{ontology_id}/actions/{action_id}",
+      "operation": "v2action.patch",
       "closure": "mutate"
     },
     {

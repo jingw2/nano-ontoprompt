@@ -256,7 +256,8 @@ export default function OntologyCreateWizard() {
       const fmap: Record<string, string> = { __primary_key__: sug.primary_key_column }
       for (const fm of sug.field_mappings) fmap[fm.column_name] = fm.property_name
       await apiClientV2.post(`/ontologies/${createdOntologyId}/mappings`, {
-        curated_dataset_id: dsId, entity_class: sug.entity_class, field_mapping: fmap, confidence: 1.0,
+        curated_dataset_id: dsId, entity_class: sug.entity_class, entity_class_cn: sug.entity_class_cn,
+        field_mapping: fmap, confidence: 1.0,
       }).catch(() => {})
     }
 

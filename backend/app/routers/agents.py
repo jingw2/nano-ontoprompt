@@ -178,6 +178,9 @@ def _validate_ontology_bindings(db: Session, current_user: User, bindings: list[
             raise HTTPException(422, detail="AGENTS_BINDING_CAPABILITIES_REQUIRED")
         if not validate_categories(binding.get("enabled_categories")):
             raise HTTPException(422, detail="AGENTS_BINDING_CATEGORIES_INVALID")
+        tool_catalog_limit = binding.get("tool_catalog_limit")
+        if tool_catalog_limit is not None and not (1 <= tool_catalog_limit <= 500):
+            raise HTTPException(422, detail="AGENTS_BINDING_TOOL_CATALOG_LIMIT_INVALID")
         effective = ceiling_intersection(
             _ontology_data_capabilities(db, current_user.id, ontology_id), current_user.role)
         if not validate_agent_tools(effective, requested):
@@ -378,6 +381,93 @@ def archive_agent(agent_id: str, db: Session = Depends(get_db), current_user: Us
     ), {"id": agent_id})
     if result.rowcount != 1:
         raise HTTPException(404, detail="Not found")
+    db.commit()
+    return None
+
+
+def _delete_agent_cascade(db: Session, agent_id: str) -> None:
+    """Hard-delete an Agent and every row it owns. All child tables use
+    ON DELETE RESTRICT (never CASCADE) so a mistaken ORM cascade can't
+    silently wipe conversation history — this explicitly deletes the owned
+    tree bottom-up, breaking the two self-referential cycles
+    (agents.active_version_id -> agent_versions, agent_turns.*_message_id ->
+    agent_messages) before deleting either side."""
+    session_ids = [r[0] for r in db.execute(text(
+        "SELECT id FROM agent_sessions WHERE agent_id = :id"
+    ), {"id": agent_id}).all()]
+    turn_ids: list[str] = []
+    if session_ids:
+        turn_ids = [r[0] for r in db.execute(text(
+            "SELECT id FROM agent_turns WHERE session_id = ANY(:sids)"
+        ), {"sids": session_ids}).all()]
+    memory_ids = [r[0] for r in db.execute(text(
+        "SELECT id FROM agent_memories WHERE agent_id = :id"
+    ), {"id": agent_id}).all()]
+    consent_ids = [r[0] for r in db.execute(text(
+        "SELECT id FROM agent_memory_consents WHERE agent_id = :id"
+    ), {"id": agent_id}).all()]
+    version_ids = [r[0] for r in db.execute(text(
+        "SELECT id FROM agent_versions WHERE agent_id = :id"
+    ), {"id": agent_id}).all()]
+
+    db.execute(text("UPDATE agents SET active_version_id = NULL WHERE id = :id"), {"id": agent_id})
+
+    if turn_ids:
+        db.execute(text(
+            "UPDATE agent_turns SET request_message_id = NULL, response_message_id = NULL "
+            "WHERE id = ANY(:tids)"
+        ), {"tids": turn_ids})
+        for table in (
+            "agent_approvals", "agent_clarification_requests", "agent_model_invocations",
+            "governed_turn_plans", "agent_tool_executions", "agent_node_executions",
+            "agent_purge_markers", "agent_reconciliation_cases", "agent_runtime_events",
+            "agent_stream_tickets", "agent_turn_checkpoint_writes", "agent_turn_checkpoints",
+            "agent_turn_dispatch_outbox", "agent_memory_extraction_outbox",
+        ):
+            db.execute(text(f"DELETE FROM {table} WHERE turn_id = ANY(:tids)"), {"tids": turn_ids})
+    if session_ids:
+        db.execute(text("DELETE FROM agent_messages WHERE session_id = ANY(:sids)"), {"sids": session_ids})
+        if turn_ids:
+            db.execute(text("DELETE FROM agent_turns WHERE id = ANY(:tids)"), {"tids": turn_ids})
+        db.execute(text(
+            "DELETE FROM agent_application_state_snapshots WHERE session_id = ANY(:sids)"
+        ), {"sids": session_ids})
+        db.execute(text("DELETE FROM agent_memory_summaries WHERE session_id = ANY(:sids)"), {"sids": session_ids})
+        db.execute(text(
+            "DELETE FROM agent_memory_extraction_outbox WHERE session_id = ANY(:sids)"
+        ), {"sids": session_ids})
+        db.execute(text("DELETE FROM agent_sessions WHERE agent_id = :id"), {"id": agent_id})
+
+    if memory_ids:
+        db.execute(text("DELETE FROM agent_memory_vector_outbox WHERE memory_id = ANY(:mids)"), {"mids": memory_ids})
+        db.execute(text(
+            "DELETE FROM agent_memory_conflicts WHERE memory_id_a = ANY(:mids) OR memory_id_b = ANY(:mids)"
+        ), {"mids": memory_ids})
+    db.execute(text(
+        "DELETE FROM agent_memory_revisions WHERE memory_id = ANY(:mids) OR consent_id = ANY(:cids)"
+    ), {"mids": memory_ids or [None], "cids": consent_ids or [None]})
+    db.execute(text("DELETE FROM agent_memories WHERE agent_id = :id"), {"id": agent_id})
+    db.execute(text("DELETE FROM agent_memory_consents WHERE agent_id = :id"), {"id": agent_id})
+
+    if version_ids:
+        for table in (
+            "agent_external_tool_bindings", "agent_ontology_bindings",
+            "agent_retrieval_sources", "agent_skill_bindings",
+        ):
+            db.execute(text(f"DELETE FROM {table} WHERE agent_version_id = ANY(:vids)"), {"vids": version_ids})
+    db.execute(text("DELETE FROM agent_versions WHERE agent_id = :id"), {"id": agent_id})
+    db.execute(text("DELETE FROM prompt_generations WHERE agent_id = :id"), {"id": agent_id})
+    db.execute(text("DELETE FROM agent_access_grants WHERE agent_id = :id"), {"id": agent_id})
+    db.execute(text("DELETE FROM agents WHERE id = :id"), {"id": agent_id})
+
+
+@router.delete("/{agent_id}/hard", status_code=204)
+def delete_agent(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    _require_agent_grant(db, current_user.id, agent_id, "edit")
+    exists = db.execute(text("SELECT 1 FROM agents WHERE id = :id"), {"id": agent_id}).scalar_one_or_none()
+    if not exists:
+        raise HTTPException(404, detail="Not found")
+    _delete_agent_cascade(db, agent_id)
     db.commit()
     return None
 

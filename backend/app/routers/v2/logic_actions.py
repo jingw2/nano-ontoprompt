@@ -228,7 +228,7 @@ def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db), curren
                     id=str(uuid.uuid4()), ontology_id=ontology_id,
                     name_cn=name, name_en=name,
                     description=f"Entity Mapping: {m.entity_class}",
-                    formula=f"mapping:{m.entity_class}", confidence=0.85,
+                    function_type="external_query", definition=f"mapping:{m.entity_class}", confidence=0.85,
                     enabled=True, status="draft",
                     linked_entities=[m.entity_class],
                 ))
@@ -243,6 +243,10 @@ def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db), curren
         ("Security: 访问控制", "security", "安全: 基于角色限制读写权限", 0.85),
         ("Automation: 自动同步触发", "automation", "自动化: Curated 审批通过后触发增量更新", 0.9),
     ]
+    function_type_by_qtype = {
+        "validation": "derived_property", "business": "derived_property", "state": "derived_property",
+        "inference": "complex_edit", "security": "complex_edit", "automation": "complex_edit",
+    }
     for qname, qtype, qdesc, qconf in quality_rules:
         if not db.query(LogicRuleV1).filter(
             LogicRuleV1.ontology_id == ontology_id, LogicRuleV1.name_cn == qname,
@@ -250,7 +254,8 @@ def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db), curren
             db.add(LogicRuleV1(
                 id=str(uuid.uuid4()), ontology_id=ontology_id,
                 name_cn=qname, name_en=qname.replace(": ", "_"),
-                description=qdesc, formula=qtype, confidence=qconf,
+                description=qdesc, function_type=function_type_by_qtype.get(qtype, "derived_property"),
+                definition=qtype, confidence=qconf,
                 enabled=True, status="draft",
             ))
     db.flush()

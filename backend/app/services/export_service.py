@@ -11,6 +11,7 @@ from app.models.entity import Entity
 from app.models.logic import LogicRule
 from app.models.action import Action
 from app.models.relation import Relation
+from app.services.relation_dedup import dedupe_relation_rows
 
 
 def _collect_data(db: Session, ontology_id: str) -> dict:
@@ -18,7 +19,9 @@ def _collect_data(db: Session, ontology_id: str) -> dict:
     entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
     logic_rules = db.query(LogicRule).filter(LogicRule.ontology_id == ontology_id).all()
     actions = db.query(Action).filter(Action.ontology_id == ontology_id).all()
-    relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+    relations = dedupe_relation_rows(
+        db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+    )
     return {
         "project": project,
         "entities": entities,
@@ -87,13 +90,14 @@ def _ontology_payload(data: dict) -> dict:
             {
                 "id": r.id,
                 "name_cn": r.name_cn,
-                "formula": r.formula,
+                "function_type": r.function_type,
+                "definition": r.definition,
                 "confidence": r.confidence,
             }
             for r in data["logic_rules"]
         ],
         "actions": [
-            {"id": a.id, "name_cn": a.name_cn, "execution_rule": a.execution_rule}
+            {"id": a.id, "name_cn": a.name_cn, "rules": a.rules}
             for a in data["actions"]
         ],
     }
@@ -422,13 +426,16 @@ def export_html(db: Session, ontology_id: str) -> str:
 
     logic_rows = "".join(
         f"<tr><td>{_h(r.name_cn)}</td><td>{_h(r.name_en)}</td>"
-        f"<td>{_h(r.formula)}</td><td>{r.confidence}</td></tr>"
+        f"<td>{_h(r.function_type)}</td><td>{_h(r.definition)}</td><td>{r.confidence}</td></tr>"
         for r in data["logic_rules"]
     )
 
+    def _rules_summary(rules: list | None) -> str:
+        return "; ".join(f"{r.get('operation', '')} {r.get('target', '')}" for r in (rules or []))
+
     action_rows = "".join(
         f"<tr><td>{_h(a.name_cn)}</td><td>{_h(a.name_en)}</td>"
-        f"<td>{_h(a.execution_rule)}</td><td>{a.confidence}</td></tr>"
+        f"<td>{_h(_rules_summary(a.rules))}</td><td>{a.confidence}</td></tr>"
         for a in data["actions"]
     )
 
@@ -453,7 +460,7 @@ def export_html(db: Session, ontology_id: str) -> str:
         sections += f"""
 <h2>逻辑规则 <span class="count">({len(data['logic_rules'])})</span></h2>
 <table>
-<thead><tr><th>中文名</th><th>英文名</th><th>公式</th><th>置信度</th></tr></thead>
+<thead><tr><th>中文名</th><th>英文名</th><th>类型</th><th>定义</th><th>置信度</th></tr></thead>
 <tbody>{logic_rows}</tbody>
 </table>
 """
@@ -462,7 +469,7 @@ def export_html(db: Session, ontology_id: str) -> str:
         sections += f"""
 <h2>动作 <span class="count">({len(data['actions'])})</span></h2>
 <table>
-<thead><tr><th>中文名</th><th>英文名</th><th>执行规则</th><th>置信度</th></tr></thead>
+<thead><tr><th>中文名</th><th>英文名</th><th>规则</th><th>置信度</th></tr></thead>
 <tbody>{action_rows}</tbody>
 </table>
 """

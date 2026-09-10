@@ -682,11 +682,7 @@ def create_next_version(
     session.add(version)
     session.flush()
     if credential_binding is not None:
-        session.execute(text(
-            "INSERT INTO model_credentials "
-            "(id, model_config_id, secret_encrypted, status, secret_revision, created_at) "
-            "VALUES (:id, :config, :secret, 'active', 1, now())"
-        ), {"id": _new_id(), "config": model_config_id, "secret": _encrypt_credential(credential_binding)})
+        rotate_credential(session, model_config_id, credential_binding)
     session.execute(text(
         "UPDATE model_configs SET active_version_id = :vid, updated_at = now() WHERE id = :id"
     ), {"vid": version.id, "id": model_config_id})

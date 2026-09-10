@@ -37,13 +37,16 @@ export interface Entity {
   updated_at: string
 }
 
+export type LogicFunctionType = 'derived_property' | 'aggregation' | 'complex_edit' | 'external_query'
+
 export interface LogicRule {
   id: string
   ontology_id: string
   name_cn: string
   name_en?: string
   description?: string
-  formula?: string
+  function_type?: LogicFunctionType | string
+  definition?: string
   confidence: number
   version: string
   enabled?: boolean
@@ -53,14 +56,34 @@ export interface LogicRule {
   updated_at: string
 }
 
+export interface ActionParameter {
+  name: string
+  type: 'object_reference' | 'string' | 'number' | 'boolean' | 'enum' | 'date' | string
+  description?: string
+}
+
+export interface ActionRule {
+  operation: 'Modify' | 'Create Object' | 'Delete Object' | 'Create Link' | 'Delete Link' | string
+  target: string
+  value?: string
+}
+
+export interface ActionSideEffect {
+  type: 'Notification' | 'Webhook' | string
+  target: string
+  detail?: string
+}
+
 export interface Action {
   id: string
   ontology_id: string
   name_cn: string
   name_en?: string
   description?: string
-  execution_rule?: string
-  function_code?: string
+  parameters?: ActionParameter[]
+  rules?: ActionRule[]
+  submission_criteria?: string[]
+  side_effects?: ActionSideEffect[]
   linked_entities: string[]
   linked_logic_ids: string[]
   confidence: number

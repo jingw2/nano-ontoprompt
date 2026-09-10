@@ -215,7 +215,7 @@ export default function ModelsPage() {
               <h3 className="font-semibold">编辑模型</h3>
               <button onClick={() => setEditTarget(null)} className="text-gray-400 hover:text-black"><X size={16} /></button>
             </div>
-            <form onSubmit={handleEditSubmit(d => updateMut.mutate({ id: editTarget.id, data: d }))} className="space-y-3">
+            <form onSubmit={handleEditSubmit(d => updateMut.mutate({ id: editTarget.id, data: { ...d, api_key: d.api_key || undefined } }))} className="space-y-3">
               <div><label className="block text-sm font-medium mb-1">名称 *</label>
                 <input {...regEdit('name', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium mb-1">配置分类 *</label>
@@ -226,6 +226,8 @@ export default function ModelsPage() {
                 <select {...regEdit('provider', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm">
                   {(PROVIDERS[editConfigType] || PROVIDERS.llm).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select></div>
+              <div><label className="block text-sm font-medium mb-1">API Key（留空则不修改）</label>
+                <input {...regEdit('api_key')} type="password" autoComplete="new-password" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium mb-1">API Base</label>
                 <input {...regEdit('api_base')} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium mb-1">模型名（每行一个）</label>

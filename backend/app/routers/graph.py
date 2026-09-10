@@ -6,6 +6,7 @@ from app.models.relation import Relation
 from app.models.ontology import OntologyProject
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
+from app.services.relation_dedup import dedupe_relation_rows
 
 router = APIRouter()
 
@@ -34,7 +35,9 @@ def get_graph(ontology_id: str, limit: int = 300, db: Session = Depends(get_db),
 
     # SQLite fallback
     entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).limit(limit).all()
-    relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+    relations = dedupe_relation_rows(
+        db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
+    )
     entity_ids = {e.id for e in entities}
 
     nodes = [

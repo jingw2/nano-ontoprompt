@@ -241,3 +241,45 @@ def test_list_connection_versions_returns_all_versions_newest_first(session):
 def test_list_connection_versions_empty_for_unknown_connection(session):
     from app.services.tool_connections import list_connection_versions
     assert list_connection_versions(session, connection_id="nonexistent") == []
+
+
+def test_seed_default_tool_connections_activates_playwright_and_scaffolds_search(session):
+    from app.services.tool_connections import seed_default_tool_connections, list_providers, list_connections
+
+    seed_default_tool_connections(session, actor_id="u-1")
+
+    providers = {p["kind"]: p for p in list_providers(session)}
+    assert set(providers) == {"playwright", "search"}
+
+    pw_conn = list_connections(session, provider_id=providers["playwright"]["id"])[0]
+    assert pw_conn["active_version_id"] is not None
+    pw_version = session.execute(text(
+        "SELECT approval_status, allowlists FROM tool_connection_versions WHERE id = :id"
+    ), {"id": pw_conn["active_version_id"]}).mappings().one()
+    assert pw_version["approval_status"] == "approved"
+    assert "wikipedia.org" in pw_version["allowlists"]["domains"]
+
+    search_conn = list_connections(session, provider_id=providers["search"]["id"])[0]
+    assert search_conn["active_version_id"] is None
+
+
+def test_seed_default_tool_connections_is_idempotent(session):
+    from app.services.tool_connections import seed_default_tool_connections, list_providers
+
+    seed_default_tool_connections(session, actor_id="u-1")
+    seed_default_tool_connections(session, actor_id="u-1")
+
+    kinds = [p["kind"] for p in list_providers(session)]
+    assert kinds.count("playwright") == 1
+    assert kinds.count("search") == 1
+
+
+def test_seed_default_tool_connections_skips_kind_with_existing_provider(session):
+    from app.services.tool_connections import create_provider, seed_default_tool_connections, list_providers
+
+    create_provider(session, actor_id="u-1", name="Custom Search", kind="search")
+    seed_default_tool_connections(session, actor_id="u-1")
+
+    search_providers = [p for p in list_providers(session) if p["kind"] == "search"]
+    assert len(search_providers) == 1
+    assert search_providers[0]["name"] == "Custom Search"

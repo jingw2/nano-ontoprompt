@@ -1,11 +1,24 @@
 """LLM 辅助 Ontology Mapping 自动映射建议服务"""
 from __future__ import annotations
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+# Curated Dataset 命名总是以 "Curated" 结尾（这是 Pipeline 自己的技术分层词汇，
+# 不是任何领域都会用到的概念）；作为实体展示名的兜底时必须先去掉，否则会把管道
+# 内部的数据集标签泄漏成"领域概念名"（如「XX记录Curated」）。
+_CURATED_SUFFIX_RE = re.compile(r'\s*curated\s*$', re.IGNORECASE)
+
+
+def _strip_pipeline_noise(dataset_name: str) -> str:
+    """Curated Dataset 名 → 去掉技术后缀后的展示名兜底。"""
+    cleaned = _CURATED_SUFFIX_RE.sub('', dataset_name).strip()
+    return cleaned or dataset_name
 
 
 @dataclass
@@ -145,6 +158,11 @@ class AutoMapper:
         )
 
         data = json.loads(raw) if isinstance(raw, str) else raw
+        pk = data.get("primary_key_column")
+        if isinstance(pk, list):
+            # the mapping model only supports a single-column primary key;
+            # a compound key suggestion degrades to its first column
+            pk = pk[0] if pk else None
         field_mappings = [
             FieldMappingSuggestion(
                 column_name=fm["column"],
@@ -156,11 +174,11 @@ class AutoMapper:
             for fm in data.get("field_mappings", [])
         ]
         return MappingSuggestion(
-            entity_class=data.get("entity_class", self._to_class_name(dataset_name)),
-            entity_class_cn=data.get("entity_class_cn", dataset_name),
+            entity_class=data.get("entity_class") or self._to_class_name(dataset_name),
+            entity_class_cn=data.get("entity_class_cn") or _strip_pipeline_noise(dataset_name),
             description=data.get("description", ""),
             field_mappings=field_mappings,
-            primary_key_column=data.get("primary_key_column"),
+            primary_key_column=pk,
         )
 
     def _rule_based_suggest(self, dataset_name: str, columns: list[str]) -> MappingSuggestion:
@@ -182,7 +200,7 @@ class AutoMapper:
         ]
         return MappingSuggestion(
             entity_class=entity_class,
-            entity_class_cn=dataset_name,
+            entity_class_cn=_strip_pipeline_noise(dataset_name),
             description=f"{dataset_name} 实体",
             field_mappings=field_mappings,
             primary_key_column=pk_col,
@@ -190,10 +208,26 @@ class AutoMapper:
 
     @staticmethod
     def _to_class_name(name: str) -> str:
-        """snake_case/kebab-case → CamelCase"""
+        """snake_case/kebab-case → CamelCase.
+
+        A non-ASCII (CJK) `name` capitalizes to itself unchanged — downstream
+        relation-type derivation (`mapping_service.py`) then strips every
+        non-ASCII character back out of whatever entity_class it's handed,
+        which collapses ALL such classes down to the same leftover ASCII
+        fragment (e.g. every "...Curated"-suffixed dataset becoming the
+        identical "HAS_CURATED" relation type, regardless of actual target).
+        Falling back to a per-name stable hash keeps entity_class ASCII-safe
+        and — critically — distinct per source name, so that collision can't
+        happen again downstream.
+        """
         import re
-        parts = re.split(r'[_\-\s]+', name)
-        return "".join(p.capitalize() for p in parts if p)
+        cleaned = _strip_pipeline_noise(name)
+        parts = re.split(r'[_\-\s]+', cleaned)
+        class_name = "".join(p.capitalize() for p in parts if p)
+        if class_name.isascii() and class_name:
+            return class_name
+        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+        return f"Entity{digest}"
 
     @staticmethod
     def _guess_type(col_name: str) -> str:

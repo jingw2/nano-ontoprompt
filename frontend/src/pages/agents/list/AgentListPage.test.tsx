@@ -139,7 +139,7 @@ describe('P2C-LIST', () => {
     expect(screen.queryByRole('button', { name: '新建 Agent' })).toBeNull()
   })
 
-  it('shows Create for editors and hides Archive without an edit grant', async () => {
+  it('shows Create for editors and hides Delete without an edit grant', async () => {
     server.use(http.get('*/api/v1/agents', () => page([
       AGENT,
       { ...AGENT, agent_id: 'a-2', name: 'Read Only Agent', can_edit: false },
@@ -148,21 +148,62 @@ describe('P2C-LIST', () => {
     await renderPage()
     await screen.findByText('Support Agent')
     expect(screen.getByRole('button', { name: '新建智能体' })).toBeTruthy()
-    // first agent has the edit grant -> Archive visible; second has none -> hidden
+    // first agent has the edit grant -> Delete visible; second has none -> hidden
     const rows = screen.getAllByRole('row')
     expect(rows.length).toBeGreaterThan(1)
-    expect(screen.getAllByRole('button', { name: '归档' }).length).toBe(1)
+    expect(screen.getAllByRole('button', { name: '删除' }).length).toBe(1)
+    // View is available for every row regardless of edit grant
+    expect(screen.getAllByRole('button', { name: '查看' }).length).toBe(2)
   })
 
-  it('archives an agent through DELETE and hides the button for archived rows', async () => {
+  it('hard-deletes an agent after confirmation and removes it from the list', async () => {
+    let deleteCalled = false
     server.use(
       http.get('*/api/v1/agents', () => page([AGENT])),
-      http.delete('*/api/v1/agents/a-1', () => new HttpResponse(null, { status: 204 })),
+      http.delete('*/api/v1/agents/a-1/hard', () => { deleteCalled = true; return new HttpResponse(null, { status: 204 }) }),
     )
     setRole('editor')
     await renderPage()
-    await userEvent.click(await screen.findByRole('button', { name: '归档' }))
-    await waitFor(() => expect(screen.getByText('已归档')).toBeTruthy())
+    await userEvent.click(await screen.findByRole('button', { name: '删除' }))
+    // clicking Delete only opens the confirm dialog — no request yet
+    expect(await screen.findByText(/确定要删除智能体/)).toBeTruthy()
+    expect(deleteCalled).toBe(false)
+    await userEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deleteCalled).toBe(true))
+    await waitFor(() => expect(screen.queryByText('Support Agent')).toBeNull())
+  })
+
+  it('shows an inline error in the confirm dialog when hard delete fails', async () => {
+    server.use(
+      http.get('*/api/v1/agents', () => page([AGENT])),
+      http.delete('*/api/v1/agents/a-1/hard', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })),
+    )
+    setRole('editor')
+    await renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: '删除' }))
+    await userEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    expect(await screen.findByText('删除失败')).toBeTruthy()
+    // the dialog stays open and the row is untouched on failure
+    expect(screen.getByText('Support Agent')).toBeTruthy()
+  })
+
+  it('navigates to the agent detail page via the View button, not the name', async () => {
+    server.use(http.get('*/api/v1/agents', () => page([AGENT])))
+    setRole('editor')
+    const { default: AgentListPage } = await import('./AgentListPage')
+    render(
+      <MemoryRouter initialEntries={['/agents']}>
+        <Routes>
+          <Route path="/agents" element={<AgentListPage />} />
+          <Route path="/agents/:id" element={<div>agent detail placeholder</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Support Agent')
+    // the name is plain text now — no link/button role on it
+    expect(screen.queryByRole('button', { name: 'Support Agent' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '查看' }))
+    expect(await screen.findByText('agent detail placeholder')).toBeTruthy()
   })
 
   it('shows the loading skeleton before the list resolves', async () => {

@@ -241,24 +241,39 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
 
     const spreadIsolatedNodes = () => {
       const isolated = cy.nodes().filter(node => (node.data('degree') ?? 0) === 0)
-      if (isolated.length > 0 && containerRef.current) {
-        const width = Math.max(containerRef.current.clientWidth * 2.4, 1800)
-        const height = Math.max(containerRef.current.clientHeight * 2.2, 1100)
+      if (isolated.length === 0) return
+      const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+      const connected = cy.nodes().filter(node => (node.data('degree') ?? 0) > 0)
+
+      if (connected.length === 0 && containerRef.current) {
+        // whole graph is isolated: keep the original compact centered spiral
+        const width = Math.max(containerRef.current.clientWidth, 800)
+        const height = Math.max(containerRef.current.clientHeight, 600)
         const center = { x: width / 2, y: height / 2 }
-        const radius = Math.min(width, height) * 0.46
-        const xScale = width / height
-        const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+        const radius = Math.min(width, height) * 0.4
         isolated.forEach((node, i) => {
           const t = (i + 1) / isolated.length
           const r = Math.sqrt(t) * radius
           const a = i * goldenAngle
-          node.position({
-            x: center.x + Math.cos(a) * r * xScale,
-            y: center.y + Math.sin(a) * r,
-          })
+          node.position({ x: center.x + Math.cos(a) * r, y: center.y + Math.sin(a) * r })
         })
-        cy.fit(cy.elements(), 28)
+      } else {
+        // anchor isolated nodes in a ring just outside the connected
+        // cluster's own bounding box so they read as part of the same
+        // graph instead of being flung into a separately-scaled canvas
+        const bbox = connected.boundingBox()
+        const center = { x: (bbox.x1 + bbox.x2) / 2, y: (bbox.y1 + bbox.y2) / 2 }
+        const clusterRadius = Math.max(bbox.w, bbox.h) / 2
+        const ringMargin = 90 + Math.sqrt(isolated.length) * 30
+        const baseRadius = clusterRadius + ringMargin
+        isolated.forEach((node, i) => {
+          const t = (i + 1) / isolated.length
+          const r = baseRadius + Math.sqrt(t) * 60
+          const a = i * goldenAngle
+          node.position({ x: center.x + Math.cos(a) * r, y: center.y + Math.sin(a) * r })
+        })
       }
+      cy.fit(cy.elements(), 28)
     }
 
     const spreadTimeout = window.setTimeout(spreadIsolatedNodes, 100)

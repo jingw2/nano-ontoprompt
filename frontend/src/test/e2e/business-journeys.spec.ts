@@ -196,6 +196,11 @@ for (const journeyId of ['supply_chain', 'finance', 'credit'] as const) {
     await expect(page.getByTestId('journey-sandbox-status')).toHaveText('AUTOMATIC')
     await expect(page.getByTestId('journey-automatic-receipt')).toBeVisible()
 
+    // The High-risk plan branches panel is collapsed by default (not
+    // user-facing noise after an ordinary successful turn) — open it before
+    // exercising the governed-plan branch controls it contains.
+    await page.getByTestId('governed-plan-toggle').click()
+
     const branchIds = new Map<string, { planId: string; planHash: string; approvalId: string; targetId: string }>()
     for (const branch of ['approved', 'rejected', 'expired'] as const) {
       await page.getByTestId(`high-risk-plan-create-${branch}`).click()

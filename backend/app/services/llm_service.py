@@ -29,7 +29,9 @@ def extract_ontology(text: str, prompt_content: str, model_config: dict, model_n
             "4. 关系要密集——每个概念实体至少参与1条关系，重点识别概念间的层级（IS-A、PART-OF）关系；"
             "关系类型必须语义明确（IS-A、PART-OF、INSTANCE-OF、SUPPLIES 等），禁止使用\"关联\"这类模糊类型；"
             "每条关系的 source/target 必须取自已提取的实体\n"
-            "5. 逻辑规则直接对应文中的 IF-THEN 条件\n\n"
+            "5. 逻辑规则按 Palantir Ontology Functions 模型分类为 derived_property/aggregation/"
+            "complex_edit/external_query 之一，写入 function_type + definition 字段，禁止输出 "
+            "IF-THEN 自然语言公式\n\n"
             f"文档内容：\n\n{text}"
         )},
     ]

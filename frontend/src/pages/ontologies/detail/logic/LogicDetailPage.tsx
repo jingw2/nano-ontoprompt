@@ -8,6 +8,14 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check, ToggleLeft, ToggleRight } from 'lucide-react'
 import type { LogicRule, Action, Entity } from '@/types/ontology'
 
+const FUNCTION_TYPES = ['derived_property', 'aggregation', 'complex_edit', 'external_query'] as const
+const FUNCTION_TYPE_LABELS: Record<string, string> = {
+  derived_property: '派生属性 (Derived Property)',
+  aggregation: '聚合计算 (Aggregation)',
+  complex_edit: '批量编辑 (Complex Edit)',
+  external_query: '外部查询 (External Query)',
+}
+
 function ChipEditor({
   editing, items, onRemove, availableOptions, onAdd, color,
 }: {
@@ -251,8 +259,15 @@ export default function LogicDetailPage() {
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">公式</label>
-              <input {...register('formula')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+              <label className="block text-xs text-gray-500 mb-1">类型（Palantir Ontology Functions）</label>
+              <select {...register('function_type')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                {FUNCTION_TYPES.map(ft => <option key={ft} value={ft}>{FUNCTION_TYPE_LABELS[ft]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">定义</label>
+              <textarea {...register('definition')} rows={4} className="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-none"
+                placeholder="如 delay_minutes = actual_departure - scheduled_departure" />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">描述</label>
@@ -290,10 +305,18 @@ export default function LogicDetailPage() {
                 </div>
               </div>
             </div>
-            {rule.formula && (
+            {rule.function_type && (
               <div>
-                <p className="text-xs text-gray-500 mb-1">公式</p>
-                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap">{rule.formula}</div>
+                <p className="text-xs text-gray-500 mb-1">类型</p>
+                <span className="inline-flex text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">
+                  {FUNCTION_TYPE_LABELS[rule.function_type] || rule.function_type}
+                </span>
+              </div>
+            )}
+            {rule.definition && (
+              <div>
+                <p className="text-xs text-gray-500 mb-1">定义</p>
+                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap">{rule.definition}</div>
               </div>
             )}
             <div>

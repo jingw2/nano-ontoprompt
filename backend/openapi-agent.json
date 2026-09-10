@@ -25,28 +25,6 @@
             ],
             "title": "Description"
           },
-          "execution_rule": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Rule"
-          },
-          "function_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Function Code"
-          },
           "linked_entities": {
             "default": [],
             "items": {
@@ -77,6 +55,38 @@
               }
             ],
             "title": "Name En"
+          },
+          "parameters": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "title": "Parameters",
+            "type": "array"
+          },
+          "rules": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "side_effects": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "title": "Side Effects",
+            "type": "array"
+          },
+          "submission_criteria": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Submission Criteria",
+            "type": "array"
           }
         },
         "required": [
@@ -297,6 +307,138 @@
         "title": "ActionTypeCreate",
         "type": "object"
       },
+      "ActionTypePatch": {
+        "properties": {
+          "action_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Category"
+          },
+          "backed_by_function": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backed By Function"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "effects": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effects"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameters"
+          },
+          "permission_rules": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Rules"
+          },
+          "side_effects": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side Effects"
+          },
+          "submission_criteria": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submission Criteria"
+          },
+          "target_entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Entity Type"
+          }
+        },
+        "title": "ActionTypePatch",
+        "type": "object"
+      },
       "ActionUpdate": {
         "properties": {
           "confidence": {
@@ -320,28 +462,6 @@
               }
             ],
             "title": "Description"
-          },
-          "execution_rule": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Rule"
-          },
-          "function_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Function Code"
           },
           "linked_entities": {
             "anyOf": [
@@ -392,6 +512,62 @@
               }
             ],
             "title": "Name En"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameters"
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules"
+          },
+          "side_effects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side Effects"
+          },
+          "submission_criteria": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submission Criteria"
           }
         },
         "title": "ActionUpdate",
@@ -2110,6 +2286,100 @@
         "title": "LogicReviewRequest",
         "type": "object"
       },
+      "LogicRulePatch": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expression": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expression"
+          },
+          "logic_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logic Type"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          },
+          "target_entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Entity Type"
+          }
+        },
+        "title": "LogicRulePatch",
+        "type": "object"
+      },
       "LogicRuleUpdate": {
         "properties": {
           "confidence": {
@@ -2122,6 +2392,17 @@
               }
             ],
             "title": "Confidence"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
           },
           "description": {
             "anyOf": [
@@ -2145,7 +2426,7 @@
             ],
             "title": "Enabled"
           },
-          "formula": {
+          "function_type": {
             "anyOf": [
               {
                 "type": "string"
@@ -2154,7 +2435,7 @@
                 "type": "null"
               }
             ],
-            "title": "Formula"
+            "title": "Function Type"
           },
           "linked_entities": {
             "anyOf": [
@@ -2705,7 +2986,7 @@
         "type": "object"
       },
       "OntologyBindingPatch": {
-        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.",
+        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.  `tool_catalog_limit` caps how\nmany category-derived (non-`selected_tools`) tool descriptors are turned\ninto LLM tool schemas per turn; None means unlimited (today's behavior).",
         "properties": {
           "allowlists": {
             "default": {},
@@ -2745,6 +3026,17 @@
             },
             "title": "Selected Tools",
             "type": "array"
+          },
+          "tool_catalog_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Catalog Limit"
           }
         },
         "required": [
@@ -4910,6 +5202,17 @@
             ],
             "title": "Confidence"
           },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
           "description": {
             "anyOf": [
               {
@@ -4932,7 +5235,7 @@
             ],
             "title": "Enabled"
           },
-          "formula": {
+          "function_type": {
             "anyOf": [
               {
                 "type": "string"
@@ -4941,7 +5244,7 @@
                 "type": "null"
               }
             ],
-            "title": "Formula"
+            "title": "Function Type"
           },
           "linked_entities": {
             "anyOf": [
@@ -7122,6 +7425,46 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/hard": {
+      "delete": {
+        "operationId": "delete_agent_api_v1_agents__agent_id__hard_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/memories": {
       "get": {
         "operationId": "get_memories_api_v1_agents__agent_id__memories_get",
@@ -8856,6 +9199,22 @@
             "schema": {
               "title": "Journey Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "turn_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Turn Id"
             }
           }
         ],
@@ -15590,6 +15949,68 @@
         "tags": [
           "v2-logic-actions"
         ]
+      },
+      "patch": {
+        "operationId": "patch_action_type_api_v2_ontologies__ontology_id__actions__action_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ontology_id",
+            "required": true,
+            "schema": {
+              "title": "Ontology Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionTypePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Action Type",
+        "tags": [
+          "v2-logic-actions"
+        ]
       }
     },
     "/api/v2/ontologies/{ontology_id}/actions/{action_id}/review": {
@@ -16627,6 +17048,68 @@
           }
         ],
         "summary": "Delete Logic Rule",
+        "tags": [
+          "v2-logic-actions"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_logic_rule_api_v2_ontologies__ontology_id__logic__rule_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ontology_id",
+            "required": true,
+            "schema": {
+              "title": "Ontology Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogicRulePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Logic Rule",
         "tags": [
           "v2-logic-actions"
         ]

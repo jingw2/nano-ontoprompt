@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
@@ -25,11 +25,9 @@ import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
 import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import DataManagementPage from '@/pages/data-management/DataManagementPage'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
-import AgentListPage from '@/pages/agents/list/AgentListPage'
+import AgentsSectionPage from '@/pages/agents/AgentsSectionPage'
 import AgentCreateWizard from '@/pages/agents/new/AgentCreateWizard'
 import AgentDetailPage from '@/pages/agents/detail/AgentDetailPage'
-import ApprovalsPage from '@/pages/admin/ApprovalsPage'
-import ToolConnectionsPage from '@/pages/admin/ToolConnectionsPage'
 import OAuthConsentPage from '@/pages/oauth/OAuthConsentPage'
 import RuntimeInvestigationPage from '@/pages/runtime/RuntimeInvestigationPage'
 import ActionPlanPage from '@/pages/runtime/ActionPlanPage'
@@ -53,6 +51,16 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   const role = useAuthStore(s => s.user?.role)
   if (role !== 'admin') return <Navigate to="/agents" replace />
   return <>{children}</>
+}
+
+// Back-compat: /admin/approvals moved under the Agent workspace as a tab.
+// Preserves ApprovalsPage's own `tab=` sub-tab param (e.g. a bookmarked
+// `?tab=mcp` link) while adding the outer `section=approvals` selector.
+function ApprovalsRedirect() {
+  const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  params.set('section', 'approvals')
+  return <Navigate to={`/agents?${params.toString()}`} replace />
 }
 
 // Boot-time session restore: after a reload the in-memory bearer is gone, so
@@ -124,15 +132,15 @@ export default function App() {
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
 
-          {/* ── Agent workspaces (I-FRONTEND registration) ── */}
-          <Route path="/agents" element={<ProtectedRoute><AgentListPage /></ProtectedRoute>} />
+          {/* ── Agent workspace: management/approvals/tool-connections tabs (I-FRONTEND registration) ── */}
+          <Route path="/agents" element={<ProtectedRoute><AgentsSectionPage /></ProtectedRoute>} />
           <Route path="/agents/new" element={<ProtectedRoute><AgentCreateWizard /></ProtectedRoute>} />
           <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
-          <Route path="/admin/approvals" element={<ProtectedRoute><AdminRoute><ApprovalsPage /></AdminRoute></ProtectedRoute>} />
-          <Route path="/admin/tool-connections" element={<ProtectedRoute><AdminRoute><ToolConnectionsPage /></AdminRoute></ProtectedRoute>} />
-          {/* Back-compat redirects: 和解操作 + MCP 待审批 merged into one admin-only Approvals menu */}
-          <Route path="/admin/agent-reconciliations" element={<Navigate to="/admin/approvals?tab=reconciliation" replace />} />
-          <Route path="/mcp/write-requests" element={<Navigate to="/admin/approvals?tab=mcp" replace />} />
+          {/* Back-compat redirects: 审批/工具连接 moved from standalone /admin/* pages into Agent tabs */}
+          <Route path="/admin/approvals" element={<ApprovalsRedirect />} />
+          <Route path="/admin/tool-connections" element={<Navigate to="/agents?section=tool-connections" replace />} />
+          <Route path="/admin/agent-reconciliations" element={<Navigate to="/agents?section=approvals&tab=reconciliation" replace />} />
+          <Route path="/mcp/write-requests" element={<Navigate to="/agents?section=approvals&tab=mcp" replace />} />
 
           {/* ── Runtime governance + refresh operator surfaces (Task 27) ── */}
           <Route path="/runtime/refresh/:sourceId" element={<ProtectedRoute><RefreshOperationsPage /></ProtectedRoute>} />

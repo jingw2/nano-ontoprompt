@@ -209,7 +209,8 @@ def test_v1_logic_publish_syncs_v2_status(db):
         ontology_id=ontology_id,
         name_cn="Mapping Rule: Supplier",
         name_en="mapping_supplier",
-        formula="mapping",
+        function_type="external_query",
+        definition="mapping",
         enabled=True,
         status="draft",
     ))

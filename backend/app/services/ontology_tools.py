@@ -28,11 +28,18 @@ def execute_ontology_read(db: Session, *, descriptor_id: str, parameters: dict,
     raise OntologyToolError("DESCRIPTOR_UNKNOWN")
 
 
+MAX_READ_INSTANCES_LIMIT = 50
+
+
 def _read_instances(db: Session, parameters: dict, correlation_id: str) -> tuple[str, dict]:
     ontology_id = parameters.get("ontology_id")
     release_id = parameters.get("release_id")
     query = parameters.get("query") or ""
-    limit = int(parameters.get("limit", 20))
+    entity_type = parameters.get("entity_type") or ""
+    # clamp both ends: a missing/zero/negative limit must not silently become
+    # "unbounded", and a runaway model-supplied value must not blow the
+    # context budget in one call.
+    limit = max(1, min(int(parameters.get("limit") or 20), MAX_READ_INSTANCES_LIMIT))
     if not ontology_id or not release_id:
         raise OntologyToolError("READ_PARAMETERS_REQUIRED")
     sort_by = parameters.get("sort_by")
@@ -63,10 +70,26 @@ def _read_instances(db: Session, parameters: dict, correlation_id: str) -> tuple
     params = {"o": ontology_id, "rid": release_id, "q": f"%{query}%", "lim": limit}
     if sort_by:
         params["sort_field"] = sort_by
+    # entity_type scopes the search to one entity's instances (matched against
+    # its Chinese name, type, or English name — the same multi-key lookup the
+    # rest of this app already uses for entity_type/linked_entities matching).
+    # Without this, a call searches every entity's instances mixed together in
+    # one pool; on an ontology where one entity type alone (e.g. a log/record
+    # table) has 100+ rows, a model asking a question grounded in that one
+    # entity type has no way to narrow the search and burns tool-call rounds
+    # paging through irrelevant rows from other entities instead.
+    entity_filter = ""
+    if entity_type:
+        entity_filter = (
+            " AND EXISTS (SELECT 1 FROM entities e WHERE e.id = ei.entity_id "
+            "AND (e.name_cn = :et OR e.type = :et OR e.name_en = :et))"
+        )
+        params["et"] = entity_type
     rows = db.execute(text(
         "SELECT ei.id AS instance_id, ei.entity_id, ei.revision, ei.row_data "
         "FROM entity_instances ei "
         "WHERE ei.ontology_id = :o AND ei.deleted_at IS NULL AND ei.row_data::text ILIKE :q "
+        f"{entity_filter} "
         "AND EXISTS (SELECT 1 FROM ontology_releases rel WHERE rel.id = :rid "
         "AND rel.ontology_id = ei.ontology_id "
         "AND rel.manifest_projection @> jsonb_build_object('entities', "
@@ -95,7 +118,8 @@ def _read_instances(db: Session, parameters: dict, correlation_id: str) -> tuple
         payload["note"] = (
             f"结果已达到本次返回上限（{limit} 条），可能还有更多未显示的数据，"
             "不能当作全部数据。如需查找某字段的最大值/最小值，请改用 sort_by + "
-            "sort_order 参数重新查询。"
+            "sort_order 参数重新查询；如只需某一类实体的数据，加上 entity_type "
+            f"参数缩小范围；也可以提高 limit（最多 {MAX_READ_INSTANCES_LIMIT}）。"
         )
     return ("read", payload)
 
