@@ -19,6 +19,9 @@ build/
 uploads/
 !uploads/.gitkeep
 
+# Standalone local Postgres data copy
+ontexus-db-copy/data/
+
 # Node
 node_modules/
 frontend/dist/
@@ -82,3 +85,6 @@ frontend/e2e-review/
 bin/
 chroma_data/
 minio_data/
+
+# documents
+docs/
