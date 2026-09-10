@@ -297,4 +297,4 @@ Parallel extraction with multiple LLM calls can exhaust memory on machines with 
 
 ## License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for noncommercial use (personal, research, education, nonprofit/government). Commercial use requires a separate license from the copyright holder.
