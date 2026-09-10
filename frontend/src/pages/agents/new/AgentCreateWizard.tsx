@@ -34,7 +34,7 @@ export default function AgentCreateWizard() {
   const [releasePickerOpen, setReleasePickerOpen] = useState(false)
   const [toolPickerOpen, setToolPickerOpen] = useState(false)
 
-  const { bindings, toolsByOntology, bindOntology, unbindOntology, toggleCategory, toggleTool } =
+  const { bindings, toolsByOntology, bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit } =
     useOntologyToolSelection(ontologies)
   const boundOntologyId = bindings[0]?.ontology_id ?? null
 
@@ -179,7 +179,8 @@ export default function AgentCreateWizard() {
           <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.ontology_bindings', '本体绑定')}</h3>
           <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
             canEdit onBind={bindOntology} onUnbind={unbindOntology}
-            onToggleCategory={toggleCategory} onToggleTool={toggleTool} />
+            onToggleCategory={toggleCategory} onToggleTool={toggleTool}
+            onSetToolCatalogLimit={setToolCatalogLimit} />
         </div>
         <div>
           <label className="block text-sm text-gray-600 mb-1">{t('agent.create.release', '本体发布版本')}</label>

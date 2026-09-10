@@ -171,18 +171,25 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
     if body.name is not None and body.name != c.name:
         c.name = body.name
         db.flush()
-    behavior_fields = {
-        "api_base": body.api_base,
-        "options": body.options,
-        "models": body.models,
-    }
-    has_behavior = any(v is not None for v in behavior_fields.values()) or body.provider is not None
-    if has_behavior:
+    touches_behavior = any(
+        v is not None for v in (body.provider, body.api_base, body.options, body.models)
+    )
+    active = None
+    if touches_behavior:
         try:
             active = select_active_version(db, model_id)
         except ModelVersionUnavailable:
             raise HTTPException(409, detail="MODEL_VERSION_UNAVAILABLE")
-        contract = legacy_contract_for(body.models) if body.models is not None else []
+    active_models = [entry.get("provider_model_revision") for entry in (active.model_contract or [])] if active else []
+    models_changed = body.models is not None and body.models != active_models
+    has_behavior = touches_behavior and (
+        models_changed
+        or (body.provider is not None and body.provider != active.provider)
+        or (body.api_base is not None and body.api_base != active.api_base)
+        or (body.options is not None and body.options != active.options)
+    )
+    if has_behavior:
+        contract = legacy_contract_for(body.models) if models_changed else []
         version = create_next_version(
             db, model_id,
             base_version=None,

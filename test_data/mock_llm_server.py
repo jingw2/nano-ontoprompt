@@ -53,8 +53,8 @@ def heuristic_extract(text: str) -> dict:
     for i, (cond, act) in enumerate(rules[:10], 1):
         logic_rules.append({"name_cn": f"规则{i}: {cond.strip()[:24]}", "name_en": f"rule_{i}",
                             "description": f"IF {cond.strip()} THEN {act.strip()}",
-                            "formula": f"IF {cond.strip()[:40]}", "linked_entities": concepts[:1],
-                            "confidence": 0.8})
+                            "function_type": "complex_edit", "definition": f"IF {cond.strip()[:40]} THEN {act.strip()[:40]}",
+                            "linked_entities": concepts[:1], "confidence": 0.8})
 
     actions, seen_act = [], set()
     for verb, obj in ACTION_VERB_RE.findall(text):
@@ -62,7 +62,11 @@ def heuristic_extract(text: str) -> dict:
         if name not in seen_act and len(seen_act) < 8:
             seen_act.add(name)
             actions.append({"name_cn": name, "name_en": "", "description": f"文档中的动作: {name}",
-                            "trigger_condition": "", "linked_entities": concepts[:1], "confidence": 0.75})
+                            "parameters": [{"name": "target", "type": "object_reference", "description": obj}],
+                            "rules": [{"operation": "Create Object", "target": name, "value": obj}],
+                            "submission_criteria": [],
+                            "side_effects": [{"type": "Notification", "target": "相关方", "detail": f"{name}已触发"}],
+                            "linked_entities": concepts[:1], "confidence": 0.75})
 
     return {"entities": entities, "instances": instances, "relations": relations,
             "logic_rules": logic_rules, "actions": actions}

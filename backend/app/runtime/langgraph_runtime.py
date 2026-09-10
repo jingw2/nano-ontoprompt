@@ -399,8 +399,9 @@ class LangGraphRuntime:
             _seq(events, context.turn_id, exc.event_type, exc.payload)
             return events
         except Exception as exc:  # fail closed: no canned fallback, no hidden reasoning
+            logger.exception("Unhandled error executing turn %s", context.turn_id)
             _seq(events, context.turn_id, "turn_failed",
-                 {"error_code": "RUNTIME_EXECUTION_FAILED", "detail": str(exc)[:500]})
+                 {"error_code": "RUNTIME_EXECUTION_FAILED", "detail": (str(exc) or repr(exc))[:500]})
             return events
 
     async def resume_turn(self, turn_id: str, signal: ResumeSignal) -> list[RuntimeEvent]:
@@ -1016,9 +1017,20 @@ class LangGraphRuntime:
         for binding in self._bindings:
             ontology_id = binding["ontology_id"]
             release_id = self._release_by_ontology.get(ontology_id)
-            for descriptor in ontology_tool_catalog(self.db, ontology_id)["tools"]:
-                if not tool_enabled(binding, descriptor):
-                    continue
+            selected_tools = set(binding.get("selected_tools") or [])
+            passing = [
+                d for d in ontology_tool_catalog(self.db, ontology_id)["tools"]
+                if tool_enabled(binding, d)
+            ]
+            limit = binding.get("tool_catalog_limit")
+            if limit is not None:
+                explicit = [d for d in passing if d["descriptor_id"] in selected_tools]
+                derived = sorted(
+                    (d for d in passing if d["descriptor_id"] not in selected_tools),
+                    key=lambda d: d["descriptor_id"],
+                )
+                passing = explicit + derived[: max(0, limit - len(explicit))]
+            for descriptor in passing:
                 name = _safe_tool_name(descriptor["descriptor_id"])
                 name_to_descriptor[name] = {
                     **descriptor, "ontology_id": ontology_id, "release_id": release_id,
@@ -1481,7 +1493,8 @@ class LangGraphRuntime:
             sort_order = arguments.get("sort_order")
             return _READ_INSTANCES, {
                 "ontology_id": ontology_id, "release_id": release_id,
-                "query": str(arguments.get("query") or ""), "limit": int(arguments.get("limit") or 10),
+                "query": str(arguments.get("query") or ""), "limit": int(arguments.get("limit") or 20),
+                "entity_type": str(arguments.get("entity_type") or "") or None,
                 "sort_by": str(arguments.get("sort_by") or "") or None,
                 "sort_order": sort_order if sort_order in ("asc", "desc") else None,
             }

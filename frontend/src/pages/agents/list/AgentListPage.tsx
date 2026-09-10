@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/authStore'
 import { agentsListApi, type AgentListItem } from '@/api/agentsList'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import AgentFilters, { type AgentFilterValues } from './AgentFilters'
 
 const PAGE_SIZE = 50
@@ -28,8 +29,9 @@ export default function AgentListPage() {
   const [hasMore, setHasMore] = useState(false)
   const [cursorStack, setCursorStack] = useState<string[]>([])
   const [retryCount, setRetryCount] = useState(0)
-  const [archiving, setArchiving] = useState<string | null>(null)
-  const [archiveError, setArchiveError] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<AgentListItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const applyFilters = useCallback((values: AgentFilterValues) => {
     const next = new URLSearchParams(searchParams)
@@ -98,16 +100,18 @@ export default function AgentListPage() {
     return () => { cancelled = true }
   }, [filters.id, filters.name, filters.createdFrom, filters.createdTo, cursor, retryCount])
 
-  const handleArchive = async (agent: AgentListItem) => {
-    setArchiving(agent.agent_id)
-    setArchiveError('')
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    setDeleteError('')
     try {
-      await agentsListApi.archive(agent.agent_id)
-      setItems(prev => (prev ?? []).map(a => a.agent_id === agent.agent_id ? { ...a, status: 'archived' } : a))
+      await agentsListApi.delete(deleteTarget.agent_id)
+      setItems(prev => (prev ?? []).filter(a => a.agent_id !== deleteTarget.agent_id))
+      setDeleteTarget(null)
     } catch {
-      setArchiveError(t('agent.list.archive_failed', '归档失败'))
+      setDeleteError(t('agent.list.delete_failed', '删除失败'))
     } finally {
-      setArchiving(null)
+      setDeleting(false)
     }
   }
 
@@ -153,7 +157,6 @@ export default function AgentListPage() {
           </button>
         </div>
       )}
-      {archiveError && <p className="text-sm text-red-500 mb-3">{archiveError}</p>}
 
       {items !== null && items.length === 0 ? (
         <div className="bg-white border rounded-lg p-10 text-center text-gray-400 text-sm" data-testid="agent-list-empty">
@@ -177,11 +180,9 @@ export default function AgentListPage() {
             <tbody>
               {items.map(a => (
                 <tr key={a.agent_id} className="border-t align-top hover:bg-gray-50">
-                  <td className="px-4 py-2 font-mono text-xs text-gray-500">{a.agent_id}</td>
+                  <td className="px-4 py-2 font-mono text-xs text-gray-500" title={a.agent_id}>{a.agent_id.slice(0, 8)}</td>
                   <td className="px-4 py-2">
-                    <button type="button" onClick={() => navigate(`/agents/${a.agent_id}`)} className="text-blue-600 hover:underline">
-                      {a.name ?? a.agent_id.slice(0, 8)}
-                    </button>
+                    {a.name ?? a.agent_id.slice(0, 8)}
                   </td>
                   <td className="px-4 py-2 text-gray-600">v{a.version_no ?? '—'}</td>
                   <td className="px-4 py-2">
@@ -189,11 +190,15 @@ export default function AgentListPage() {
                       {a.status === 'archived' ? t('agent.list.status_archived', '已归档') : t('agent.list.status_active', '活跃')}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-right">
-                    {a.status !== 'archived' && a.can_edit && (
-                      <button type="button" disabled={archiving === a.agent_id} onClick={() => handleArchive(a)}
+                  <td className="px-4 py-2 text-right space-x-3">
+                    <button type="button" onClick={() => navigate(`/agents/${a.agent_id}`)}
+                      className="text-xs text-blue-600 hover:underline">
+                      {t('agent.list.view', '查看')}
+                    </button>
+                    {a.can_edit && (
+                      <button type="button" onClick={() => { setDeleteError(''); setDeleteTarget(a) }}
                         className="text-xs text-red-500 hover:underline disabled:opacity-50">
-                        {t('agent.list.archive', '归档')}
+                        {t('agent.list.delete', '删除')}
                       </button>
                     )}
                   </td>
@@ -220,6 +225,16 @@ export default function AgentListPage() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t('agent.list.confirm_delete', '确认删除')}
+        message={t('agent.list.confirm_delete_msg', '确定要删除智能体「{{name}}」吗？此操作不可撤销，将同时删除其所有会话记录。', { name: deleteTarget?.name ?? deleteTarget?.agent_id })}
+        error={deleteError}
+        confirmLabel={deleting ? t('agent.list.deleting', '删除中…') : t('agent.list.confirm_delete_action', '确认删除')}
+        onConfirm={handleDelete}
+        onCancel={() => { setDeleteTarget(null); setDeleteError('') }}
+      />
     </div>
   )
 }

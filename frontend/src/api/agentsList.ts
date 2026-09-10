@@ -31,4 +31,5 @@ export interface AgentListParams {
 export const agentsListApi = {
   list: (params?: AgentListParams) => apiClient.get<AgentListPage>('/agents', { params }),
   archive: (agentId: string) => apiClient.delete<void>(`/agents/${agentId}`),
+  delete: (agentId: string) => apiClient.delete<void>(`/agents/${agentId}/hard`),
 }

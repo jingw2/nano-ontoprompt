@@ -11,7 +11,22 @@ import uuid
 
 router = APIRouter()
 
-_ACTION_SCHEMA_EXAMPLE = '''"function_code": "def action_name(context: dict) -> dict:\\n    # context contains relevant entity data and runtime parameters\\n    value = context.get(\\'key\\', 0)\\n    if value < context.get(\\'threshold\\', 100):\\n        return {\\'status\\': \\'triggered\\', \\'message\\': \\'Action executed\\'}\\n    return {\\'status\\': \\'skipped\\', \\'message\\': \\'Condition not met\\'}"'''
+# Shared instruction blocks (Palantir Ontology Functions/Action model) so every
+# domain template asks the LLM for the same typed structure instead of an
+# ad-hoc IF-THEN string or a guessed Python function body.
+_LOGIC_INSTRUCTIONS = """【逻辑规则 / Functions】按 Palantir Ontology Functions 模型分类，每条规则的 function_type 必须是以下四类之一：
+- derived_property（派生属性）：从现有属性实时计算新属性，definition 写计算表达式，如 "delay_minutes = actual_departure - scheduled_departure"
+- aggregation（聚合计算）：跨对象的统计聚合，definition 写聚合表达式，如 "AVG(Flight.delay_minutes) GROUP BY airline"
+- complex_edit（批量编辑）：触发时对多个对象的批量修改逻辑，definition 描述具体编辑步骤
+- external_query（外部查询）：查询外部系统丰富本体，definition 描述查询的系统与内容
+禁止输出旧式 IF-THEN 自然语言"公式"文本。每条规则必须填写 linked_entities（1-5个直接相关实体name_cn），不得为空。"""
+
+_ACTION_INSTRUCTIONS = """【动作 / Actions】按 Palantir Ontology Action 模型提取以下四个组件：
+- parameters（参数）：类型化输入字段列表，如 [{"name": "字段名", "type": "object_reference|string|number|boolean|enum|date", "description": "说明"}]
+- rules（规则）：定义对本体的编辑操作，如 [{"operation": "Modify|Create Object|Delete Object|Create Link|Delete Link", "target": "实体.字段", "value": "取值或来源"}]
+- submission_criteria（提交条件）：前置校验表达式列表，不满足则无法提交，如 ["new_flight.status != Cancelled", "current_user.role in [agent, supervisor]"]
+- side_effects（副作用）：执行后触发的外部效果，如 [{"type": "Notification|Webhook", "target": "...", "detail": "..."}]
+禁止输出旧式 execution_rule 自然语言描述或 function_code Python 代码。每个动作必须填写 linked_entities、linked_logic_names。"""
 
 BUILTIN_PROMPTS = [
     {"name": "通用本体提取", "domain": "其他", "content": """你是一个本体工程专家。请从以下文档中提取本体信息。
@@ -28,17 +43,15 @@ BUILTIN_PROMPTS = [
 - 重点识别概念间的层级关系（IS-A、PART-OF）
 
 每个实体必须填写 properties（最多3个关键属性，不得为空）。
-每条逻辑规则必须填写 linked_entities（关联实体name_cn列表，不得为空）。
-每个动作必须填写 linked_entities、linked_logic_names、以及 function_code（Python实现函数）。
 
-function_code 格式：def action_en_name(context: dict) -> dict，实现实际业务逻辑，不要只写注释。
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
 
 返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "实体中文名", "name_en": "EntityEnglish", "type": "Organization|Product|Material|Category|Document|Process|Facility|Concept", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "IS-A|PART-OF|INSTANCE-OF|supply|stores|processes|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "规则描述", "confidence": 0.9, "linked_entities": ["实体name_cn"]}],
-  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "动作描述", "confidence": 0.9, "linked_entities": ["实体name_cn"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    return {'status': 'ok'}"}]
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property", "definition": "派生属性 = 表达式", "description": "规则描述", "confidence": 0.9, "linked_entities": ["实体name_cn"]}],
+  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "target", "type": "object_reference", "description": "操作目标"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "新值"}], "submission_criteria": ["前置条件表达式"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "动作描述", "confidence": 0.9, "linked_entities": ["实体name_cn"], "linked_logic_names": ["逻辑规则name_cn"]}]
 }"""},
     {"name": "供应链本体提取", "domain": "供应链", "content": """你是供应链领域本体工程专家。从文档中提取完整的供应链本体。
 
@@ -55,24 +68,11 @@ function_code 格式：def action_en_name(context: dict) -> dict，实现实际�
 
 【关系类型】尽可能多地提取：supply、IS-A、PART-OF、INSTANCE-OF、stores、processes、关联
 
-【逻辑规则】提取IF-THEN形式业务规则。
-每条规则必须填写 linked_entities，从已提取实体中选1-5个直接相关实体的name_cn，不得为空。
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
 
-【动作】提取可执行业务动作。每个动作必须填写：
-- linked_entities（涉及实体的name_cn列表）
-- linked_logic_names（触发该动作的逻辑规则name_cn列表）
-- function_code：完整的 Python 函数，函数名为 name_en 的 snake_case，签名 (context: dict) -> dict，实现实际业务逻辑，不要只写注释或 pass。
-
-function_code 示例（供应链）：
-def trigger_purchase_request(context: dict) -> dict:
-    material = context.get('material_name', '')
-    current_stock = context.get('current_stock', 0)
-    safety_stock = context.get('safety_stock', 0)
-    if current_stock < safety_stock:
-        order_id = f"PO-{material[:4].upper()}-AUTO"
-        return {'status': 'triggered', 'order_id': order_id,
-                'message': f'{material} 当前库存 {current_stock}，低于安全库存 {safety_stock}，采购申请已创建'}
-    return {'status': 'skipped', 'message': f'{material} 库存充足，无需触发采购'}
+供应链领域示例：
+- Logic: {"name_cn": "安全库存预警", "name_en": "SafetyStockAlert", "function_type": "derived_property", "definition": "stock_gap = safety_stock - current_stock", "description": "库存低于安全线时的差值", "confidence": 0.9, "linked_entities": ["物料", "仓库"]}
+- Action: {"name_cn": "自动创建采购申请", "name_en": "TriggerPurchaseRequest", "parameters": [{"name": "material", "type": "object_reference", "description": "触发补货的物料"}], "rules": [{"operation": "Create Object", "target": "PurchaseOrder", "value": "material=material, qty=safety_stock-current_stock"}], "submission_criteria": ["material.current_stock < material.safety_stock"], "side_effects": [{"type": "Notification", "target": "采购负责人", "detail": "已为{material}生成补货申请"}], "description": "库存低于安全库存时自动创建采购申请", "confidence": 0.9, "linked_entities": ["物料"], "linked_logic_names": ["安全库存预警"]}
 
 返回JSON，不要有多余文字：
 {
@@ -83,10 +83,10 @@ def trigger_purchase_request(context: dict) -> dict:
     {"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "supply|IS-A|PART-OF|INSTANCE-OF|stores|processes|关联", "confidence": 0.85}
   ],
   "logic_rules": [
-    {"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}
+    {"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}
   ],
   "actions": [
-    {"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', 0)\\n    if val < context.get('threshold', 100):\\n        return {'status': 'triggered', 'message': '已触发'}\\n    return {'status': 'skipped', 'message': '条件未满足'}"}
+    {"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "字段名", "type": "object_reference", "description": "说明"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "取值"}], "submission_criteria": ["前置条件"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"]}
   ]
 }"""},
     {"name": "医疗本体提取", "domain": "医疗", "content": """你是医疗领域本体工程专家。从文档中提取完整的医疗健康本体。
@@ -130,31 +130,18 @@ def trigger_purchase_request(context: dict) -> dict:
 
 【关系类型】：treats（治疗）、causes（引起）、IS-A（属于）、PART-OF（包含）、INSTANCE-OF、关联
 
-【逻辑规则】：诊断规则、用药禁忌、剂量规则（IF-THEN形式）。
-每条规则必须填写 linked_entities（1-5个直接相关实体name_cn），不得为空。
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
 
-【动作】：开具处方、触发检查、发送提醒、更新病历等。每个动作必须填写：
-- linked_entities（涉及实体的name_cn列表）
-- linked_logic_names（触发该动作的逻辑规则name_cn列表）
-- function_code：完整 Python 函数，签名 (context: dict) -> dict，实现实际逻辑，不要只写注释或 pass。
-
-function_code 示例：
-def prescribe_medication(context: dict) -> dict:
-    patient_id = context.get('patient_id', '')
-    drug_name = context.get('drug_name', '')
-    dosage = context.get('dosage', '标准剂量')
-    allergy_list = context.get('allergy_list', [])
-    if drug_name in allergy_list:
-        return {'status': 'blocked', 'message': f'患者对 {drug_name} 过敏，禁止开具'}
-    return {'status': 'prescribed', 'patient_id': patient_id,
-            'drug': drug_name, 'dosage': dosage, 'message': '处方已开具'}
+医疗领域示例：
+- Logic: {"name_cn": "药物过敏禁忌判定", "name_en": "AllergyContraindication", "function_type": "complex_edit", "definition": "若 drug_name 命中患者 allergy_list，将处方状态置为 blocked 并记录禁忌原因", "description": "开具处方前的过敏禁忌校验", "confidence": 0.9, "linked_entities": ["药物", "患者"]}
+- Action: {"name_cn": "开具处方", "name_en": "PrescribeMedication", "parameters": [{"name": "patient", "type": "object_reference", "description": "患者"}, {"name": "drug", "type": "object_reference", "description": "拟开具药物"}], "rules": [{"operation": "Create Object", "target": "Prescription", "value": "patient=patient, drug=drug"}], "submission_criteria": ["drug not in patient.allergy_list"], "side_effects": [{"type": "Notification", "target": "患者", "detail": "处方已开具"}], "description": "为患者开具药物处方", "confidence": 0.9, "linked_entities": ["药物", "患者"], "linked_logic_names": ["药物过敏禁忌判定"]}
 
 返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "创伤性应激障碍", "name_abbr": "PTSD", "name_en": "Post-Traumatic Stress Disorder", "type": "Disease", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "treats|causes|IS-A|PART-OF|INSTANCE-OF|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
-  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', '')\\n    return {'status': 'ok', 'value': val}"}]
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
+  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "字段名", "type": "object_reference", "description": "说明"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "取值"}], "submission_criteria": ["前置条件"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"]}]
 }"""},
     {"name": "财务本体提取", "domain": "财务", "content": """你是财务领域本体工程专家。从文档中提取完整的财务会计本体。
 
@@ -177,28 +164,18 @@ def prescribe_medication(context: dict) -> dict:
 5. PART-OF 报表：各科目 PART-OF 其所属报表（资产负债表/利润表/现金流量表）
 6. supply 采购流程：采购订单→入库单→仓库存货之间的流转关系
 
-【逻辑规则】：会计准则、预警规则、审批规则（IF-THEN形式）。
-每条规则必须填写 linked_entities（1-5个直接相关实体name_cn），不得为空。
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
 
-【动作】：触发对账、生成报表、发起付款审批、库存补货等。每个动作必须填写：
-- linked_entities（涉及实体的name_cn列表）
-- linked_logic_names（触发该动作的逻辑规则name_cn列表）
-- function_code：完整 Python 函数，签名 (context: dict) -> dict，实现实际逻辑，不要只写注释或 pass。
-
-function_code 示例：
-def trigger_payment_approval(context: dict) -> dict:
-    amount = context.get('amount', 0)
-    vendor = context.get('vendor_name', '')
-    approver = 'CFO' if amount > 500000 else '财务总监' if amount > 100000 else '财务主管'
-    return {'status': 'pending_approval', 'vendor': vendor, 'amount': amount,
-            'approver': approver, 'message': f'付款申请 ¥{amount:,} 已提交至 {approver} 审批'}
+财务领域示例：
+- Logic: {"name_cn": "大额付款分级审批人", "name_en": "PaymentApproverTier", "function_type": "derived_property", "definition": "approver = CFO if amount > 500000 else 财务总监 if amount > 100000 else 财务主管", "description": "按付款金额推导审批人", "confidence": 0.9, "linked_entities": ["付款申请"]}
+- Action: {"name_cn": "发起付款审批", "name_en": "TriggerPaymentApproval", "parameters": [{"name": "payment", "type": "object_reference", "description": "付款申请"}], "rules": [{"operation": "Modify", "target": "Payment.status", "value": "pending_approval"}], "submission_criteria": ["payment.amount > 0"], "side_effects": [{"type": "Notification", "target": "approver", "detail": "付款申请待审批"}], "description": "提交付款申请进入审批流程", "confidence": 0.9, "linked_entities": ["付款申请"], "linked_logic_names": ["大额付款分级审批人"]}
 
 返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "财务概念", "name_en": "ConceptName", "type": "Asset|Liability|Revenue|Expense|Document|Category|Process", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "概念A", "target": "概念B", "type": "IS-A|PART-OF|INSTANCE-OF|supply|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
-  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', 0)\\n    return {'status': 'triggered', 'value': val}"}]
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
+  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "字段名", "type": "object_reference", "description": "说明"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "取值"}], "submission_criteria": ["前置条件"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"]}]
 }"""},
     {"name": "营销本体提取", "domain": "其他", "content": """你是营销领域本体工程专家。从文档中提取完整的营销与客户运营本体。
 
@@ -220,25 +197,19 @@ def trigger_payment_approval(context: dict) -> dict:
 7. 关联：渠道与获客、产品与客户群、健康度与续约之间的关联
 
 每个实体必须填写 properties（最多3个关键属性，如占比、合同额、转化率），不得为空。
-每条逻辑规则必须填写 linked_entities（1-5个直接相关实体name_cn），不得为空。
-每个动作必须填写 linked_entities、linked_logic_names 及 function_code（完整Python函数，不要只写注释）。
 
-function_code 示例：
-def trigger_customer_win_back(context: dict) -> dict:
-    customer_id = context.get('customer_id', '')
-    days_inactive = context.get('days_inactive', 0)
-    ticket_count = context.get('last_month_tickets', 0)
-    if days_inactive >= 14 and ticket_count > 3:
-        return {'status': 'triggered', 'customer_id': customer_id,
-                'action': 'winback_campaign', 'message': f'客户 {customer_id} 已 {days_inactive} 天未登录且工单异常，已启动挽回流程'}
-    return {'status': 'skipped', 'message': '未达触发条件'}
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
+
+营销领域示例：
+- Logic: {"name_cn": "客户流失风险评分", "name_en": "ChurnRiskScore", "function_type": "aggregation", "definition": "AVG(days_inactive, ticket_count) GROUP BY customer_id", "description": "综合不活跃天数与工单量计算流失风险", "confidence": 0.9, "linked_entities": ["客户"]}
+- Action: {"name_cn": "触发客户挽回流程", "name_en": "TriggerCustomerWinBack", "parameters": [{"name": "customer", "type": "object_reference", "description": "目标客户"}], "rules": [{"operation": "Create Object", "target": "WinbackCampaign", "value": "customer=customer"}], "submission_criteria": ["customer.days_inactive >= 14", "customer.last_month_tickets > 3"], "side_effects": [{"type": "Notification", "target": "客户成功经理", "detail": "已启动挽回流程"}], "description": "客户长期不活跃且工单异常时启动挽回流程", "confidence": 0.9, "linked_entities": ["客户"], "linked_logic_names": ["客户流失风险评分"]}
 
 返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "实体名", "name_en": "EntityName", "type": "Category|Organization|Product|Process|Concept|Document", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "IS-A|PART-OF|INSTANCE-OF|supply|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
-  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', 0)\\n    return {'status': 'triggered', 'value': val}"}]
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
+  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "字段名", "type": "object_reference", "description": "说明"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "取值"}], "submission_criteria": ["前置条件"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"]}]
 }"""},
     {"name": "HR本体提取", "domain": "其他", "content": """你是人力资源领域本体工程专家。从文档中提取完整的HR与人才管理本体。
 
@@ -259,43 +230,32 @@ def trigger_customer_win_back(context: dict) -> dict:
 7. 关联：岗位与所属部门之间的关联
 
 每个实体必须填写 properties（最多3个关键属性，如员工数、薪资范围、转化率），不得为空。
-每条逻辑规则必须填写 linked_entities（1-5个直接相关实体name_cn），不得为空。
-每个动作必须填写 linked_entities、linked_logic_names 及 function_code（完整Python函数，不要只写注释）。
 
-function_code 示例：
-def trigger_retention_review(context: dict) -> dict:
-    employee_id = context.get('employee_id', '')
-    consecutive_c = context.get('consecutive_c_quarters', 0)
-    market_gap_pct = context.get('salary_market_gap_pct', 0)
-    wait_months = context.get('promotion_wait_months', 0)
-    reasons = []
-    if consecutive_c >= 2: reasons.append(f'连续{consecutive_c}季度绩效C')
-    if market_gap_pct > 20: reasons.append(f'薪资低于市场P50超{market_gap_pct}%')
-    if wait_months > 30: reasons.append(f'晋升等待{wait_months}个月')
-    if reasons:
-        return {'status': 'triggered', 'employee_id': employee_id,
-                'reasons': reasons, 'message': 'Retention Review 已启动: ' + '、'.join(reasons)}
-    return {'status': 'skipped', 'message': '未达触发条件'}
+""" + _LOGIC_INSTRUCTIONS + "\n\n" + _ACTION_INSTRUCTIONS + """
+
+HR领域示例：
+- Logic: {"name_cn": "保留面谈触发因素", "name_en": "RetentionReviewFactors", "function_type": "complex_edit", "definition": "连续两季度绩效C，或薪资低于市场P50超20%，或晋升等待超30个月时，汇总触发原因", "description": "识别需要发起保留面谈的员工", "confidence": 0.9, "linked_entities": ["员工"]}
+- Action: {"name_cn": "启动保留面谈", "name_en": "TriggerRetentionReview", "parameters": [{"name": "employee", "type": "object_reference", "description": "目标员工"}], "rules": [{"operation": "Create Object", "target": "RetentionReview", "value": "employee=employee"}], "submission_criteria": ["employee.consecutive_c_quarters >= 2 || employee.salary_market_gap_pct > 20 || employee.promotion_wait_months > 30"], "side_effects": [{"type": "Notification", "target": "HRBP", "detail": "已为{employee}启动保留面谈"}], "description": "命中保留风险因素时启动面谈流程", "confidence": 0.9, "linked_entities": ["员工"], "linked_logic_names": ["保留面谈触发因素"]}
 
 返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "实体名", "name_en": "EntityName", "type": "Organization|Category|Concept|Process|Document", "description": "描述", "properties": {"属性名": "值"}, "confidence": 0.9}],
   "relations": [{"source": "实体A的name_cn", "target": "实体B的name_cn", "type": "IS-A|PART-OF|INSTANCE-OF|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
-  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "execution_rule": "触发条件及执行逻辑", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"], "function_code": "def action_name(context: dict) -> dict:\\n    val = context.get('key', 0)\\n    return {'status': 'triggered', 'value': val}"}]
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1", "实体name_cn_2"]}],
+  "actions": [{"name_cn": "动作名", "name_en": "ActionName", "parameters": [{"name": "字段名", "type": "object_reference", "description": "说明"}], "rules": [{"operation": "Modify", "target": "实体.字段", "value": "取值"}], "submission_criteria": ["前置条件"], "side_effects": [{"type": "Notification", "target": "相关方", "detail": "通知内容"}], "description": "描述", "confidence": 0.9, "linked_entities": ["实体name_cn_1"], "linked_logic_names": ["逻辑规则name_cn"]}]
 }"""},
     {"name": "法律本体提取", "domain": "法律", "content": """从法律文档中提取法律概念、主体、权利义务关系，返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "法律概念", "name_en": "LegalConcept", "type": "Subject|Right|Obligation|Document|Concept", "description": "描述", "confidence": 0.9}],
   "relations": [{"source": "主体A", "target": "概念B", "type": "IS-A|PART-OF|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 法律后果", "description": "描述", "confidence": 0.9}],
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "法律条件与后果的表达式或描述", "description": "描述", "confidence": 0.9}],
   "actions": []
 }"""},
     {"name": "教育本体提取", "domain": "教育", "content": """从教育文档中提取课程、知识点、能力等概念及关系，返回JSON，不要有多余文字：
 {
   "entities": [{"name_cn": "教育概念", "name_en": "EduConcept", "type": "Course|Knowledge|Skill|Category|Process", "description": "描述", "confidence": 0.9}],
   "relations": [{"source": "概念A", "target": "概念B", "type": "IS-A|PART-OF|prerequisite|关联", "confidence": 0.85}],
-  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "formula": "IF 条件 THEN 结论", "description": "描述", "confidence": 0.9}],
+  "logic_rules": [{"name_cn": "规则名", "name_en": "RuleName", "function_type": "derived_property|aggregation|complex_edit|external_query", "definition": "表达式或描述", "description": "描述", "confidence": 0.9}],
   "actions": []
 }"""},
 ]
@@ -383,7 +343,9 @@ def generate_prompt_template(
     system_msg = (
         "你是一个本体工程专家，擅长为不同业务域设计 LLM 提取提示词。"
         "根据用户指定的业务域，生成一个完整的本体提取 Prompt。"
-        "Prompt 需要：1) 列出该域典型实体类型；2) 列出关系类型；3) 要求提取逻辑规则和动作；"
+        "Prompt 需要：1) 列出该域典型实体类型；2) 列出关系类型；3) 要求按 Palantir Ontology "
+        "Functions 模型（derived_property/aggregation/complex_edit/external_query）提取逻辑规则，"
+        "按 Palantir Action 模型（parameters/rules/submission_criteria/side_effects）提取动作；"
         "4) 规定返回 JSON 格式（entities/relations/logic_rules/actions）。"
         "只返回 Prompt 文本本身，不要有其他说明。"
     )

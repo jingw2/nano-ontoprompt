@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 from app.deps import get_db, get_current_user, require_admin, require_editor
 from app.models.ontology import OntologyProject
@@ -71,4 +72,24 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(r
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
-    db.delete(p); db.commit()
+    bound_agent = db.execute(text(
+        "SELECT 1 FROM agent_ontology_bindings WHERE ontology_id = :id LIMIT 1"
+    ), {"id": ontology_id}).scalar_one_or_none()
+    if bound_agent:
+        raise HTTPException(409, detail="ONTOLOGY_BOUND_TO_AGENT")
+    # Access-control/review-annotation/schema-metadata/outbox rows only make
+    # sense while the ontology exists; they carry no audit value once it's
+    # gone, unlike execution history (agent runs, sandbox simulations,
+    # business-journey records, MCP write requests) rooted through
+    # ontology_releases, which a delete must not silently wipe.
+    for table in (
+        "ontology_data_grants", "ontology_project_access_grants", "ontology_migration_findings",
+        "agent_index_outbox", "entity_property_definitions", "entity_instance_relations",
+    ):
+        db.execute(text(f"DELETE FROM {table} WHERE ontology_id = :id"), {"id": ontology_id})
+    try:
+        db.delete(p)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail="ONTOLOGY_HAS_DEPENDENT_DATA")

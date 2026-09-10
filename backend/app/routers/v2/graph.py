@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.deps import get_current_user, require_editor
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
+from app.services.relation_dedup import dedupe_relation_edges as _dedupe_relation_edges
 from app.database import SessionLocal
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -60,17 +61,10 @@ def _sqlite_graph_data(ontology_id: str, limit: int = 200, label_filter: str | N
         entities = query.limit(limit).all()
         entity_ids = {e.id for e in entities}
         relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-        edges = [
-            {
-                "id": r.id,
-                "source": r.source_entity,
-                "target": r.target_entity,
-                "type": r.type or "RELATED",
-                "properties": r.properties or {},
-            }
-            for r in relations
+        edges = _dedupe_relation_edges(
+            r for r in relations
             if r.source_entity in entity_ids and r.target_entity in entity_ids
-        ]
+        )
         nodes = [
             {
                 "id": e.id,

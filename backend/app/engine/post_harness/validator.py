@@ -92,7 +92,7 @@ class PostHarnessValidator:
         self._dedup_check(data, report)
         self._instance_leakage_check(data, report)
         self._type_check(data, report, allowed_types or self.DEFAULT_ALLOWED_TYPES)
-        self._syntax_check(data, report)          # Fix 3: Python syntax validation
+        self._action_shape_check(data, report)    # Fix 3: Action component shape validation
         self._linked_ref_check(data, report)      # Fix 3: semantic reference integrity
         return report
 
@@ -161,9 +161,9 @@ class PostHarnessValidator:
             if not (action.get("linked_logic_names") or action.get("linked_logic_ids")):
                 report.add(Severity.WARNING, "ACTION_NO_LOGIC_LINK",
                            f"动作「{name}」未关联任何逻辑规则", {"name": name})
-            if not action.get("function_code"):
-                report.add(Severity.WARNING, "ACTION_NO_CODE",
-                           f"动作「{name}」缺少 function_code", {"name": name})
+            if not action.get("rules"):
+                report.add(Severity.WARNING, "ACTION_NO_RULES",
+                           f"动作「{name}」缺少 rules（对本体的编辑操作）", {"name": name})
 
     # ── 3. Reference integrity ──────────────────────────────────────────────
     def _reference_check(self, data: dict, report: ValidationReport):
@@ -225,24 +225,21 @@ class PostHarnessValidator:
                            f"实体「{name}」形似具体记录编号，应作为 instance 而非概念 entity",
                            {"name_cn": name})
 
-    # ── 6. Python syntax check on function_code ────────────────────────────
-    def _syntax_check(self, data: dict, report: ValidationReport):
-        import ast
+    # ── 6. Structural shape check on Action components ─────────────────────
+    def _action_shape_check(self, data: dict, report: ValidationReport):
+        list_fields = ("parameters", "rules", "submission_criteria", "side_effects")
         for action in data.get("actions", []):
             if not isinstance(action, dict):
                 continue
-            code = (action.get("function_code") or "").strip()
             name = action.get("name_cn", "?")
-            if not code:
-                continue
-            try:
-                ast.parse(code)
-            except SyntaxError as exc:
-                report.add(
-                    Severity.ERROR, "ACTION_SYNTAX_ERROR",
-                    f"动作「{name}」的 function_code 语法错误: {exc.msg}（第 {exc.lineno} 行）",
-                    {"name": name, "lineno": exc.lineno, "error": exc.msg},
-                )
+            for field_name in list_fields:
+                val = action.get(field_name)
+                if val is not None and not isinstance(val, list):
+                    report.add(
+                        Severity.ERROR, "ACTION_MALFORMED_FIELD",
+                        f"动作「{name}」的 {field_name} 必须是数组",
+                        {"name": name, "field": field_name},
+                    )
 
     # ── 7. Semantic reference integrity ────────────────────────────────────
     def _linked_ref_check(self, data: dict, report: ValidationReport):

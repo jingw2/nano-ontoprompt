@@ -42,10 +42,10 @@ def _canonical(value) -> str:
 
 def _normalize_binding(binding: dict) -> dict:
     """Canonical binding shape for hashing: always includes ontology_id,
-    capabilities, allowlists and selected_tools; `enabled_categories` is
-    included only when present (None keeps the legacy selected_tools-only
-    filter).  Old-version hashes stay byte-identical and new saves are
-    deterministic regardless of client shape."""
+    capabilities, allowlists and selected_tools; `enabled_categories` and
+    `tool_catalog_limit` are included only when present (their absence keeps
+    legacy behavior unchanged).  Old-version hashes stay byte-identical and
+    new saves are deterministic regardless of client shape."""
     normalized = {
         "ontology_id": binding["ontology_id"],
         "capabilities": list(binding.get("capabilities") or []),
@@ -54,6 +54,8 @@ def _normalize_binding(binding: dict) -> dict:
     }
     if binding.get("enabled_categories") is not None:
         normalized["enabled_categories"] = list(binding["enabled_categories"])
+    if binding.get("tool_catalog_limit") is not None:
+        normalized["tool_catalog_limit"] = binding["tool_catalog_limit"]
     return normalized
 
 
@@ -90,7 +92,8 @@ def _verify_model_version(db: Session, model_config_version_id: str, model_name:
 
 def _child_tree(db: Session, agent_version_id: str) -> dict:
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories, "
+        "tool_catalog_limit "
         "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": agent_version_id}).mappings().all()
     tools = db.execute(text(
@@ -183,7 +186,8 @@ def create_agent(
 
 def _clone_child_rows(db: Session, source_version_id: str, target_version_id: str) -> None:
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories, "
+        "tool_catalog_limit "
         "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": source_version_id}).mappings().all()
     for row in bindings:
@@ -216,19 +220,21 @@ def _insert_binding(db: Session, agent_version_id: str, binding: dict) -> None:
     """Insert one immutable ontology-binding child row.  JSON columns are
     passed as canonical strings with an explicit json cast (works on both
     PostgreSQL and SQLite text() execution).  `enabled_categories` NULL keeps
-    the legacy selected_tools-only filter for pre-category bindings."""
+    the legacy selected_tools-only filter for pre-category bindings;
+    `tool_catalog_limit` NULL keeps today's unlimited tool-catalog size."""
     db.execute(text(
         "INSERT INTO agent_ontology_bindings "
         "(id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, "
-        " enabled_categories, created_at) "
+        " enabled_categories, tool_catalog_limit, created_at) "
         "VALUES (:id, :av, :o, CAST(:caps AS json), CAST(:al AS json), CAST(:st AS json), "
-        " :ec, now())"
+        " :ec, :tcl, now())"
     ), {
         "id": _new_id(), "av": agent_version_id, "o": binding["ontology_id"],
         "caps": _canonical(binding.get("capabilities") or []),
         "al": _canonical(binding.get("allowlists") or {}),
         "st": _canonical(binding.get("selected_tools") or []),
         "ec": _canonical(binding["enabled_categories"]) if binding.get("enabled_categories") is not None else None,
+        "tcl": binding.get("tool_catalog_limit"),
     })
 
 

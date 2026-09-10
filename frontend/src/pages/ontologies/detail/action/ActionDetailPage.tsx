@@ -7,6 +7,32 @@ import ConfidenceBar from '@/components/ConfidenceBar'
 import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check } from 'lucide-react'
 import type { Action, Entity, LogicRule } from '@/types/ontology'
 
+/** One JSON-array field of an Action's four Palantir components, edited as
+ * raw JSON text (consistent with V2DefinitionEditor's pattern elsewhere in
+ * this app) since each entry's shape varies by field. */
+function JsonListField({
+  label, placeholder, value, onChange, error,
+}: {
+  label: string
+  placeholder: string
+  value: string
+  onChange: (v: string) => void
+  error?: string
+}) {
+  return (
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">{label}</label>
+      <textarea value={value} onChange={e => onChange(e.target.value)} rows={4} placeholder={placeholder}
+        className="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-none" />
+      {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+    </div>
+  )
+}
+
+function formatJsonList(value: unknown): string {
+  return JSON.stringify(value ?? [], null, 2)
+}
+
 function ChipEditor({
   editing, items, onRemove, availableOptions, onAdd, color,
 }: {
@@ -78,6 +104,11 @@ export default function ActionDetailPage() {
   const [entitiesEditing, setEntitiesEditing] = useState(false)
   const [logicEditing, setLogicEditing] = useState(false)
   const { register, handleSubmit, reset } = useForm<Partial<Action>>()
+  const [parametersText, setParametersText] = useState('[]')
+  const [rulesText, setRulesText] = useState('[]')
+  const [criteriaText, setCriteriaText] = useState('[]')
+  const [effectsText, setEffectsText] = useState('[]')
+  const [jsonError, setJsonError] = useState('')
 
   const { data: action, isLoading } = useQuery({
     queryKey: ['action', oid, aid],
@@ -119,10 +150,28 @@ export default function ActionDetailPage() {
     },
   })
 
-  const onSubmit = (data: Partial<Action>) => updateMut.mutate(data)
+  const onSubmit = (data: Partial<Action>) => {
+    try {
+      const parameters = JSON.parse(parametersText)
+      const rules = JSON.parse(rulesText)
+      const submission_criteria = JSON.parse(criteriaText)
+      const side_effects = JSON.parse(effectsText)
+      setJsonError('')
+      updateMut.mutate({ ...data, parameters, rules, submission_criteria, side_effects })
+    } catch {
+      setJsonError('参数 / 规则 / 提交条件 / 副作用必须是合法 JSON 数组')
+    }
+  }
 
   const startEdit = () => {
-    if (action) reset(action)
+    if (action) {
+      reset(action)
+      setParametersText(formatJsonList(action.parameters))
+      setRulesText(formatJsonList(action.rules))
+      setCriteriaText(formatJsonList(action.submission_criteria))
+      setEffectsText(formatJsonList(action.side_effects))
+      setJsonError('')
+    }
     setEditing(true)
   }
 
@@ -227,14 +276,17 @@ export default function ActionDetailPage() {
               <label className="block text-xs text-gray-500 mb-1">描述</label>
               <textarea {...register('description')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">执行规则</label>
-              <textarea {...register('execution_rule')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
+            <div className="grid grid-cols-2 gap-4">
+              <JsonListField label="参数 (Parameters)" value={parametersText} onChange={setParametersText}
+                placeholder='[{"name": "target", "type": "object_reference", "description": "..."}]' />
+              <JsonListField label="规则 (Rules)" value={rulesText} onChange={setRulesText}
+                placeholder='[{"operation": "Modify", "target": "Entity.field", "value": "..."}]' />
+              <JsonListField label="提交条件 (Submission Criteria)" value={criteriaText} onChange={setCriteriaText}
+                placeholder='["new_flight.status != Cancelled"]' />
+              <JsonListField label="副作用 (Side Effects)" value={effectsText} onChange={setEffectsText}
+                placeholder='[{"type": "Notification", "target": "...", "detail": "..."}]' />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">函数代码</label>
-              <textarea {...register('function_code')} rows={6} className="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-none" />
-            </div>
+            {jsonError && <p className="text-xs text-red-500">{jsonError}</p>}
           </form>
         ) : (
           <div className="space-y-4">
@@ -263,16 +315,28 @@ export default function ActionDetailPage() {
               <p className="text-xs text-gray-500 mb-1">描述</p>
               <p className="text-sm text-gray-700">{action.description || '—'}</p>
             </div>
-            {action.execution_rule && (
+            {!!action.parameters?.length && (
               <div>
-                <p className="text-xs text-gray-500 mb-1">执行规则</p>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{action.execution_rule}</p>
+                <p className="text-xs text-gray-500 mb-1">参数 (Parameters)</p>
+                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap overflow-x-auto">{formatJsonList(action.parameters)}</div>
               </div>
             )}
-            {action.function_code && (
+            {!!action.rules?.length && (
               <div>
-                <p className="text-xs text-gray-500 mb-1">函数代码</p>
-                <div className="bg-gray-900 rounded-lg p-4 font-mono text-xs text-green-300 whitespace-pre-wrap overflow-x-auto">{action.function_code}</div>
+                <p className="text-xs text-gray-500 mb-1">规则 (Rules)</p>
+                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap overflow-x-auto">{formatJsonList(action.rules)}</div>
+              </div>
+            )}
+            {!!action.submission_criteria?.length && (
+              <div>
+                <p className="text-xs text-gray-500 mb-1">提交条件 (Submission Criteria)</p>
+                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap overflow-x-auto">{formatJsonList(action.submission_criteria)}</div>
+              </div>
+            )}
+            {!!action.side_effects?.length && (
+              <div>
+                <p className="text-xs text-gray-500 mb-1">副作用 (Side Effects)</p>
+                <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap overflow-x-auto">{formatJsonList(action.side_effects)}</div>
               </div>
             )}
             <div className="grid grid-cols-2 gap-4 pt-2 border-t">

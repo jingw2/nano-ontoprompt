@@ -26,7 +26,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
   const [ontologies, setOntologies] = useState<PublishedOntology[]>([])
   const {
     bindings, setBindings, toolsByOntology, error, setError,
-    bindOntology, unbindOntology, toggleCategory, toggleTool,
+    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit,
   } = useOntologyToolSelection(ontologies)
   const [validation, setValidation] = useState<ToolValidationResult | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -121,6 +121,9 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         ...(b.enabled_categories !== undefined && b.enabled_categories !== null
           ? { enabled_categories: b.enabled_categories }
           : {}),
+        ...(b.tool_catalog_limit !== undefined && b.tool_catalog_limit !== null
+          ? { tool_catalog_limit: b.tool_catalog_limit }
+          : {}),
       })))
       setError('')
     })
@@ -191,7 +194,8 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         {/* OntologyToolSelector renders the published-ontology dropdown (data-testid="ontology-picker") and bound-ontology panels */}
         <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
           canEdit={canEdit} onBind={bindOntology} onUnbind={unbindOntology}
-          onToggleCategory={toggleCategory} onToggleTool={toggleTool} error={error} />
+          onToggleCategory={toggleCategory} onToggleTool={toggleTool}
+          onSetToolCatalogLimit={setToolCatalogLimit} error={error} />
       </div>
 
       {validation && (

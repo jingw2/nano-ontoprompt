@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [promptSearch, setPromptSearch] = useState('')
   const [promptDomainFilter, setPromptDomainFilter] = useState('')
   const [deletePromptTarget, setDeletePromptTarget] = useState<Prompt | null>(null)
+  const [deleteUserTarget, setDeleteUserTarget] = useState<SettingsUser | null>(null)
 
   const { register: regUser, handleSubmit: handleUserSubmit, reset: resetUser } =
     useForm<{ username: string; email: string; password: string; role: string }>()
@@ -106,7 +107,10 @@ export default function SettingsPage() {
 
   const deleteUserMut = useMutation({
     mutationFn: (id: string) => usersApi.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      setDeleteUserTarget(null)
+    },
   })
 
   const { data: prompts = [], isLoading: promptsLoading } = useQuery({
@@ -518,7 +522,7 @@ export default function SettingsPage() {
       )}
 
       {activeTab === 'users' && (
-        <div className="max-w-2xl">
+        <div className="max-w-5xl">
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-500">{t('settings.users_desc')}</p>
             <button
@@ -571,50 +575,7 @@ export default function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map(u => editingUserId === u.id ? (
-                    <tr key={u.id} className="border-b bg-gray-50">
-                      <td colSpan={5} className="px-4 py-3">
-                        <form onSubmit={handleEditSubmit(d => {
-                          const payload: UserUpdatePayload = { username: d.username, email: d.email, role: d.role }
-                          if (d.password) payload.password = d.password
-                          updateUserMut.mutate({ id: u.id, data: payload })
-                        })} className="grid grid-cols-4 gap-2 items-end">
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">{t('settings.col_username')}</label>
-                            <input {...regEdit('username', { required: true })}
-                              className="w-full border rounded px-2 py-1.5 text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">{t('settings.col_email')}</label>
-                            <input {...regEdit('email')} type="email"
-                              className="w-full border rounded px-2 py-1.5 text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">{t('settings.new_password_label')}</label>
-                            <input {...regEdit('password')} type="password" placeholder={t('settings.password_placeholder')}
-                              className="w-full border rounded px-2 py-1.5 text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">{t('settings.col_role')}</label>
-                            <select {...regEdit('role')} className="w-full border rounded px-2 py-1.5 text-sm">
-                              <option value="user">{t('settings.role_user')}</option>
-                              <option value="admin">{t('settings.role_admin')}</option>
-                            </select>
-                          </div>
-                          <div className="col-span-4 flex justify-end gap-2 mt-1">
-                            <button type="button" onClick={() => setEditingUserId(null)}
-                              className="flex items-center gap-1 px-3 py-1.5 border rounded text-sm text-gray-600">
-                              <X size={13} /> {t('common.cancel')}
-                            </button>
-                            <button type="submit" disabled={updateUserMut.isPending}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-black text-white rounded text-sm disabled:opacity-50">
-                              <Check size={13} /> {t('common.save')}
-                            </button>
-                          </div>
-                        </form>
-                      </td>
-                    </tr>
-                  ) : (
+                  {users.map(u => (
                     <tr key={u.id} className="border-b last:border-0">
                       <td className="px-4 py-3 font-medium">{u.username}</td>
                       <td className="px-4 py-3 text-gray-500">{u.email || '—'}</td>
@@ -632,9 +593,7 @@ export default function SettingsPage() {
                             className="text-gray-500 hover:text-black">
                             <Pencil size={14} />
                           </button>
-                          <button onClick={() => {
-                            if (confirm(t('settings.confirm_delete_user', { name: u.username }))) deleteUserMut.mutate(u.id)
-                          }} className="text-red-500 hover:text-red-700">
+                          <button onClick={() => setDeleteUserTarget(u)} className="text-red-500 hover:text-red-700">
                             <Trash2 size={14} />
                           </button>
                         </div>
@@ -645,6 +604,75 @@ export default function SettingsPage() {
               </table>
             )}
           </div>
+
+          {editingUserId && (() => {
+            const editingUser = users.find(u => u.id === editingUserId)
+            if (!editingUser) return null
+            return (
+              <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-6" onClick={() => setEditingUserId(null)}>
+                <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <h3 className="font-semibold mb-4">{t('settings.edit_user')}</h3>
+                  <form onSubmit={handleEditSubmit(d => {
+                    const payload: UserUpdatePayload = { username: d.username, email: d.email, role: d.role }
+                    if (d.password) payload.password = d.password
+                    updateUserMut.mutate({ id: editingUser.id, data: payload })
+                  })} className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t('settings.col_username')}</label>
+                      <input {...regEdit('username', { required: true })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t('settings.col_email')}</label>
+                      <input {...regEdit('email')} type="email"
+                        className="w-full border rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t('settings.new_password_label')}</label>
+                      <input {...regEdit('password')} type="password" placeholder={t('settings.password_placeholder')}
+                        className="w-full border rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t('settings.col_role')}</label>
+                      <select {...regEdit('role')} className="w-full border rounded-lg px-3 py-2 text-sm">
+                        <option value="user">{t('settings.role_user')}</option>
+                        <option value="admin">{t('settings.role_admin')}</option>
+                      </select>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button type="button" onClick={() => setEditingUserId(null)}
+                        className="flex items-center gap-1 px-3 py-1.5 border rounded-lg text-sm text-gray-600">
+                        <X size={13} /> {t('common.cancel')}
+                      </button>
+                      <button type="submit" disabled={updateUserMut.isPending}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-black text-white rounded-lg text-sm disabled:opacity-50">
+                        <Check size={13} /> {t('common.save')}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )
+          })()}
+
+          {deleteUserTarget && (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-6">
+              <div className="bg-white rounded-xl shadow-lg p-6 w-96">
+                <h3 className="font-semibold mb-2">{t('settings.confirm_delete_user_title')}</h3>
+                <p className="text-sm text-gray-600 mb-5">{t('settings.confirm_delete_user', { name: deleteUserTarget.username })}</p>
+                <div className="flex justify-end gap-3">
+                  <button onClick={() => setDeleteUserTarget(null)} className="px-4 py-2 border rounded-lg text-sm">{t('common.cancel')}</button>
+                  <button
+                    onClick={() => deleteUserMut.mutate(deleteUserTarget.id)}
+                    disabled={deleteUserMut.isPending}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50"
+                  >
+                    {deleteUserMut.isPending ? t('settings.deleting') : t('settings.confirm_delete_action')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

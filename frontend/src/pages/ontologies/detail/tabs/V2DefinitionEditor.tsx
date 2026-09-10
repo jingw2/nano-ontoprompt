@@ -21,7 +21,7 @@ interface Props {
 }
 
 function label(kind: DefinitionKind) {
-  return kind === 'logic' ? '公式定义（运行时）' : '函数定义（运行时）'
+  return kind === 'logic' ? '运行时表达式绑定' : '运行时副作用绑定'
 }
 
 export default function V2DefinitionEditor({ ontologyId, kind }: Props) {

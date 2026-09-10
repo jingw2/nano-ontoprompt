@@ -15,7 +15,7 @@ describe('OntologyToolSelector', () => {
   it('lists pickable ontologies and calls onBind when one is chosen', async () => {
     const onBind = vi.fn()
     render(<OntologyToolSelector ontologies={ONTOLOGIES} bindings={[]} toolsByOntology={{}} canEdit
-      onBind={onBind} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} />)
+      onBind={onBind} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} onSetToolCatalogLimit={vi.fn()} />)
     await userEvent.selectOptions(screen.getByTestId('ontology-picker'), 'o-1')
     expect(onBind).toHaveBeenCalledWith('o-1')
   })
@@ -27,7 +27,7 @@ describe('OntologyToolSelector', () => {
     }
     render(<OntologyToolSelector ontologies={ONTOLOGIES} bindings={[binding]}
       toolsByOntology={{ 'o-1': TOOLS }} canEdit
-      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={onToggleCategory} onToggleTool={vi.fn()} />)
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={onToggleCategory} onToggleTool={vi.fn()} onSetToolCatalogLimit={vi.fn()} />)
     expect(screen.getByTestId('ontology-tools-o-1')).toBeTruthy()
     await userEvent.click(screen.getByTestId('category-o-1-write'))
     expect(onToggleCategory).toHaveBeenCalledWith('o-1', 'write', true)
@@ -40,7 +40,7 @@ describe('OntologyToolSelector', () => {
     }
     render(<OntologyToolSelector ontologies={ONTOLOGIES} bindings={[binding]}
       toolsByOntology={{ 'o-1': TOOLS }} canEdit
-      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={onToggleTool} />)
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={onToggleTool} onSetToolCatalogLimit={vi.fn()} />)
     // category header with count is visible, but the item checkbox is not, until expanded
     expect(screen.getByTestId('category-expand-o-1-logic')).toBeTruthy()
     expect(screen.getByTestId('category-expand-o-1-logic').textContent).toContain('(1)')
@@ -54,21 +54,21 @@ describe('OntologyToolSelector', () => {
       ontology_id: 'o-1', capabilities: [], allowlists: {}, selected_tools: [], enabled_categories: null,
     }
     render(<OntologyToolSelector ontologies={ONTOLOGIES} bindings={[binding]} toolsByOntology={{}} canEdit={false}
-      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} />)
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} onSetToolCatalogLimit={vi.fn()} />)
     expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(true)
     expect((screen.getByText('解绑') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('suppresses the "no ontologies" message when the caller has its own fetch error', () => {
     render(<OntologyToolSelector ontologies={[]} bindings={[]} toolsByOntology={{}} canEdit
-      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()}
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} onSetToolCatalogLimit={vi.fn()}
       error="AGENTS_TOOLS_CATALOG_FAILED" />)
     expect(screen.queryByText('没有可绑定的已发布本体')).toBeNull()
   })
 
   it('shows the "no ontologies" message when the list is empty and there is no error', () => {
     render(<OntologyToolSelector ontologies={[]} bindings={[]} toolsByOntology={{}} canEdit
-      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} />)
+      onBind={vi.fn()} onUnbind={vi.fn()} onToggleCategory={vi.fn()} onToggleTool={vi.fn()} onSetToolCatalogLimit={vi.fn()} />)
     expect(screen.getByText('没有可绑定的已发布本体')).toBeTruthy()
   })
 })

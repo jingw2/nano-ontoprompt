@@ -109,6 +109,8 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
             }
             if b.get("enabled_categories") is not None:
                 entry["enabled_categories"] = list(b["enabled_categories"])
+            if b.get("tool_catalog_limit") is not None:
+                entry["tool_catalog_limit"] = b["tool_catalog_limit"]
             extra["ontology_tool_selection"].append(entry)
     if external_tool_bindings:
         extra["external_tool_bindings"] = [dict(b) for b in external_tool_bindings]

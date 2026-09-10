@@ -120,10 +120,15 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
         "source_id": "query",
         "input_schema": {
             "query": {"type": "string", "description": "关键词，匹配实例数据（可选）"},
+            "entity_type": {"type": "string",
+                            "description": "本体中的实体类型名（中文名或英文类名），将搜索范围限定到该类型的实例，"
+                                           "避免跨实体类型混合检索（可选，但实体类型数据量较大时强烈建议指定）"},
             "sort_by": {"type": "string",
                         "description": "按此字段排序找最大/最小值时使用（实例数据中的字段名，可选）"},
             "sort_order": {"type": "string", "enum": ["asc", "desc"],
                            "description": "排序方向，配合 sort_by 使用（可选）"},
+            "limit": {"type": "integer",
+                      "description": "返回条数上限，默认 20，最多 50（可选）"},
         },
         "output_schema": {"results": {"type": "array"}},
         "capability": "read_instances",

@@ -215,7 +215,11 @@ def llm_call_kwargs(model_config, db=None) -> dict | None:
     owns_db = db is None
     db = db or SessionLocal()
     try:
-        return resolve_llm_caller(db, model_config.id)
+        caller = resolve_llm_caller(db, model_config.id)
+        # resolve_llm_caller also carries version-pinning bookkeeping
+        # (behavior_hash, conservative_input_limit, version_no) for callers
+        # like the Agent runtime; _call_llm only accepts these four.
+        return {k: caller[k] for k in ("provider", "api_key", "api_base", "model")}
     except ModelVersionUnavailableError:
         return None
     finally:

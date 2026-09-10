@@ -14,7 +14,7 @@ import json
 
 from app.services.runtime.tokenizer import count_tokens
 
-DEFAULT_TOTAL_BUDGET_TOKENS = 24_000
+DEFAULT_TOTAL_BUDGET_TOKENS = 64_000
 RESPONSE_RESERVE_TOKENS = 1_024
 
 

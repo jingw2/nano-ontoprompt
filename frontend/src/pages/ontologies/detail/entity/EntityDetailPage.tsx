@@ -393,10 +393,16 @@ export default function EntityDetailPage() {
         )}
       </div>
 
-      {/* Instance data — row-level records under this concept entity */}
-      {instances.length > 0 && (
-        <div className="bg-white border rounded-xl p-6">
-          <h3 className="font-semibold mb-4">实例数据（{instances.length}）</h3>
+      {/* Instance data — row-level records under this concept entity. Always
+         rendered (not gated on instances.length > 0): a concept entity with
+         no concrete named instance in its source documents (e.g. a process
+         or category like "采购流程"/"资产负债表" that the text only ever
+         describes in the abstract) is an expected, correct outcome of
+         concept/instance extraction — not missing data — so it must say so
+         explicitly rather than silently disappear, which reads as broken. */}
+      <div className="bg-white border rounded-xl p-6">
+        <h3 className="font-semibold mb-4">实例数据（{instances.length}）</h3>
+        {instances.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -424,8 +430,10 @@ export default function EntityDetailPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-sm text-gray-400">暂无实例数据 — 源文档中未提及该概念的具体命名对象</p>
+        )}
+      </div>
 
       {/* Related Entities (graph) — editable */}
       <div className="bg-white border rounded-xl p-6">

@@ -106,8 +106,14 @@ export function useOntologyToolSelection(ontologies: { id: string }[]) {
     }))
   }, [toolsByOntology])
 
+  const setToolCatalogLimit = useCallback((ontologyId: string, limit: number | null) => {
+    setBindings(prev => prev.map(b => (
+      b.ontology_id === ontologyId ? { ...b, tool_catalog_limit: limit } : b
+    )))
+  }, [])
+
   return {
     bindings, setBindings, toolsByOntology, setToolsByOntology, error, setError,
-    bindOntology, unbindOntology, toggleCategory, toggleTool,
+    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit,
   }
 }

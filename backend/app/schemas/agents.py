@@ -9,12 +9,15 @@ class OntologyBindingPatch(BaseModel):
     for it (query / Logic / Action descriptor ids).  `enabled_categories`
     (MCP/query/write/logic/action) is the category-level enablement — a
     present value switches the runtime to category-mode filtering; None keeps
-    the legacy `selected_tools`-only filter."""
+    the legacy `selected_tools`-only filter.  `tool_catalog_limit` caps how
+    many category-derived (non-`selected_tools`) tool descriptors are turned
+    into LLM tool schemas per turn; None means unlimited (today's behavior)."""
     ontology_id: str
     capabilities: List[str] = []
     allowlists: dict = {}
     selected_tools: List[str] = []
     enabled_categories: Optional[List[str]] = None
+    tool_catalog_limit: Optional[int] = None
 
 
 class AgentCreateRequest(BaseModel):

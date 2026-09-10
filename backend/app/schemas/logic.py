@@ -6,7 +6,8 @@ class LogicRuleCreate(BaseModel):
     name_cn: str
     name_en: Optional[str] = None
     description: Optional[str] = None
-    formula: Optional[str] = None
+    function_type: Optional[str] = None
+    definition: Optional[str] = None
     confidence: Optional[float] = None
     linked_entities: Optional[List[str]] = None
     enabled: Optional[bool] = None
@@ -16,7 +17,8 @@ class LogicRuleUpdate(BaseModel):
     name_cn: Optional[str] = None
     name_en: Optional[str] = None
     description: Optional[str] = None
-    formula: Optional[str] = None
+    function_type: Optional[str] = None
+    definition: Optional[str] = None
     confidence: Optional[float] = None
     linked_entities: Optional[List[str]] = None
     enabled: Optional[bool] = None
@@ -28,7 +30,8 @@ class LogicRuleOut(BaseModel):
     name_cn: str
     name_en: Optional[str]
     description: Optional[str]
-    formula: Optional[str]
+    function_type: Optional[str]
+    definition: Optional[str]
     confidence: float
     version: str
     enabled: bool

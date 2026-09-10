@@ -130,6 +130,14 @@ def _seed_db():
                     db.add(Prompt(id=str(uuid.uuid4()), name=p["name"], domain=p["domain"],
                                   content=p["content"], version="v1.0", created_by=admin.id))
             db.commit()
+
+        # Seed the built-in web-search/Playwright tool providers so Agents
+        # have them available in Tool Connections without manual setup.
+        # tool_connections.py's raw SQL (now(), CAST(... AS json)) is
+        # Postgres-only, matching every other caller of that module.
+        if admin and db.get_bind().dialect.name == "postgresql":
+            from app.services.tool_connections import seed_default_tool_connections
+            seed_default_tool_connections(db, actor_id=admin.id)
     finally:
         db.close()
 

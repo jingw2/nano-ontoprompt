@@ -40,6 +40,9 @@ export interface OntologyBinding {
    * keeps the legacy selected_tools-only filter; a present list (possibly
    * empty) switches the runtime to category-mode filtering. */
   enabled_categories?: ToolCategory[] | null
+  /** Caps how many category-derived (non-selected_tools) tool descriptors
+   * are turned into LLM tool schemas per turn. Null/undefined = unlimited. */
+  tool_catalog_limit?: number | null
 }
 
 export interface ToolValidationRequest {

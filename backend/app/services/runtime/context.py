@@ -70,7 +70,8 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         raise ContextError("TURN_NOT_FOUND")
 
     bindings = db.execute(text(
-        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories "
+        "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories, "
+        "tool_catalog_limit "
         "FROM agent_ontology_bindings "
         "WHERE agent_version_id = :vid ORDER BY ontology_id"
     ), {"vid": base["version_id"]}).mappings().all()
@@ -86,6 +87,8 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         # (None keeps the legacy selected_tools-only filter)
         if b["enabled_categories"] is not None:
             entry["enabled_categories"] = list(b["enabled_categories"])
+        if b["tool_catalog_limit"] is not None:
+            entry["tool_catalog_limit"] = b["tool_catalog_limit"]
         tool_selection.append(entry)
     tool_selection = tuple(tool_selection)
 

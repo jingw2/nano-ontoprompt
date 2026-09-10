@@ -73,6 +73,41 @@ def create_connection_version(db: Session, *, actor_id: str, connection_id: str,
     return {"id": version_id, "connection_id": connection_id, "version_no": next_version, "approval_status": "pending"}
 
 
+def seed_default_tool_connections(db: Session, *, actor_id: str) -> None:
+    """Provision the two built-in Agent tools out of the box (idempotent —
+    skips a kind that already has any provider, so an admin's own setup or
+    renames are never overwritten on restart).
+
+    Playwright needs no external service, so it is seeded fully active with
+    a small starter domain allowlist (Wikipedia/GitHub/arXiv/Stack Overflow)
+    — the admin can broaden or narrow this in Tool Connections.
+
+    Web search (`web_search()`) calls a JSON search API at a real external
+    endpoint this deployment doesn't have credentials for, so it is seeded
+    only as a pending scaffold (provider + connection + an unapproved,
+    inactive version) — visible in Tool Connections, but an admin must still
+    supply a real endpoint and approve+activate it before Agents can use it.
+    """
+    existing_kinds = {row[0] for row in db.execute(text(
+        "SELECT DISTINCT kind FROM tool_providers WHERE kind IN ('search', 'playwright')"
+    )).all()}
+
+    if "playwright" not in existing_kinds:
+        provider = create_provider(db, actor_id=actor_id, name="Playwright", kind="playwright")
+        connection = create_connection(db, actor_id=actor_id, provider_id=provider["id"])
+        version = create_connection_version(
+            db, actor_id=actor_id, connection_id=connection["id"],
+            allowlists={"domains": ["wikipedia.org", "github.com", "arxiv.org", "stackoverflow.com"]},
+        )
+        approve_connection_version(db, actor_id=actor_id, version_id=version["id"])
+        activate_connection_version(db, actor_id=actor_id, connection_id=connection["id"], version_id=version["id"])
+
+    if "search" not in existing_kinds:
+        provider = create_provider(db, actor_id=actor_id, name="网页查询", kind="search")
+        connection = create_connection(db, actor_id=actor_id, provider_id=provider["id"])
+        create_connection_version(db, actor_id=actor_id, connection_id=connection["id"])
+
+
 def approve_connection_version(db: Session, *, actor_id: str, version_id: str) -> dict:
     updated = db.execute(text(
         "UPDATE tool_connection_versions SET approval_status = 'approved' WHERE id = :id RETURNING id"

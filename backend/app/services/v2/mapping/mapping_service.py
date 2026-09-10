@@ -12,8 +12,14 @@ logger = logging.getLogger(__name__)
 
 class MappingService:
 
+    # LLM FK 兜底每次构建的调用上限：兜底只在字面匹配一无所获时触发，
+    # 但 N 个实体两两组合是 O(N²) 的，防止大本体把这条兜底变成一次构建
+    # 里几百次 LLM 调用。
+    MAX_LLM_FK_DETECTION_CALLS = 40
+
     def __init__(self, db: Session):
         self._db = db
+        self._llm_fk_detection_calls = 0
 
     # ── CRUD ─────────────────────────────────────────────────────────
 
@@ -184,9 +190,18 @@ class MappingService:
         link_results = self._process_link_mappings(ontology_id, mapping_meta)
         relation_results.extend(link_results)
 
+        # Phase 2c: 语义关系兜底 — 字面证据都推不出关系的实体，最后靠 LLM 兜底
+        semantic_results = self._infer_semantic_relations_for_isolated_entities(
+            ontology_id, mappings, mapping_meta, relation_results)
+        relation_results.extend(semantic_results)
+
         # ── Phase 3: Logic / Action Discovery ─────────────────────────────
         logic_result = self._discover_logic_rules(ontology_id, mappings, mapping_meta, relation_results)
         action_result = self._discover_action_types(ontology_id, mappings, mapping_meta, relation_results, logic_result)
+
+        # Phase 3b: 结构性发现只能反映数据形状，这里让 LLM 基于领域知识提议
+        # 真正的业务规则/动作（审批阈值、触发追缴等），标记为 draft 待人工确认
+        business_rule_result = self._discover_llm_business_rules(ontology_id, mappings, mapping_meta, relation_results)
 
         # ── Phase 4: ChromaDB（只写概念实体）─────────────────────────────
         chroma_count = 0
@@ -213,20 +228,24 @@ class MappingService:
         except Exception as e:
             logger.warning(f"ChromaDB 写入失败（非致命）: {e}")
 
+        from app.models.v2.logic import OntologyLogicRule
+        from app.models.v2.action import OntologyActionType
         return {
             "ontology_id": ontology_id,
             "entity_mappings": entity_results,
             "relations_written": relation_results,
             "logic_discovery": logic_result,
             "action_discovery": action_result,
+            "business_rule_discovery": business_rule_result,
             "chroma_entities_written": chroma_count,
             "concept_entities_created": concept_count,
             "total_instances": sum(r.get("instances_written", 0) for r in entity_results),
             "total_concepts": concept_count,
             "total_entities": sum(r.get("instances_written", 0) for r in entity_results),
             "total_relations": sum(r.get("count", 0) for r in relation_results),
-            "total_logic": logic_result.get("total_v2", 0),
-            "total_actions": action_result.get("total_v2", 0),
+            # Phase 3b可能又追加了 logic/action，重新统计而不是沿用 Phase 3 结束时的快照
+            "total_logic": self._db.query(OntologyLogicRule).filter(OntologyLogicRule.ontology_id == ontology_id).count(),
+            "total_actions": self._db.query(OntologyActionType).filter(OntologyActionType.ontology_id == ontology_id).count(),
             "review_required": True,
             "publish_status": "draft",
         }
@@ -243,10 +262,10 @@ class MappingService:
         results = []
         m_list = [m for m in mappings if m.id in mapping_meta]
 
-        # 重建前清除旧的 FK 推断关系，避免改名/数据变化后产生重复边
+        # 重建前清除旧的 FK/语义 推断关系，避免改名/数据变化后产生重复边
         stale = self._db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
         for rel in stale:
-            if (rel.properties or {}).get("source") == "fk_inference":
+            if (rel.properties or {}).get("source") in ("fk_inference", "llm_semantic"):
                 self._db.delete(rel)
         self._db.commit()
 
@@ -455,6 +474,116 @@ class MappingService:
                     skip_src_cols=fk_cols_linked, link_model=OntologyLinkMapping,
                 ))
         return results
+
+    # ── 语义关系兜底 (无字面外键证据时靠 LLM 判断实体间是否应有关系) ──────
+
+    def _infer_semantic_relations_for_isolated_entities(
+        self, ontology_id: str, mappings: list[OntologyMapping], mapping_meta: dict,
+        relation_results: list[dict],
+    ) -> list[dict]:
+        """字面外键/同名列/备用键三种证据都推不出关系的实体（如"采购政策"和
+        "供应商"之间没有任何存储的外键，但领域上显然相关）在这里做最后兜底：
+        把该实体的字段列表和本体里所有其他实体的字段列表一起交给 LLM，
+        让它基于领域知识判断应该连到哪些实体、用什么关系类型 —— 这类关系没有
+        真实数据可做证据，因此打上 source=llm_semantic、给较低置信度
+        (0.6)，和 fk_inference 的证据类关系区分开，不假装它是数据验证过的。
+        """
+        from app.models.entity import Entity
+        from app.models.relation import Relation
+        from app.models.ontology import OntologyProject
+        import json as _json
+
+        m_list = [m for m in mappings if m.id in mapping_meta]
+        connected = {r["src"] for r in relation_results} | {r["tgt"] for r in relation_results}
+        isolated = [m for m in m_list if m.entity_class not in connected]
+        if not isolated:
+            return []
+
+        project = self._db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
+        domain = project.domain if project else ""
+
+        def _profile(m: OntologyMapping) -> dict:
+            meta = mapping_meta[m.id]
+            return {
+                "entity_class": m.entity_class,
+                "name_cn": m.entity_class_cn or m.entity_class,
+                "fields": meta.get("columns", [])[:20],
+            }
+
+        other_profiles = {m.entity_class: _profile(m) for m in m_list}
+        results: list[dict] = []
+
+        for src_m in isolated:
+            if self._llm_fk_detection_calls >= self.MAX_LLM_FK_DETECTION_CALLS:
+                break
+            self._llm_fk_detection_calls += 1
+            src_profile = _profile(src_m)
+            candidates = [p for cls, p in other_profiles.items() if cls != src_m.entity_class]
+            if not candidates:
+                continue
+            try:
+                proposals = self._llm_suggest_semantic_relations(domain, src_profile, candidates)
+            except Exception:
+                continue
+            src_concept_id = mapping_meta[src_m.id]["concept_id"]
+            for proposal in proposals:
+                tgt_class = proposal.get("entity_class")
+                tgt_meta = next((mapping_meta[m.id] for m in m_list if m.entity_class == tgt_class), None)
+                if not tgt_meta:
+                    continue
+                rel_name = re.sub(r'[^A-Za-z0-9_]', '', str(proposal.get("relation_type", ""))).upper()
+                rel_type = f"HAS_{rel_name}" if rel_name and not rel_name.startswith("HAS_") else (rel_name or None)
+                if not rel_type:
+                    continue
+                tgt_concept_id = tgt_meta["concept_id"]
+                if not (self._db.query(Entity).filter(Entity.id == src_concept_id).first()
+                        and self._db.query(Entity).filter(Entity.id == tgt_concept_id).first()):
+                    continue
+                rel = Relation(
+                    id=self._stable_relation_id(ontology_id, src_concept_id, tgt_concept_id, rel_type, "llm_semantic"),
+                    ontology_id=ontology_id,
+                    source_entity=src_concept_id, target_entity=tgt_concept_id,
+                    type=rel_type,
+                    properties={"source": "llm_semantic", "reason": proposal.get("reason", "")},
+                    confidence=0.6,
+                )
+                self._db.merge(rel)
+                self._db.commit()
+                self._write_neo4j_relations(ontology_id, src_m.entity_class, tgt_class, rel_type)
+                results.append({"src": src_m.entity_class, "tgt": tgt_class, "rel_type": rel_type,
+                                "via": "llm_semantic", "count": 1, "cardinality": "unknown"})
+        return results
+
+    def _llm_suggest_semantic_relations(self, domain: str, src_profile: dict, candidates: list[dict]) -> list[dict]:
+        """无字面证据时，让 LLM 基于实体名/字段判断该实体应该关联哪些其他实体。"""
+        import json as _json
+        from app.services import llm_service
+        from app.services.model_config_selector import llm_call_kwargs, select_llm_model_config
+
+        call_kwargs = llm_call_kwargs(select_llm_model_config(
+            self._db, purpose_tags=("关系推断", "语义关联", "Ontology映射"), allow_vlm=False,
+        ))
+        if not call_kwargs:
+            return []
+        prompt = f"""领域：{domain or "通用"}
+实体：{src_profile['name_cn']}（字段：{_json.dumps(src_profile['fields'], ensure_ascii=False)}）
+候选关联实体：{_json.dumps(candidates, ensure_ascii=False)}
+
+这个实体和源数据里没有存储外键指向其他实体，但领域上可能确实相关。
+判断它应该关联候选列表中的哪些实体（没有则返回空数组），每条给出：
+1. entity_class（必须是候选列表里的 entity_class 原值）
+2. relation_type（英文大写下划线，如 GOVERNS/TRIGGERS/APPLIES_TO）
+3. reason（一句话说明为什么相关）
+只在确实有清晰领域关系时才返回，不确定就不要猜。
+返回JSON：{{"relations":[{{"entity_class":"...","relation_type":"...","reason":"..."}}]}}，无则 {{"relations":[]}}。只返回JSON。"""
+        raw = llm_service._call_llm(
+            **call_kwargs,
+            messages=[{"role": "system", "content": "你是数据建模专家，输出 JSON。"},
+                      {"role": "user", "content": prompt}],
+        )
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        relations = data.get("relations", []) if isinstance(data, dict) else []
+        return [r for r in relations if isinstance(r, dict) and r.get("entity_class") and r.get("relation_type")]
 
     # ── 跨数据集备用键推断 (PRD §2.4 ③ "跨数据集关系推断") ──────────────
 
@@ -1056,9 +1185,22 @@ class MappingService:
         ))
         return True
 
+    # Pipeline Mapping logic_type -> Palantir Ontology Functions category. None of
+    # these deterministic diagnostics are literally one of the four categories, so
+    # this is the closest defensible mapping: dataset-backed mapping and inference
+    # both pull/derive from other objects, validation/state summarize an object's
+    # own data, and automation chains an edit off a trigger.
+    _FUNCTION_TYPE_BY_LOGIC_TYPE = {
+        "mapping": "external_query",
+        "validation": "derived_property",
+        "state": "derived_property",
+        "inference": "complex_edit",
+        "automation": "complex_edit",
+    }
+
     @staticmethod
     def _readable_formula(logic_type: str, expr: dict | None, target: str | None = None) -> str:
-        """把 logic 的结构化 expression 转成人类可读的公式串 (用于 v1 LogicRule.formula)"""
+        """把 logic 的结构化 expression 转成人类可读的定义串 (用于 v1 LogicRule.definition)"""
         e = expr or {}
         if logic_type == "validation":
             if e.get("missing_count") is not None:
@@ -1086,7 +1228,8 @@ class MappingService:
                          formula: str | None = None) -> bool:
         from app.models.logic import LogicRule
 
-        formula = formula or logic_type
+        definition = formula or logic_type
+        function_type = self._FUNCTION_TYPE_BY_LOGIC_TYPE.get(logic_type, "derived_property")
         self._db.flush()
         exists = self._db.query(LogicRule).filter(
             LogicRule.ontology_id == ontology_id,
@@ -1094,7 +1237,8 @@ class MappingService:
         ).first()
         if exists:
             exists.description = description
-            exists.formula = formula
+            exists.function_type = function_type
+            exists.definition = definition
             exists.linked_entities = linked_entities or []
             return False
         self._db.add(LogicRule(
@@ -1103,7 +1247,8 @@ class MappingService:
             name_cn=name,
             name_en=name.replace(" ", "_").replace(":_", "_"),
             description=description,
-            formula=formula,
+            function_type=function_type,
+            definition=definition,
             confidence=confidence,
             enabled=True,
             status="draft",
@@ -1115,6 +1260,7 @@ class MappingService:
                               mapping_meta: dict, relation_results: list[dict]) -> dict:
         created_v2 = 0
         created_v1 = 0
+        cn_by_class = {mp.entity_class: (mp.entity_class_cn or mp.entity_class) for mp in mappings}
 
         for m in mappings:
             meta = mapping_meta.get(m.id)
@@ -1122,8 +1268,9 @@ class MappingService:
                 continue
             field_map = m.field_mapping or {}
             pk_col = meta.get("pk_col")
-            mapping_name = f"Mapping Rule: {m.entity_class}"
-            desc = f"{m.entity_class} object type is built from curated dataset {m.curated_dataset_id}."
+            ec_cn = cn_by_class.get(m.entity_class, m.entity_class)
+            mapping_name = f"映射规则: {ec_cn}"
+            desc = f"{ec_cn} 对象类型由 Curated Dataset 构建而成。"
             expr = {
                 "curated_dataset_id": m.curated_dataset_id,
                 "primary_key": pk_col,
@@ -1136,7 +1283,7 @@ class MappingService:
             ))
             created_v1 += int(self._upsert_v1_logic(
                 ontology_id, mapping_name, "mapping", desc, [m.entity_class], 0.9,
-                formula=self._readable_formula("mapping", expr, m.entity_class),
+                formula=self._readable_formula("mapping", expr, ec_cn),
             ))
 
             for col in meta.get("columns", []):
@@ -1145,8 +1292,8 @@ class MappingService:
                 values = [row.get(col) for row in meta.get("rows", [])]
                 missing = sum(1 for v in values if v in (None, ""))
                 if missing:
-                    name = f"Validation Rule: {m.entity_class}.{col} completeness"
-                    description = f"Validate completeness for {m.entity_class}.{col}; missing rows: {missing}."
+                    name = f"完整性校验: {ec_cn}.{col}"
+                    description = f"校验 {ec_cn}.{col} 字段完整性；缺失行数: {missing}。"
                     created_v2 += int(self._upsert_v2_logic(
                         ontology_id, name, "validation", description, m.entity_class,
                         {"column": col, "missing_count": missing, "row_count": len(values)},
@@ -1155,7 +1302,7 @@ class MappingService:
                     created_v1 += int(self._upsert_v1_logic(
                         ontology_id, name, "validation", description, [m.entity_class], 0.8,
                         formula=self._readable_formula(
-                            "validation", {"column": col, "missing_count": missing}, m.entity_class),
+                            "validation", {"column": col, "missing_count": missing}, ec_cn),
                     ))
 
             typed_properties = [
@@ -1164,8 +1311,8 @@ class MappingService:
                 if isinstance(item, dict) and not item.get("hidden")
             ]
             if typed_properties:
-                name = f"Schema Rule: {m.entity_class} property types"
-                description = f"Schema contract for {m.entity_class} properties inferred from curated dataset columns."
+                name = f"字段类型契约: {ec_cn}"
+                description = f"{ec_cn} 的字段类型契约，根据 Curated Dataset 列推断得出。"
                 created_v2 += int(self._upsert_v2_logic(
                     ontology_id, name, "validation", description, m.entity_class,
                     {"properties": typed_properties, "primary_key": pk_col},
@@ -1174,7 +1321,7 @@ class MappingService:
                 created_v1 += int(self._upsert_v1_logic(
                     ontology_id, name, "validation", description, [m.entity_class], 0.84,
                     formula=self._readable_formula(
-                        "validation", {"properties": typed_properties, "primary_key": pk_col}, m.entity_class),
+                        "validation", {"properties": typed_properties, "primary_key": pk_col}, ec_cn),
                 ))
 
             state_cols = [
@@ -1184,8 +1331,8 @@ class MappingService:
             for col in state_cols:
                 states = sorted({str(row.get(col)) for row in meta.get("rows", []) if row.get(col) not in (None, "")})
                 if states:
-                    name = f"State Rule: {m.entity_class}.{col}"
-                    description = f"State property discovered on {m.entity_class}.{col}: {', '.join(states[:8])}."
+                    name = f"状态规则: {ec_cn}.{col}"
+                    description = f"在 {ec_cn}.{col} 上发现状态字段，取值: {', '.join(states[:8])}。"
                     created_v2 += int(self._upsert_v2_logic(
                         ontology_id, name, "state", description, m.entity_class,
                         {"state_property": col, "states": states}, "state_detection", "info",
@@ -1193,14 +1340,16 @@ class MappingService:
                     created_v1 += int(self._upsert_v1_logic(
                         ontology_id, name, "state", description, [m.entity_class], 0.82,
                         formula=self._readable_formula(
-                            "state", {"state_property": col, "states": states}, m.entity_class),
+                            "state", {"state_property": col, "states": states}, ec_cn),
                     ))
 
         for rel in relation_results:
             if not rel.get("count"):
                 continue
-            name = f"Inference Rule: {rel.get('src')} -> {rel.get('tgt')} via {rel.get('rel_type')}"
-            description = f"Infer link type {rel.get('rel_type')} from {rel.get('src')} to {rel.get('tgt')}."
+            src_cn = cn_by_class.get(rel.get("src"), rel.get("src"))
+            tgt_cn = cn_by_class.get(rel.get("tgt"), rel.get("tgt"))
+            name = f"关系推断规则: {src_cn} → {tgt_cn}（{rel.get('rel_type')}）"
+            description = f"从 {src_cn} 推断出到 {tgt_cn} 的 {rel.get('rel_type')} 关联关系。"
             created_v2 += int(self._upsert_v2_logic(
                 ontology_id, name, "inference", description, rel.get("src"),
                 {"src": rel.get("src"), "tgt": rel.get("tgt"), "rel_type": rel.get("rel_type"),
@@ -1210,11 +1359,11 @@ class MappingService:
             created_v1 += int(self._upsert_v1_logic(
                 ontology_id, name, "inference", description, [rel.get("src"), rel.get("tgt")], 0.85,
                 formula=self._readable_formula("inference", {
-                    "src": rel.get("src"), "tgt": rel.get("tgt"), "rel_type": rel.get("rel_type")}),
+                    "src": src_cn, "tgt": tgt_cn, "rel_type": rel.get("rel_type")}),
             ))
 
-        automation_name = "Automation Rule: Approved curated dataset triggers mapping sync"
-        automation_desc = "When a curated dataset is approved, incremental ontology mapping can upsert objects, links, vectors, logic and actions."
+        automation_name = "自动化规则: 已批准的 Curated Dataset 触发映射同步"
+        automation_desc = "当 Curated Dataset 被批准后，增量本体映射可更新对象、关系、向量、逻辑规则与动作。"
         created_v2 += int(self._upsert_v2_logic(
             ontology_id, automation_name, "automation", automation_desc, None,
             {"trigger": "curated_review.approved", "effect": "mapping_resync"},
@@ -1280,16 +1429,16 @@ class MappingService:
             Action.name_cn == name,
         ).first()
         function_name = name.lower().replace(" ", "_").replace(":", "").replace("-", "_")
-        function_code = (
-            f"def {function_name}(context: dict) -> dict:\n"
-            f"    return {{'status': 'queued', 'action': '{name}', 'context': context}}\n"
-        )
+        parameters = [{"name": "target", "type": "object_reference", "description": name}]
+        rules = [{"operation": "Create Object", "target": category, "value": name}]
+        side_effects = [{"type": "Notification", "target": "system", "detail": f"{name} 已排队执行"}]
         if exists:
             exists.description = description
-            exists.execution_rule = category
+            exists.parameters = parameters
+            exists.rules = rules
+            exists.side_effects = side_effects
             exists.linked_entities = linked_entities or []
             exists.linked_logic_ids = linked_logic_ids or []
-            exists.function_code = function_code
             return False
         self._db.add(Action(
             id=str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{ontology_id}:action:{name}")),
@@ -1297,8 +1446,9 @@ class MappingService:
             name_cn=name,
             name_en=function_name,
             description=description,
-            execution_rule=category,
-            function_code=function_code,
+            parameters=parameters,
+            rules=rules,
+            side_effects=side_effects,
             linked_entities=linked_entities or [],
             linked_logic_ids=linked_logic_ids or [],
             confidence=confidence,
@@ -1312,15 +1462,17 @@ class MappingService:
                                relation_results: list[dict], logic_result: dict) -> dict:
         created_v2 = 0
         created_v1 = 0
+        cn_by_class = {mp.entity_class: (mp.entity_class_cn or mp.entity_class) for mp in mappings}
 
         for m in mappings:
             meta = mapping_meta.get(m.id, {})
-            for verb, category, effect in (
-                ("Create", "crud", "create_object"),
-                ("Update", "crud", "update_object"),
+            ec_cn = cn_by_class.get(m.entity_class, m.entity_class)
+            for verb_cn, category, effect in (
+                ("创建", "crud", "create_object"),
+                ("更新", "crud", "update_object"),
             ):
-                name = f"{verb} {m.entity_class}"
-                description = f"{verb} object records for {m.entity_class}."
+                name = f"{verb_cn}{ec_cn}"
+                description = f"{verb_cn}{ec_cn}的对象记录。"
                 created_v2 += int(self._upsert_v2_action(
                     ontology_id, name, category, description, m.entity_class,
                     [{"name": "data", "type": "object", "required": True}],
@@ -1342,8 +1494,8 @@ class MappingService:
             ]
             for item in state_props:
                 prop = item.get("property") or item.get("column")
-                name = f"Change {m.entity_class} {prop}"
-                description = f"Change state property {prop} on {m.entity_class}."
+                name = f"变更{ec_cn}的{prop}"
+                description = f"变更{ec_cn}的状态字段 {prop}。"
                 created_v2 += int(self._upsert_v2_action(
                     ontology_id, name, "state_transition", description, m.entity_class,
                     [{"name": "target_id", "type": "object_ref", "required": True},
@@ -1361,8 +1513,8 @@ class MappingService:
             ]
             for item in timestamp_props[:3]:
                 prop = item.get("property") or item.get("column")
-                name = f"Update {m.entity_class} {prop}"
-                description = f"Update timestamp property {prop} on {m.entity_class}."
+                name = f"更新{ec_cn}的{prop}"
+                description = f"更新{ec_cn}的时间戳字段 {prop}。"
                 created_v2 += int(self._upsert_v2_action(
                     ontology_id, name, "crud", description, m.entity_class,
                     [{"name": "target_id", "type": "object_ref", "required": True},
@@ -1377,12 +1529,14 @@ class MappingService:
         for rel in relation_results:
             if not rel.get("count"):
                 continue
-            for verb, effect in (("Link", "merge_relationship"), ("Unlink", "delete_relationship")):
-                name = f"{verb} {rel.get('src')} to {rel.get('tgt')}"
+            src_cn = cn_by_class.get(rel.get("src"), rel.get("src"))
+            tgt_cn = cn_by_class.get(rel.get("tgt"), rel.get("tgt"))
+            for verb_cn, effect in (("关联", "merge_relationship"), ("取消关联", "delete_relationship")):
+                name = f"{verb_cn}{src_cn}与{tgt_cn}"
                 if name in seen_rel_actions:
                     continue
                 seen_rel_actions.add(name)
-                description = f"{verb} {rel.get('rel_type')} relation between {rel.get('src')} and {rel.get('tgt')}."
+                description = f"{verb_cn} {src_cn} 与 {tgt_cn} 之间的 {rel.get('rel_type')} 关系。"
                 created_v2 += int(self._upsert_v2_action(
                     ontology_id, name, "link", description, rel.get("src"),
                     [{"name": "source_id", "type": "object_ref", "required": True},
@@ -1394,9 +1548,9 @@ class MappingService:
                 ))
 
         for name, category, desc in (
-            ("Review Curated Mapping Candidate", "review", "Review and approve generated mapping, logic and action candidates."),
-            ("Repair Data Quality Issue", "repair", "Fix missing, duplicated or invalid mapped object properties."),
-            ("Sync Approved Object to External System", "writeback", "Write approved object changes back to an external system."),
+            ("审核映射候选结果", "review", "审核并批准自动生成的映射、逻辑规则与动作候选。"),
+            ("修复数据质量问题", "repair", "修复缺失、重复或无效的映射对象属性。"),
+            ("同步已批准对象到外部系统", "writeback", "将已批准的对象变更写回外部系统。"),
         ):
             created_v2 += int(self._upsert_v2_action(
                 ontology_id, name, category, desc, None,
@@ -1417,6 +1571,111 @@ class MappingService:
             "total_v1": self._db.query(Action).filter(Action.ontology_id == ontology_id).count(),
             "logic_total_v2": logic_result.get("total_v2", 0),
         }
+
+    # ── LLM 业务规则/动作推断 ──────────────────────────────────────────
+    # 上面机械发现的映射/校验/CRUD 规则只能反映数据结构（有没有这一列、
+    # 是不是状态字段），推不出"合格率<90%触发复审"这类真正的业务逻辑——
+    # 结构里看不出业务语义。这里对每个实体给一次 LLM 提议机会，结果标记
+    # source_type=llm_business 与结构性规则区分开，confidence 给中等
+    # (0.65) 且落 draft 状态，因为这些是基于领域知识的提议、不是从数据里
+    # 验证出来的事实，需要人工确认后才能启用。
+
+    MAX_LLM_BUSINESS_RULE_CALLS = 20
+
+    def _discover_llm_business_rules(self, ontology_id: str, mappings: list[OntologyMapping],
+                                     mapping_meta: dict, relation_results: list[dict]) -> dict:
+        from app.models.ontology import OntologyProject
+
+        project = self._db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
+        domain = project.domain if project else ""
+        cn_by_class = {mp.entity_class: (mp.entity_class_cn or mp.entity_class) for mp in mappings}
+
+        created_logic_v2 = created_logic_v1 = created_action_v2 = created_action_v1 = 0
+        calls = 0
+        for m in mappings:
+            if calls >= self.MAX_LLM_BUSINESS_RULE_CALLS:
+                break
+            meta = mapping_meta.get(m.id)
+            if not meta:
+                continue
+            calls += 1
+            ec_cn = cn_by_class.get(m.entity_class, m.entity_class)
+            related_cn = sorted({
+                cn_by_class.get(r["tgt"], r["tgt"]) for r in relation_results if r.get("src") == m.entity_class
+            } | {
+                cn_by_class.get(r["src"], r["src"]) for r in relation_results if r.get("tgt") == m.entity_class
+            })
+            try:
+                proposals = self._llm_suggest_business_rules(domain, ec_cn, meta.get("columns", [])[:20], related_cn)
+            except Exception:
+                continue
+            for p in proposals:
+                cond, cond_desc = p.get("condition", ""), p.get("condition_desc", "")
+                action_name, action_desc = p.get("action_name"), p.get("action_desc", "")
+                if not p.get("name") or not action_name:
+                    continue
+                rule_name = f"业务规则: {p['name']}"
+                expr = {"trigger": cond, "effect": action_name}
+                created_logic_v2 += int(self._upsert_v2_logic(
+                    ontology_id, rule_name, "automation", cond_desc, m.entity_class, expr,
+                    "llm_business",
+                ))
+                created_logic_v1 += int(self._upsert_v1_logic(
+                    ontology_id, rule_name, "automation", cond_desc, [m.entity_class],
+                    confidence=0.65, formula=self._readable_formula("automation", expr),
+                ))
+                created_action_v2 += int(self._upsert_v2_action(
+                    ontology_id, action_name, "business", action_desc, m.entity_class,
+                    [{"name": "target_id", "type": "object_ref", "required": True}],
+                    [{"action": "business_effect", "description": action_desc}],
+                    [{"logic_type": "automation", "target_entity_type": m.entity_class}],
+                ))
+                created_action_v1 += int(self._upsert_v1_action(
+                    ontology_id, action_name, "business", action_desc, [m.entity_class], [], 0.65,
+                ))
+        self._db.commit()
+        return {
+            "created_logic_v2": created_logic_v2, "created_logic_v1": created_logic_v1,
+            "created_action_v2": created_action_v2, "created_action_v1": created_action_v1,
+        }
+
+    def _llm_suggest_business_rules(self, domain: str, entity_cn: str, fields: list[str],
+                                    related_cn: list[str]) -> list[dict]:
+        """给定实体的字段和关联实体，让 LLM 基于领域知识提议真正的业务规则
+        （条件触发）和对应动作 —— 不是数据格式校验，是"合格率<90%触发复审"
+        这类业务逻辑。没有把握时应返回空数组，不应该编造。"""
+        import json as _json
+        from app.services import llm_service
+        from app.services.model_config_selector import llm_call_kwargs, select_llm_model_config
+
+        call_kwargs = llm_call_kwargs(select_llm_model_config(
+            self._db, purpose_tags=("业务规则推断", "Logic推断", "Ontology映射"), allow_vlm=False,
+        ))
+        if not call_kwargs:
+            return []
+        prompt = f"""领域：{domain or "通用"}
+实体：{entity_cn}
+字段：{_json.dumps(fields, ensure_ascii=False)}
+关联实体：{_json.dumps(related_cn, ensure_ascii=False)}
+
+基于领域知识，为这个实体提议 1~2 条真正的业务规则——不是数据格式/完整性校验，
+而是"合格率低于90%触发复审"「逾期超过30天触发催收」这类有业务后果的条件规则。
+没有把握的领域规则就不要编造，宁可返回空数组。每条给出：
+1. name：规则简称（中文，如"低合格率复审"）
+2. condition：触发条件（一句话，如"合格率 < 90%"）
+3. condition_desc：规则的完整业务描述
+4. action_name：对应触发的动作名称（中文，如"触发供应商复审"）
+5. action_desc：动作的业务描述
+
+返回JSON：{{"rules":[{{"name":"...","condition":"...","condition_desc":"...","action_name":"...","action_desc":"..."}}]}}，无则 {{"rules":[]}}。只返回JSON。"""
+        raw = llm_service._call_llm(
+            **call_kwargs,
+            messages=[{"role": "system", "content": "你是资深业务分析师，输出 JSON。"},
+                      {"role": "user", "content": prompt}],
+        )
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        rules = data.get("rules", []) if isinstance(data, dict) else []
+        return [r for r in rules if isinstance(r, dict) and r.get("name") and r.get("action_name")]
 
     def _write_neo4j(self, entity_class: str, entities: list[dict]) -> int:
         try:
@@ -1510,11 +1769,16 @@ class MappingService:
                         rel_type = f"HAS_{max(set(prefixes), key=prefixes.count)}"
                         candidates.append((col, rel_type))
 
-        # 策略 4: LLM 辅助语义 FK 检测（默认关闭，避免构建时被外部服务阻塞）
+        # 策略 4: LLM 辅助语义 FK 检测。仅在字面匹配一无所获时触发（低频），
+        # 且每次构建有调用上限（MAX_LLM_FK_DETECTION_CALLS）—— 这是让"采购
+        # 政策""库存交易"这类源数据里没有字面外键列、但语义上确实相关的实体
+        # 也能连上关系的兜底。显式设 ENABLE_LLM_FK_DETECTION=0/false 可关闭。
         import os
-        llm_fk_enabled = os.getenv("ENABLE_LLM_FK_DETECTION", "").lower() in ("1", "true", "yes")
-        if llm_fk_enabled and not candidates and src_cols:
+        llm_fk_enabled = os.getenv("ENABLE_LLM_FK_DETECTION", "1").lower() not in ("0", "false", "no")
+        if (llm_fk_enabled and not candidates and src_cols
+                and self._llm_fk_detection_calls < self.MAX_LLM_FK_DETECTION_CALLS):
             try:
+                self._llm_fk_detection_calls += 1
                 llm_candidates = self._llm_detect_fk(src_cols, tgt_entity_class, tgt_dataset_name)
                 candidates.extend(llm_candidates)
             except Exception:

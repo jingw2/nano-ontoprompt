@@ -129,8 +129,6 @@ def _merge_extraction_results(results: list[dict]) -> dict:
 # ── Confidence calibration (Fix 5) ─────────────────────────────────────────
 def _calibrate_confidence(result: dict) -> dict:
     """Adjust LLM-generated confidence scores using objective completeness signals."""
-    import ast
-
     entities    = result.get("entities", [])
     relations   = result.get("relations", [])
     logic_rules = result.get("logic_rules", [])
@@ -159,25 +157,22 @@ def _calibrate_confidence(result: dict) -> dict:
             r["confidence"] = round(max(0.40, min(0.98, base)), 3)
 
     logic_names = {r.get("name_cn") for r in logic_rules if r.get("name_cn")}
+    valid_function_types = {"derived_property", "aggregation", "complex_edit", "external_query"}
     for rule in logic_rules:
         base = float(rule.get("confidence") or 0.85)
         adj  = 0.0
-        if not rule.get("linked_entities"):                adj -= 0.10
-        if not (rule.get("formula") or "").strip():        adj -= 0.05
+        if not rule.get("linked_entities"):                          adj -= 0.10
+        if not (rule.get("definition") or "").strip():               adj -= 0.05
+        if rule.get("function_type") not in valid_function_types:    adj -= 0.05
         rule["confidence"] = round(max(0.30, min(0.98, base + adj)), 3)
 
     for action in actions:
         base = float(action.get("confidence") or 0.85)
-        code = (action.get("function_code") or "").strip()
         adj  = 0.0
-        if not code or len(code) < 20:
-            adj -= 0.20
-        else:
-            try:
-                ast.parse(code)
-            except SyntaxError:
-                adj -= 0.15
-        if not action.get("linked_entities"): adj -= 0.05
+        if not action.get("parameters"):           adj -= 0.05
+        if not action.get("rules"):                adj -= 0.20
+        if not action.get("submission_criteria"):  adj -= 0.05
+        if not action.get("linked_entities"):      adj -= 0.05
         action["confidence"] = round(max(0.30, min(0.98, base + adj)), 3)
 
     return result
@@ -203,7 +198,7 @@ def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
         if key not in seen:
             seen[key] = row
         else:
-            # Keep the one with more data (prefer non-None properties/code/formula)
+            # Keep the one with more data (prefer non-None properties/rules/definition)
             incumbent = seen[key]
             challenger_score = _richness(row)
             incumbent_score  = _richness(incumbent)
@@ -217,7 +212,7 @@ def _dedup_existing(db, ontology_id: str, model_cls, name_field: str):
 def _richness(obj) -> int:
     """Heuristic score for how data-rich an ORM object is — higher = keep."""
     score = 0
-    for attr in ("properties", "function_code", "formula", "description", "linked_entities"):
+    for attr in ("properties", "rules", "definition", "description", "linked_entities"):
         val = getattr(obj, attr, None)
         if val:
             score += len(str(val))
@@ -587,14 +582,15 @@ def run_extraction(self, task_id: str):
 
             llm_linked = r_data.get("linked_entities", [])
             if not llm_linked:
-                combined = " ".join(filter(None, [name_cn, r_data.get("formula",""), r_data.get("description","")]))
+                combined = " ".join(filter(None, [name_cn, r_data.get("definition",""), r_data.get("description","")]))
                 llm_linked = _match_entities(combined, all_entity_names)
 
             if name_cn in existing_rule_map:
                 rule = existing_rule_map[name_cn]
-                if r_data.get("formula"):     rule.formula     = r_data["formula"]
-                if r_data.get("description"): rule.description = r_data["description"]
-                if llm_linked:                rule.linked_entities = llm_linked
+                if r_data.get("function_type"): rule.function_type = r_data["function_type"]
+                if r_data.get("definition"):    rule.definition    = r_data["definition"]
+                if r_data.get("description"):   rule.description   = r_data["description"]
+                if llm_linked:                  rule.linked_entities = llm_linked
                 rule.confidence = r_data.get("confidence", rule.confidence)
                 rid = rule.id
             else:
@@ -602,7 +598,8 @@ def run_extraction(self, task_id: str):
                 rule = LogicRule(
                     id=rid, ontology_id=task.ontology_id,
                     name_cn=name_cn, name_en=r_data.get("name_en"),
-                    description=r_data.get("description"), formula=r_data.get("formula"),
+                    description=r_data.get("description"), function_type=r_data.get("function_type"),
+                    definition=r_data.get("definition"),
                     confidence=r_data.get("confidence", 0.85),
                 )
                 rule.linked_entities = llm_linked
@@ -624,22 +621,24 @@ def run_extraction(self, task_id: str):
 
             linked_ents = a_data.get("linked_entities", [])
             if not linked_ents:
-                combined = " ".join(filter(None, [name_cn, a_data.get("execution_rule",""), a_data.get("description","")]))
+                combined = " ".join(filter(None, [name_cn, a_data.get("description","")]))
                 linked_ents = _match_entities(combined, all_entity_names)
 
             linked_logic_names = a_data.get("linked_logic_names", [])
             linked_ids = [logic_name_to_id[n] for n in linked_logic_names if n in logic_name_to_id]
             linked_ids += [i for i in a_data.get("linked_logic_ids", []) if i not in linked_ids]
             if not linked_ids:
-                action_text = " ".join(filter(None, [name_cn, a_data.get("execution_rule",""), a_data.get("description","")]))
+                action_text = " ".join(filter(None, [name_cn, a_data.get("description","")]))
                 linked_ids = _match_logic_rules(action_text, logic_name_to_id)
 
             if name_cn in existing_action_map:
                 act = existing_action_map[name_cn]
-                if a_data.get("description"):    act.description    = a_data["description"]
-                if a_data.get("execution_rule"): act.execution_rule = a_data["execution_rule"]
-                if a_data.get("function_code"):  act.function_code  = a_data["function_code"]
-                if a_data.get("name_en"):        act.name_en        = a_data["name_en"]
+                if a_data.get("description"):          act.description          = a_data["description"]
+                if a_data.get("parameters"):            act.parameters            = a_data["parameters"]
+                if a_data.get("rules"):                 act.rules                 = a_data["rules"]
+                if a_data.get("submission_criteria"):   act.submission_criteria   = a_data["submission_criteria"]
+                if a_data.get("side_effects"):          act.side_effects          = a_data["side_effects"]
+                if a_data.get("name_en"):               act.name_en               = a_data["name_en"]
                 if linked_ents:  act.linked_entities  = linked_ents
                 if linked_ids:   act.linked_logic_ids = linked_ids
                 act.confidence = a_data.get("confidence", act.confidence)
@@ -647,8 +646,11 @@ def run_extraction(self, task_id: str):
                 act = Action(
                     id=str(uuid.uuid4()), ontology_id=task.ontology_id,
                     name_cn=name_cn, name_en=a_data.get("name_en"),
-                    description=a_data.get("description"), execution_rule=a_data.get("execution_rule"),
-                    function_code=a_data.get("function_code"),
+                    description=a_data.get("description"),
+                    parameters=a_data.get("parameters") or [],
+                    rules=a_data.get("rules") or [],
+                    submission_criteria=a_data.get("submission_criteria") or [],
+                    side_effects=a_data.get("side_effects") or [],
                     linked_entities=linked_ents, linked_logic_ids=linked_ids,
                     confidence=a_data.get("confidence", 0.85),
                 )

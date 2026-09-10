@@ -69,7 +69,7 @@ def test_normalization_dedups_and_drops_junk_over_test_data_document():
             {"source": "A层", "target": "授信额度", "type": "GOVERNED_BY", "confidence": 0.8},
         ],
         "logic_rules": [
-            {"name_cn": "IF 信用评分 < 500 THEN 降级", "formula": "IF 信用评分 < 500 THEN 降级",
+            {"name_cn": "信用评分降级规则", "function_type": "derived_property", "definition": "信用评分 < 500 时降级",
              "description": "降级规则", "linked_entities": ["信用评分"]},
         ],
         "actions": [],

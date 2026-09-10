@@ -138,7 +138,7 @@ def closure_db():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    result = _alembic(schema, "upgrade", "0003_publication_governance")
+    result = _alembic(schema, "upgrade", "head")
     assert result.returncode == 0, result.stderr
     session_engine = create_engine(_scoped_url(schema))
     Session = sessionmaker(bind=session_engine)
