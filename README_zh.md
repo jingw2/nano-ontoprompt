@@ -287,4 +287,4 @@ cd backend && python scripts/reset_admin_password.py
 
 ## 许可证
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE) —— 仅允许非商业用途（个人学习、科研、教育、非营利/政府机构使用）免费使用；商业用途需向版权方另行获取商业授权。
