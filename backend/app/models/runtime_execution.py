@@ -212,7 +212,7 @@ class GovernedTurnPlan(Base):
     target_after_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     receipt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     audit_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    decided_by_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    decided_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)

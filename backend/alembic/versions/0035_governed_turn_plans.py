@@ -13,6 +13,16 @@ full rationale.
 Revision ID: 0035_governed_turn_plans
 Revises: 0034_runtime_execution
 Create Date: 2026-09-02
+
+2026-09-16 fix: `decided_by_user_id` used a bare `sa.String` (no length)
+where every sibling id column on this table uses `String(36)` — PostgreSQL
+tolerates an unbounded VARCHAR silently, but this table's CREATE TABLE has
+never once succeeded on the MySQL dialect fixture used by the runtime
+cross-dialect integration tests (`sqlalchemy.exc.CompileError: VARCHAR
+requires a length on dialect mysql`), so there is no already-migrated
+MySQL database whose column type this edit could disagree with. Widened
+to String(36) in place rather than via a follow-up ALTER, matching every
+sibling id column.
 """
 
 from alembic import op
@@ -49,7 +59,7 @@ def upgrade() -> None:
         sa.Column("target_after_hash", sa.String(64), nullable=False),
         sa.Column("receipt_id", sa.String(36), nullable=True),
         sa.Column("audit_event_id", sa.String(36), nullable=True),
-        sa.Column("decided_by_user_id", sa.String, nullable=True),
+        sa.Column("decided_by_user_id", sa.String(36), nullable=True),
         sa.Column("expiry", sa.DateTime(timezone=True), nullable=False),
         sa.Column("correlation_id", sa.String(128), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
