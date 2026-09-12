@@ -59,6 +59,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# .env.example ships this fixed value so every docker-compose service reads
+# the SAME encryption key by default (an empty value made each container
+# generate its own random per-process key, so a value encrypted by the API
+# server could never be decrypted by a worker container).
+_DEV_ENCRYPTION_KEY = "R6uyMI-_OtgEug0gGXuDYVvNzFmASSe9ltykKeIkpwQ="
+
 # 生产环境禁止使用默认凭据 — 启动即失败, 避免带默认密钥上线
 if settings.environment == "production":
     _insecure = []
@@ -68,7 +74,7 @@ if settings.environment == "production":
         _insecure.append("FIRST_ADMIN_PASSWORD")
     if settings.minio_access_key == "minioadmin" or settings.minio_secret_key == "minioadmin":
         _insecure.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
-    if not settings.encryption_key:
+    if not settings.encryption_key or settings.encryption_key == _DEV_ENCRYPTION_KEY:
         _insecure.append("ENCRYPTION_KEY")
     if _insecure:
         raise RuntimeError(
