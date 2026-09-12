@@ -198,7 +198,8 @@ def test_zz_backfill_cli_runs_to_completion(backfill_db):
     Session, engine = backfill_db
     creator_id, ontology_id = _seed(backfill_db)
     _insert_entity(Session, ontology_id, "戊", {"Code": {"type": "string"}})
-    url = str(engine.url)
+    # str(url) masks the password as "***"; the subprocess needs the real one.
+    url = engine.url.render_as_string(hide_password=False)
     result = subprocess.run(
         [sys.executable, "-m", "app.cli.publication_backfill", "run",
          "--ontology-id", ontology_id, "--batch-size", "1", "--actor", creator_id],

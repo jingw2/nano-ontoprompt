@@ -320,7 +320,9 @@ def test_sweep_claim_query_holds_locks_on_all_batch_rows_until_commit(session):
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
-    second_session = sessionmaker(bind=create_engine(str(session.bind.url)))()
+    # str(url) masks the password as "***"; render_as_string(hide_password=False)
+    # is required to actually authenticate a second, independent connection.
+    second_session = sessionmaker(bind=create_engine(session.bind.url.render_as_string(hide_password=False)))()
     try:
         claim_query = text(
             "SELECT ov.id FROM agent_memory_vector_outbox ov "
