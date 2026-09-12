@@ -115,6 +115,7 @@ export default function MemoryConfigTab({ agentId, activeVersion, canEdit, onSav
         default_model_name: activeVersion.default_model_name ?? '',
         system_prompt: activeVersion.system_prompt ?? null,
         memory_settings,
+        max_tool_rounds: activeVersion.max_tool_rounds ?? 5,
         application_state_schema_version_id: activeVersion.application_state_schema_version_id ?? null,
         change_note: t('agent.memory.change_note', 'Memory 设置更新'),
       })

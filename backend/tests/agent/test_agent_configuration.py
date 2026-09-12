@@ -160,6 +160,73 @@ def test_save_basic_version_n1_cas_hash_and_old_unchanged(ctx):
     assert active == 2
 
 
+def test_max_tool_rounds_defaults_persists_and_is_validated(ctx):
+    from app.services.agent.configuration import (
+        AgentConfigError, create_agent, get_version, save_basic_version,
+    )
+
+    session, actor_id, model_version, app_schema = ctx
+    # default: an Agent created without an explicit value gets the runtime's
+    # current default (5), matching pre-feature behavior exactly
+    created = create_agent(
+        session, actor_id=actor_id, name="A", description="d1",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p1", memory_settings={}, application_state_schema_version_id=app_schema,
+    )
+    assert get_version(session, agent_id=created["agent_id"], version_no=1)["max_tool_rounds"] == 5
+
+    # an explicit, in-range value on save is persisted onto the new version
+    v2 = save_basic_version(
+        session, actor_id=actor_id, agent_id=created["agent_id"], base_version_no=1,
+        name="A", description="d1", default_model_config_version_id=model_version,
+        default_model_name="gpt-4o", system_prompt="p1", memory_settings={},
+        max_tool_rounds=12, application_state_schema_version_id=app_schema,
+    )
+    assert get_version(session, agent_id=created["agent_id"], version_no=v2["version_no"])["max_tool_rounds"] == 12
+    # changing it alone changes the config hash (it's part of the versioned config)
+    assert v2["config_hash"] != created["config_hash"]
+
+    # out-of-range values are rejected on both create and save
+    for bad in (0, 21, -1):
+        with pytest.raises(AgentConfigError):
+            create_agent(
+                session, actor_id=actor_id, name="B", description=None,
+                default_model_config_version_id=model_version, default_model_name="gpt-4o",
+                system_prompt=None, memory_settings={}, max_tool_rounds=bad,
+                application_state_schema_version_id=app_schema,
+            )
+        with pytest.raises(AgentConfigError):
+            save_basic_version(
+                session, actor_id=actor_id, agent_id=created["agent_id"], base_version_no=v2["version_no"],
+                name="A", description="d1", default_model_config_version_id=model_version,
+                default_model_name="gpt-4o", system_prompt="p1", memory_settings={},
+                max_tool_rounds=bad, application_state_schema_version_id=app_schema,
+            )
+
+
+def test_restore_version_carries_over_max_tool_rounds(ctx):
+    from app.services.agent.configuration import create_agent, get_version, restore_version, save_basic_version
+
+    session, actor_id, model_version, app_schema = ctx
+    created = create_agent(
+        session, actor_id=actor_id, name="A", description="d1",
+        default_model_config_version_id=model_version, default_model_name="gpt-4o",
+        system_prompt="p1", memory_settings={}, max_tool_rounds=15,
+        application_state_schema_version_id=app_schema,
+    )
+    save_basic_version(
+        session, actor_id=actor_id, agent_id=created["agent_id"], base_version_no=1,
+        name="A v2", description="d2", default_model_config_version_id=model_version,
+        default_model_name="gpt-4o", system_prompt="p2", memory_settings={},
+        max_tool_rounds=3, application_state_schema_version_id=app_schema,
+    )
+    restored = restore_version(
+        session, actor_id=actor_id, agent_id=created["agent_id"], source_version_no=1,
+    )
+    # restoring v1 (max_tool_rounds=15) brings that value back, not v2's (3)
+    assert get_version(session, agent_id=created["agent_id"], version_no=restored["version_no"])["max_tool_rounds"] == 15
+
+
 def test_concurrent_cas_conflict(ctx):
     from app.services.agent.configuration import create_agent, save_basic_version, AgentConfigConflict
 

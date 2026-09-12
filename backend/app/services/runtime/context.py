@@ -32,6 +32,7 @@ class PinnedContext:
     release_schema_hash: str | None
     model_config_version_id: str
     model_name: str
+    max_tool_rounds: int = 5
     ontology_ids: tuple[str, ...] = ()
     retrieval_sources: tuple[dict, ...] = ()
     tool_bindings: tuple[dict, ...] = ()
@@ -59,7 +60,7 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
     Turn's duration."""
     base = db.execute(text(
         "SELECT t.id AS turn_id, s.agent_id, v.id AS version_id, "
-        "v.default_model_config_version_id, v.default_model_name "
+        "v.default_model_config_version_id, v.default_model_name, v.max_tool_rounds "
         "FROM agent_turns t "
         "JOIN agent_sessions s ON s.id = t.session_id "
         "JOIN agents a ON a.id = s.agent_id "
@@ -71,7 +72,7 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
 
     bindings = db.execute(text(
         "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories, "
-        "tool_catalog_limit "
+        "tool_catalog_limit, entity_search_depth "
         "FROM agent_ontology_bindings "
         "WHERE agent_version_id = :vid ORDER BY ontology_id"
     ), {"vid": base["version_id"]}).mappings().all()
@@ -89,6 +90,8 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
             entry["enabled_categories"] = list(b["enabled_categories"])
         if b["tool_catalog_limit"] is not None:
             entry["tool_catalog_limit"] = b["tool_catalog_limit"]
+        if b["entity_search_depth"] is not None:
+            entry["entity_search_depth"] = b["entity_search_depth"]
         tool_selection.append(entry)
     tool_selection = tuple(tool_selection)
 
@@ -130,6 +133,7 @@ def resolve_pinned_context(db: Session, *, turn_id: str, session_id: str) -> Pin
         release_schema_hash=release["schema_hash"].hex() if release and release["schema_hash"] else None,
         model_config_version_id=base["default_model_config_version_id"],
         model_name=base["default_model_name"],
+        max_tool_rounds=base["max_tool_rounds"],
         ontology_ids=ontology_ids,
         retrieval_sources=tuple(dict(r) for r in retrieval),
         tool_bindings=tuple(dict(t) for t in tools),

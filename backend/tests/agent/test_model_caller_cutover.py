@@ -220,6 +220,26 @@ def test_llm_caller_kwargs_pin_immutable_version_and_never_fallback(pg):
         resolve_llm_caller(pg, blocked_id)
 
 
+def test_llm_caller_respects_requested_model_name_within_contract(pg):
+    from app.services.model_callers.extraction import resolve_llm_caller, resolve_llm_caller_by_version
+
+    model_id = _seed_llm_config(pg, models=["deepseek-v4-pro", "deepseek-v4-flash"])
+    _migrate_rows(pg)
+
+    # default (no model_name) keeps prior behavior: first contract entry
+    assert resolve_llm_caller(pg, model_id)["model"] == "deepseek-v4-pro"
+    # an explicit, in-contract model_name is honored rather than ignored
+    assert resolve_llm_caller(pg, model_id, model_name="deepseek-v4-flash")["model"] == "deepseek-v4-flash"
+    # an unknown/stale model_name falls back to the first contract entry instead of failing
+    assert resolve_llm_caller(pg, model_id, model_name="not-a-real-model")["model"] == "deepseek-v4-pro"
+
+    active_version_id = pg.execute(text(
+        "SELECT active_version_id FROM model_configs WHERE id = :id"
+    ), {"id": model_id}).scalar_one()
+    resolved = resolve_llm_caller_by_version(pg, active_version_id, model_name="deepseek-v4-flash")
+    assert resolved["model"] == "deepseek-v4-flash"
+
+
 def test_model_api_redacted_tagged_union_and_versioned_surface(pg):
     editor = _seed_user(pg, username="caller-editor", role="editor")
     viewer = _seed_user(pg, username="caller-viewer", role="viewer")

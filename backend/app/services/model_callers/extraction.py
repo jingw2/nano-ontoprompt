@@ -14,9 +14,13 @@ class ModelVersionUnavailableError(Exception):
     """The identity has no active immutable behavior version for LLM calls."""
 
 
-def resolve_llm_caller(db: Session, model_id: str) -> dict:
+def resolve_llm_caller(db: Session, model_id: str, *, model_name: str | None = None) -> dict:
     """Pin the active immutable behavior version + credential for an LLM
-    config.  Raises `ModelVersionUnavailableError` (never falls back)."""
+    config.  Raises `ModelVersionUnavailableError` (never falls back).
+
+    `model_name` selects a specific model from the version's contract (e.g.
+    an Agent's `default_model_name`); if it doesn't match any contract entry
+    the first contract entry is used instead."""
     from app.models.model_config import ModelConfig
     from app.models.model_version import ModelConfigVersion
     from app.services.model_version import decrypt_credential, versioning_schema_present
@@ -41,9 +45,13 @@ def resolve_llm_caller(db: Session, model_id: str) -> dict:
         raise ModelVersionUnavailableError("MODEL_VERSION_UNAVAILABLE")
 
     contract = version.model_contract or []
-    model_name = contract[0].get("provider_model_revision") if contract and isinstance(contract[0], dict) else None
-    if not model_name:
+    contract_names = [
+        entry.get("provider_model_revision") for entry in contract
+        if isinstance(entry, dict) and entry.get("provider_model_revision")
+    ]
+    if not contract_names:
         raise ModelVersionUnavailableError("MODEL_VERSION_UNAVAILABLE")
+    resolved_model_name = model_name if model_name in contract_names else contract_names[0]
 
     credential = db.execute(text(
         "SELECT secret_encrypted FROM model_credentials WHERE model_config_id = :id "
@@ -55,14 +63,14 @@ def resolve_llm_caller(db: Session, model_id: str) -> dict:
         "provider": version.provider,
         "api_key": api_key,
         "api_base": version.api_base,
-        "model": model_name,
+        "model": resolved_model_name,
         "behavior_hash": version.behavior_hash,
         "conservative_input_limit": version.conservative_input_limit,
         "version_no": version.version_no,
     }
 
 
-def resolve_llm_caller_by_version(db: Session, version_id: str) -> dict:
+def resolve_llm_caller_by_version(db: Session, version_id: str, *, model_name: str | None = None) -> dict:
     """Resolve a pinned `model_config_versions.id` (the value Agents store as
     `default_model_config_version_id`) to the immutable caller tuple.  The
     version must be the identity's ACTIVE version (no stale pins)."""
@@ -76,4 +84,4 @@ def resolve_llm_caller_by_version(db: Session, version_id: str) -> dict:
     ), {"id": version_id}).scalar_one_or_none()
     if not active:
         raise ModelVersionUnavailableError("MODEL_VERSION_UNAVAILABLE")
-    return resolve_llm_caller(db, row["model_config_id"])
+    return resolve_llm_caller(db, row["model_config_id"], model_name=model_name)

@@ -72,6 +72,7 @@ export default function SystemPromptTab({ agentId, activeVersion, canEdit, onSav
         default_model_name: activeVersion.default_model_name ?? '',
         system_prompt: sanitizeText(draft) || null,
         memory_settings: activeVersion.memory_settings ?? {},
+        max_tool_rounds: activeVersion.max_tool_rounds ?? 5,
         application_state_schema_version_id: activeVersion.application_state_schema_version_id ?? null,
         change_note: t('agent.prompt.change_note', '系统提示词更新'),
         prompt_generation_id: generation?.status === 'accepted' ? generation.id : null,

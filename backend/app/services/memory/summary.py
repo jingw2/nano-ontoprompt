@@ -86,7 +86,8 @@ def maybe_regenerate_summary(db: Session, *, session_id: str) -> bool:
 
     transcript = "\n".join(f"[{m['ordinal']}] {m['role']}: {m['content']}" for m in unsummarized)
     from app.services.model_callers.extraction import resolve_llm_caller_by_version
-    caller = resolve_llm_caller_by_version(db, row["default_model_config_version_id"])
+    caller = resolve_llm_caller_by_version(db, row["default_model_config_version_id"],
+                                            model_name=row["default_model_name"])
     candidate = _call_summarizer(
         provider=caller["provider"], api_key=caller["api_key"], api_base=caller["api_base"],
         model=caller["model"], transcript=transcript,

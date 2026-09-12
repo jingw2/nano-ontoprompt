@@ -48,8 +48,10 @@ const TOOLS_O1 = {
     { descriptor_id: 'query:o-1', version: 1, source_kind: 'builtin', source_id: 'query',
       capability: 'read_instances', timeout_ms: 10000, result_limit: 10, descriptor_hash: 'h' + '0'.repeat(63) },
     { descriptor_id: 'logic:rule-1', version: 1, source_kind: 'logic', source_id: 'rule-1',
+      name: 'Rule: completeness',
       capability: 'execute_read_logic', timeout_ms: 10000, result_limit: 1, descriptor_hash: 'i' + '0'.repeat(63) },
     { descriptor_id: 'action:action-1', version: 1, source_kind: 'action', source_id: 'action-1',
+      name: 'Create Order',
       capability: 'execute_instance_action', timeout_ms: 30000, result_limit: 1, descriptor_hash: 'j' + '0'.repeat(63) },
   ],
 }
@@ -148,15 +150,15 @@ describe('P2C-TOOLS', () => {
     for (const cat of ['query', 'logic', 'action']) {
       await userEvent.click(await screen.findByTestId(`category-expand-o-1-${cat}`))
     }
-    await waitFor(() => expect(screen.getByText(/Logic 规则 · rule-1/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Rule: completeness')).toBeTruthy())
     // every category toggle defaults to checked
     for (const cat of ['mcp', 'query', 'write', 'logic', 'action']) {
       expect((screen.getByTestId(`category-o-1-${cat}`) as HTMLInputElement).checked).toBe(true)
     }
     // every exposed tool is selected under the default-all categories
     const queryCheckbox = screen.getByText(/查询（实例检索）/).closest('label')!.querySelector('input') as HTMLInputElement
-    const logicCheckbox = screen.getByText(/Logic 规则 · rule-1/).closest('label')!.querySelector('input') as HTMLInputElement
-    const actionCheckbox = screen.getByText(/实例 Action · action-1/).closest('label')!.querySelector('input') as HTMLInputElement
+    const logicCheckbox = screen.getByText('Rule: completeness').closest('label')!.querySelector('input') as HTMLInputElement
+    const actionCheckbox = screen.getByText('Create Order').closest('label')!.querySelector('input') as HTMLInputElement
     expect(queryCheckbox.checked).toBe(true)
     expect(logicCheckbox.checked).toBe(true)
     expect(actionCheckbox.checked).toBe(true)
@@ -190,12 +192,12 @@ describe('P2C-TOOLS', () => {
     await pickOntology('Supply Ontology')
     await screen.findByTestId('ontology-tools-o-1')
     await userEvent.click(await screen.findByTestId('category-expand-o-1-logic'))
-    await waitFor(() => expect(screen.getByText(/Logic 规则 · rule-1/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Rule: completeness')).toBeTruthy())
     // disable the Logic category: its tool is removed and becomes read-only
     const logicCategory = screen.getByTestId('category-o-1-logic') as HTMLInputElement
     await userEvent.click(logicCategory)
     expect(logicCategory.checked).toBe(false)
-    const logicTool = screen.getByText(/Logic 规则 · rule-1/).closest('label')!.querySelector('input') as HTMLInputElement
+    const logicTool = screen.getByText('Rule: completeness').closest('label')!.querySelector('input') as HTMLInputElement
     expect(logicTool.checked).toBe(false)
     expect(logicTool.disabled).toBe(true)
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
@@ -264,7 +266,7 @@ describe('P2C-TOOLS', () => {
     unmount()
   })
 
-  it('lists a bindable catalog entry and binds it', async () => {
+  it('lists a bindable catalog entry in the unified picker and binds it', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
@@ -282,10 +284,71 @@ describe('P2C-TOOLS', () => {
       }),
     )
     renderTab()
-    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
-    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
     await waitFor(() => expect(bindBody).not.toBeNull())
     expect(bindBody).toMatchObject({ tool_connection_version_id: 'tcv-1' })
+  })
+
+  it('lists a browser_use catalog entry in the unified picker and binds it', async () => {
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { tool_connection_version_id: 'tcv-bu', connection_id: 'c-bu', version_no: 1,
+            provider_id: 'p-bu', provider_name: 'Browser Agent', provider_kind: 'browser_use', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+    )
+    let bindBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions/v-1/external-tools', async ({ request }) => {
+        bindBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { id: 'aetb-2', alias: bindBody.alias, tool_connection_version_id: 'tcv-bu' }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    const select = screen.getByTestId('add-tool-select') as HTMLSelectElement
+    expect(select.options[0].textContent).toContain('Browser Agent')
+    expect(select.options[0].textContent).toContain('Browser Use')
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
+    await waitFor(() => expect(bindBody).not.toBeNull())
+    expect(bindBody).toMatchObject({ tool_connection_version_id: 'tcv-bu' })
+  })
+
+  it('lets the user pick a specific connection by name from several of the same kind', async () => {
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [
+          { tool_connection_version_id: 'tcv-1', connection_id: 'c-1', version_no: 1,
+            provider_id: 'p-1', provider_name: '生产环境-Bing', provider_kind: 'search', health_status: 'healthy' },
+          { tool_connection_version_id: 'tcv-2', connection_id: 'c-2', version_no: 1,
+            provider_id: 'p-1', provider_name: '测试环境-Serper', provider_kind: 'search', health_status: 'healthy' },
+        ] }, message: 'ok' })),
+    )
+    let bindBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions/v-1/external-tools', async ({ request }) => {
+        bindBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { id: 'aetb-3', alias: bindBody.alias, tool_connection_version_id: bindBody.tool_connection_version_id }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    const select = screen.getByTestId('add-tool-select') as HTMLSelectElement
+    expect([...select.options].map(o => o.textContent)).toEqual([
+      '生产环境-Bing (搜索)', '测试环境-Serper (搜索)',
+    ])
+    await userEvent.selectOptions(select, 'external:tcv-2')
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
+    await waitFor(() => expect(bindBody).not.toBeNull())
+    expect(bindBody).toMatchObject({ tool_connection_version_id: 'tcv-2' })
   })
 
   it('unbinds a currently bound external tool', async () => {
@@ -314,7 +377,7 @@ describe('P2C-TOOLS', () => {
     await waitFor(() => expect(unbound).toBe(true))
   })
 
-  it('lists a bindable Skill catalog entry and binds it', async () => {
+  it('lists a bindable Skill catalog entry in the unified picker and binds it', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
@@ -331,8 +394,9 @@ describe('P2C-TOOLS', () => {
       }),
     )
     renderTab()
-    await waitFor(() => expect(screen.getByTestId('bind-skill-sv-1')).toBeTruthy())
-    await userEvent.click(screen.getByTestId('bind-skill-sv-1'))
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
     await waitFor(() => expect(bindBody).not.toBeNull())
     expect(bindBody).toMatchObject({ skill_version_id: 'sv-1' })
   })
@@ -355,7 +419,7 @@ describe('P2C-TOOLS', () => {
       }),
     )
     renderTab()
-    await waitFor(() => expect(screen.getByTestId('external-kind-skill')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('external-tool-cards')).toBeTruthy())
     await userEvent.click(await screen.findByText('解绑'))
     await waitFor(() => expect(unbound).toBe(true))
   })
@@ -384,5 +448,64 @@ describe('P2C-TOOLS', () => {
     renderTab({ canEdit: false })
     await screen.findByTestId('ontology-picker')
     expect((screen.getByTestId('ontology-picker') as HTMLSelectElement).disabled).toBe(true)
+  })
+
+  it('shows the persisted max_tool_rounds and the supported-range hint', async () => {
+    defaultHandlers()
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
+    renderTab({ activeVersion: { ...VERSION, max_tool_rounds: 8 } })
+    expect(await screen.findByTestId('max-tool-rounds-input')).toHaveValue(8)
+    expect(screen.getByText(/1-20/)).toBeTruthy()
+  })
+
+  it('defaults to 5 when the active version has no max_tool_rounds yet', async () => {
+    defaultHandlers()
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
+    renderTab()
+    expect(await screen.findByTestId('max-tool-rounds-input')).toHaveValue(5)
+  })
+
+  it('saves an edited max_tool_rounds and marks the tab dirty', async () => {
+    defaultHandlers()
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
+    let savedBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions', async ({ request }) => {
+        savedBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { version_id: 'v-2', version_no: 2, config_hash: 'd' + '0'.repeat(63) }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    const dirty = vi.fn()
+    renderTab({ onDirtyChange: dirty })
+    const input = await screen.findByTestId('max-tool-rounds-input')
+    await userEvent.clear(input)
+    await userEvent.type(input, '12')
+    await waitFor(() => expect(dirty).toHaveBeenCalledWith(true))
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(savedBody).not.toBeNull())
+    expect(savedBody!.max_tool_rounds).toBe(12)
+  })
+
+  it('clamps an out-of-range max_tool_rounds to the supported bounds on blur', async () => {
+    defaultHandlers()
+    server.use(
+      http.get('*/api/v1/agents/catalog/ontologies', () =>
+        HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
+    )
+    renderTab()
+    const input = await screen.findByTestId('max-tool-rounds-input')
+    await userEvent.clear(input)
+    await userEvent.type(input, '999')
+    await userEvent.tab()
+    expect(input).toHaveValue(20)
   })
 })

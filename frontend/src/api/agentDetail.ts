@@ -23,6 +23,9 @@ export interface AgentVersion {
   default_model_name?: string | null
   system_prompt?: string | null
   memory_settings?: Record<string, unknown> | null
+  /** Max tool-calling rounds before the turn ends with TOOL_ROUND_LIMIT
+   * (backend default/range: app/services/agent/configuration.py). */
+  max_tool_rounds?: number | null
   application_state_schema_version_id?: string | null
   change_note?: string | null
   prompt_generation_id?: string | null
@@ -34,6 +37,9 @@ export interface AgentVersion {
 export interface CatalogModel {
   id: string
   name: string
+  /** The specific model string to call (e.g. "deepseek-v4-pro") — a config
+   * with several models yields one catalog row per model, all sharing `id`. */
+  model_name: string
   provider?: string | null
   version_no?: number | null
   behavior_hash?: string | null
@@ -82,6 +88,7 @@ export interface BasicPatch {
   default_model_name: string
   system_prompt?: string | null
   memory_settings?: Record<string, unknown>
+  max_tool_rounds?: number
   application_state_schema_version_id?: string | null
   change_note?: string | null
   prompt_generation_id?: string | null
@@ -99,6 +106,7 @@ export const agentDetailApi = {
     default_model_name: string
     system_prompt?: string | null
     memory_settings?: Record<string, unknown>
+    max_tool_rounds?: number
     ontology_bindings?: OntologyBinding[]
   }) =>
     apiClient.post<CreateAgentResult>('/agents', body, { headers: { 'Idempotency-Key': newAgentIdempotencyKey() } }),

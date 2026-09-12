@@ -44,6 +44,7 @@ class TurnRuntimeContext:
     release_id: str | None = None
     model_config_version_id: str | None = None
     model_name: str | None = None
+    max_tool_rounds: int | None = None
     runtime_artifact_id: str | None = None
     user_message: str = ""
     extra: dict[str, Any] = field(default_factory=dict)

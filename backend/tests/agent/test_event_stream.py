@@ -180,6 +180,54 @@ def test_events_api_and_sse_endpoints(schema):
         s.close()
 
 
+def test_answer_stream_endpoint_reflects_the_latest_published_delta(schema, monkeypatch):
+    """`GET /agent-turns/{turn_id}/answer-stream` is the Agent-chat live
+    preview channel (`app.services.runtime.answer_stream`) — same session
+    owner/run-grant auth as the other turn-scoped read endpoints above, but
+    backed by Redis rather than the persisted event log."""
+    s = _session(schema)
+    _seed(schema)
+    store: dict[str, str] = {}
+
+    class FakeRedis:
+        def set(self, key, value, ex=None):
+            store[key] = value
+
+        def get(self, key):
+            return store.get(key)
+
+    import app.services.runtime.answer_stream as answer_stream
+    monkeypatch.setattr(answer_stream, "_client", lambda *a, **kw: FakeRedis())
+
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': 'u-1', 'role': 'editor'})}"}
+    client = next(_client(s))
+    try:
+        with TestClient(client) as c:
+            # nothing published yet
+            r = c.get("/api/v1/agent-turns/t-1/answer-stream", headers=headers)
+            assert r.status_code == 200
+            assert r.json()["data"] is None
+
+            answer_stream.publish_delta("t-1", "你好", redis_client_factory=lambda: FakeRedis())
+
+            r = c.get("/api/v1/agent-turns/t-1/answer-stream", headers=headers)
+            assert r.status_code == 200
+            assert r.json()["data"] == {"text": "你好"}
+
+            # a real user with no run grant on this Agent is not found, same as /events
+            s.execute(text(
+                "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
+                "VALUES ('u-2','s2','s2@t.com','h','editor',true,:d,now(),now())"
+            ), {"d": DEFAULT_DOMAIN})
+            s.commit()
+            other = create_access_token({"sub": "u-2", "role": "editor"})
+            r = c.get("/api/v1/agent-turns/t-1/answer-stream",
+                     headers={"Authorization": f"Bearer {other}"})
+            assert r.status_code == 404
+    finally:
+        s.close()
+
+
 def test_multi_worker_sequence_no_duplicate(schema):
     """Two workers appending concurrently still produce one monotonic
     sequence per event (no duplicate sequence values)."""

@@ -20,7 +20,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from app.runtime.langgraph_runtime import LangGraphRuntime
+from app.runtime.langgraph_runtime import DEFAULT_MAX_TOOL_ROUNDS, LangGraphRuntime
 from app.runtime.protocol import TurnRuntimeContext
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -62,7 +62,7 @@ def pg_session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0018_agent_memory_short_term").returncode == 0
+    assert _alembic(schema, "upgrade", "head").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     yield s
     s.close()
@@ -232,9 +232,10 @@ def test_real_runtime_tool_path_via_gateway(db):
     assert types.count("model_call") == 2
     assert "tool_executed" in types
     assert types[-3] == "model_call" and types[-2] == "final_response"
-    # only the enabled query tool (plus the always-offered clarification tool)
-    # was offered to the model
-    assert rounds[0][1] == ["query_o_1", "request_clarification"]
+    # only the enabled query-category builtins (the query tool plus the
+    # entity-relation traversal tool) and the always-offered clarification
+    # tool were offered to the model
+    assert rounds[0][1] == ["query_o_1", "traverse_o_1", "request_clarification"]
     # the gateway received the governed read descriptor with injected params
     assert gateway.calls[0][0] == "ontology.read_instances"
     params = gateway.calls[0][1]
@@ -246,6 +247,63 @@ def test_real_runtime_tool_path_via_gateway(db):
     final = events[-2]
     assert final.payload["message"] == "根据查询结果：华东供应商的安全线为 500。"
     assert "Answer for" not in final.payload["message"]
+
+
+def test_real_runtime_narrates_tool_calling_rounds_to_the_live_preview_channel(db, monkeypatch):
+    """A tool-calling round produces no model text for the live-answer-
+    preview channel to stream (see app.services.runtime.answer_stream) —
+    the runtime narrates it instead, so the chat UI shows a changing status
+    ("正在查询本体数据…") rather than a bare spinner for the round's
+    duration."""
+    _seed_unit_graph(db)
+    gateway = FakeGateway()
+
+    def caller(caller_info, messages, tools):
+        if not any(m.get("role") == "tool" for m in messages):
+            return {"content": "", "tool_calls": [{
+                "id": "call-1", "name": "query_o_1", "arguments_json": '{"query": "安全线"}',
+            }]}
+        return {"content": "根据查询结果：华东供应商的安全线为 500。", "tool_calls": []}
+
+    published = []
+    monkeypatch.setattr(
+        "app.services.runtime.answer_stream.publish_delta",
+        lambda turn_id, text: published.append((turn_id, text)),
+    )
+
+    runtime = LangGraphRuntime(db, caller=caller, gateway=gateway)
+    context = _context()
+    _run(runtime, context)
+    assert published == [(context.turn_id, "正在查询本体数据…")]
+
+
+def test_real_runtime_respects_configured_max_tool_rounds(db):
+    """The Agent-version-configured tool-round cap (see
+    app.services.agent.configuration.MAX_TOOL_ROUNDS_RANGE) is what
+    LangGraphRuntime actually enforces — not always the hardcoded default."""
+    _seed_unit_graph(db)
+    gateway = FakeGateway()
+    call_count = 0
+
+    def always_calls_a_tool(caller_info, messages, tools):
+        nonlocal call_count
+        call_count += 1
+        return {"content": "", "tool_calls": [{
+            "id": f"call-{call_count}", "name": "query_o_1", "arguments_json": '{"query": "x"}',
+        }]}
+
+    runtime = LangGraphRuntime(db, caller=always_calls_a_tool, gateway=gateway, max_tool_rounds=2)
+    events = _run(runtime, _context())
+    assert [e.event_type for e in events].count("model_call") == 2
+    assert events[-1].event_type == "turn_failed"
+    assert events[-1].payload["error_code"] == "TOOL_ROUND_LIMIT"
+    # a runtime built with the default cap tolerates more rounds before failing
+    call_count = 0
+    gateway2 = FakeGateway()
+    runtime_default = LangGraphRuntime(db, caller=always_calls_a_tool, gateway=gateway2)
+    events_default = _run(runtime_default, _context())
+    assert [e.event_type for e in events_default].count("model_call") == DEFAULT_MAX_TOOL_ROUNDS
+    assert events_default[-1].payload["error_code"] == "TOOL_ROUND_LIMIT"
 
 
 def test_real_runtime_disabled_category_tool_not_offered(db):
@@ -370,7 +428,7 @@ def _seed_search_binding(db):
 def test_real_runtime_external_search_tool_offered_and_dispatched(pg_session, monkeypatch):
     from app.services.untrusted_artifact import make_artifact
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         return [{"title": "OntoPrompt", "url": "https://docs.example.com",
                  "artifact": make_artifact(source="https://docs.example.com", media_type="text/plain",
                                            raw_content="<b>hi from search</b>")}]

@@ -80,6 +80,18 @@ def turn_events(turn_id: str, db: Session = Depends(get_db),
     return {"data": result}
 
 
+@router.get("/agent-turns/{turn_id}/answer-stream")
+def turn_answer_stream(turn_id: str, db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_user)):
+    """Best-effort live preview of the model's in-progress answer (see
+    `app.services.runtime.answer_stream`) — `{"text": ...}` while a chunk has
+    been published, or `None` before the first chunk / after it expires."""
+    agent_id = _turn_agent_id(db, turn_id)
+    _require_run_grant(db, current_user.id, agent_id)
+    from app.services.runtime.answer_stream import read_delta
+    return {"data": read_delta(turn_id)}
+
+
 @router.get("/agent-turns/{turn_id}/stream")
 def turn_stream(turn_id: str, db: Session = Depends(get_db),
                 current_user: User = Depends(get_current_user),

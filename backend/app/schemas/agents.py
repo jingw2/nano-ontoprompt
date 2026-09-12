@@ -11,13 +11,17 @@ class OntologyBindingPatch(BaseModel):
     present value switches the runtime to category-mode filtering; None keeps
     the legacy `selected_tools`-only filter.  `tool_catalog_limit` caps how
     many category-derived (non-`selected_tools`) tool descriptors are turned
-    into LLM tool schemas per turn; None means unlimited (today's behavior)."""
+    into LLM tool schemas per turn; None means unlimited (today's behavior).
+    `entity_search_depth` caps how many relation hops `traverse_relations`
+    may walk per call for this binding; None falls back to the runtime
+    default of 10 hops."""
     ontology_id: str
     capabilities: List[str] = []
     allowlists: dict = {}
     selected_tools: List[str] = []
     enabled_categories: Optional[List[str]] = None
     tool_catalog_limit: Optional[int] = None
+    entity_search_depth: Optional[int] = None
 
 
 class AgentCreateRequest(BaseModel):
@@ -27,6 +31,7 @@ class AgentCreateRequest(BaseModel):
     default_model_name: str
     system_prompt: Optional[str] = None
     memory_settings: dict = {}
+    max_tool_rounds: int = 5
     application_state_schema_version_id: Optional[str] = None  # default: built-in chat-v1
     ontology_bindings: List[OntologyBindingPatch] = []
 
@@ -39,6 +44,7 @@ class AgentBasicVersionRequest(BaseModel):
     default_model_name: str
     system_prompt: Optional[str] = None
     memory_settings: dict = {}
+    max_tool_rounds: int = 5
     application_state_schema_version_id: Optional[str] = None
     change_note: Optional[str] = None
     ontology_bindings: Optional[List[OntologyBindingPatch]] = None  # None = keep existing
@@ -54,6 +60,7 @@ class AgentVersionOut(BaseModel):
     default_model_name: Optional[str] = None
     system_prompt: Optional[str] = None
     memory_settings: Optional[dict] = None
+    max_tool_rounds: Optional[int] = None
     application_state_schema_version_id: Optional[str] = None
     change_note: Optional[str] = None
     prompt_generation_id: Optional[str] = None

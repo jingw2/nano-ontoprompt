@@ -27,6 +27,10 @@ const server = setupServer(
   // trace content; tests that do can still `server.use()` an override.
   http.get('*/api/v1/agent-turns/:turnId/events', () =>
     HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false, terminal: false }, message: 'ok' })),
+  // ConversationPanel also polls this while a turn is in flight (live
+  // answer preview) — an empty baseline for tests that don't care about it.
+  http.get('*/api/v1/agent-turns/:turnId/answer-stream', () =>
+    HttpResponse.json({ data: null, message: 'ok' })),
 )
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
@@ -341,9 +345,9 @@ describe('P4B-STREAMUI', () => {
     // the SSE delivered nothing; the polling fallback surfaces the answer
     expect(await screen.findByText('轮询得到的答案', {}, { timeout: 5000 })).toBeTruthy()
     // the turn reaches terminal via the poll: the composer becomes usable
-    // again without a manual reload, and the thinking panel settles from its
-    // active "thinking…" state into its completed summary
-    await waitFor(() => expect(screen.getByTestId('thinking-toggle').textContent).not.toMatch(/思考中/), { timeout: 6000 })
+    // again without a manual reload, and the thinking panel disappears
+    // entirely (nothing left to show once the answer is in)
+    await waitFor(() => expect(screen.queryByTestId('thinking-panel')).toBeNull(), { timeout: 6000 })
     await userEvent.type(screen.getByPlaceholderText(/输入消息/), '再问一句')
     expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(false)
   })
