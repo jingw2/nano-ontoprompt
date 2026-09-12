@@ -17,6 +17,12 @@ replaced by four structured components: parameters, rules,
 submission_criteria, side_effects. There is no safe automatic mapping from
 the old freeform text into these typed lists, so existing actions start with
 empty lists rather than a guessed structure.
+
+2026-09-12 fix: the literal `server_default="[]"` on the four new JSON
+columns compiles to a bare string default, which MySQL rejects outright
+on JSON columns (`Error 1101: BLOB, TEXT, GEOMETRY or JSON column can't
+have a default value`). Switched to the dialect-aware default already
+established by 0030/0032/0033/0034/0031.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -28,16 +34,29 @@ branch_labels = None
 depends_on = None
 
 
+def _dialect_name() -> str:
+    return op.get_bind().dialect.name
+
+
+def _json_server_default(kind: str) -> sa.TextClause:
+    """Return a JSON default accepted by each supported SQL dialect."""
+    if _dialect_name() == "mysql":
+        function = "JSON_ARRAY()" if kind == "array" else "JSON_OBJECT()"
+        return sa.text(f"({function})")
+    value = "[]" if kind == "array" else "{}"
+    return sa.text(f"'{value}'")
+
+
 def upgrade() -> None:
     op.add_column("logic_rules", sa.Column("function_type", sa.String(30), nullable=True))
     op.add_column("logic_rules", sa.Column("definition", sa.Text(), nullable=True))
     op.execute("UPDATE logic_rules SET definition = formula WHERE formula IS NOT NULL")
     op.drop_column("logic_rules", "formula")
 
-    op.add_column("actions", sa.Column("parameters", sa.JSON(), nullable=False, server_default="[]"))
-    op.add_column("actions", sa.Column("rules", sa.JSON(), nullable=False, server_default="[]"))
-    op.add_column("actions", sa.Column("submission_criteria", sa.JSON(), nullable=False, server_default="[]"))
-    op.add_column("actions", sa.Column("side_effects", sa.JSON(), nullable=False, server_default="[]"))
+    op.add_column("actions", sa.Column("parameters", sa.JSON(), nullable=False, server_default=_json_server_default("array")))
+    op.add_column("actions", sa.Column("rules", sa.JSON(), nullable=False, server_default=_json_server_default("array")))
+    op.add_column("actions", sa.Column("submission_criteria", sa.JSON(), nullable=False, server_default=_json_server_default("array")))
+    op.add_column("actions", sa.Column("side_effects", sa.JSON(), nullable=False, server_default=_json_server_default("array")))
     op.drop_column("actions", "execution_rule")
     op.drop_column("actions", "function_code")
 
