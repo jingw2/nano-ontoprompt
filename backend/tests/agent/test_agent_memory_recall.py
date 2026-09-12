@@ -174,7 +174,15 @@ def test_upsert_and_query_similar_roundtrips_when_chroma_available():
 
 def test_upsert_returns_false_when_chroma_unavailable(monkeypatch):
     from app.services.memory import vector_store
-    monkeypatch.setattr(vector_store, "is_available", lambda: False)
+
+    class _UnavailableService:
+        available = False
+
+    # upsert/query/delete each call `_service().available` directly (never
+    # the module-level `is_available()`, which is a separate convenience
+    # wrapper) — patching `is_available` alone leaves them talking to a
+    # real, actually-available ChromaService and never exercises this path.
+    monkeypatch.setattr(vector_store, "_service", lambda: _UnavailableService())
     assert vector_store.upsert_memory_embedding("mem-x", "ag-1", "u-1", "sd-1", "text") is False
     assert vector_store.query_similar("sd-1", "ag-1", "u-1", "query", n_results=5) == []
     assert vector_store.delete_memory_embedding("mem-x", "sd-1") is False
