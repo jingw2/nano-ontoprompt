@@ -34,6 +34,19 @@ def create_package(db: Session, *, actor_id: str, name: str) -> dict:
     return {"id": package_id, "name": name, "status": "active"}
 
 
+def rename_package(db: Session, *, actor_id: str, package_id: str, name: str) -> dict:
+    name = name.strip()
+    if not name:
+        raise SkillError("PACKAGE_NAME_REQUIRED")
+    updated = db.execute(text(
+        "UPDATE skill_packages SET name = :name, updated_at = now() WHERE id = :id RETURNING id"
+    ), {"name": name, "id": package_id}).scalar_one_or_none()
+    if updated is None:
+        raise SkillError("PACKAGE_NOT_FOUND")
+    db.commit()
+    return {"id": package_id, "name": name}
+
+
 def create_skill_version(db: Session, *, actor_id: str, package_id: str,
                          manifest: dict, signatures: list[dict]) -> dict:
     exists = db.execute(text(
@@ -75,6 +88,36 @@ def create_skill_version(db: Session, *, actor_id: str, package_id: str,
     db.commit()
     return {"id": version_id, "package_id": package_id, "version_no": next_version,
             "canonical_hash": canonical_hash, "approval_status": "pending"}
+
+
+def create_skill_version_from_upload(db: Session, *, actor_id: str, package_id: str,
+                                     filename: str, content: bytes) -> dict:
+    """Self-service path for an admin who wants to upload a `.md`/`.zip`
+    Skill file (Claude Desktop-style SKILL.md convention) instead of
+    hand-assembling a JSON manifest + Ed25519 signature. The security scan
+    (app/services/skills/scanner.py) is the trust gate here, not a human
+    signer, so a clean scan is auto-signed with the server's own key and
+    immediately approved — no separate manual approval step."""
+    from app.services.skills.auto_sign import auto_sign_manifest
+    from app.services.skills.scanner import scan_skill_content
+    from app.services.skills.upload import SkillUploadError, build_manifest_from_upload
+    try:
+        manifest = build_manifest_from_upload(filename, content)
+    except SkillUploadError as exc:
+        raise SkillError(f"UPLOAD_INVALID:{exc}") from exc
+    findings = scan_skill_content(manifest)
+    if findings:
+        raise SkillError(f"SCAN_REJECTED:{';'.join(findings)}")
+    signature = auto_sign_manifest(manifest)
+    created = create_skill_version(db, actor_id=actor_id, package_id=package_id,
+                                   manifest=manifest, signatures=[signature])
+    import json
+    db.execute(text(
+        "UPDATE skill_versions SET scan_report = CAST(:r AS json) WHERE id = :id"
+    ), {"r": json.dumps(findings), "id": created["id"]})
+    db.commit()
+    approved = approve_skill_version(db, actor_id=actor_id, version_id=created["id"])
+    return {**created, **approved, "scan_report": findings}
 
 
 def approve_skill_version(db: Session, *, actor_id: str, version_id: str) -> dict:
@@ -122,12 +165,12 @@ def list_skill_packages(db: Session) -> list[dict]:
 def list_skill_versions(db: Session, package_id: str | None = None) -> list[dict]:
     if package_id is not None:
         rows = db.execute(text(
-            "SELECT v.id, v.package_id, v.version_no, v.approval_status, v.canonical_hash, v.manifest "
-            "FROM skill_versions v WHERE v.package_id = :p ORDER BY v.version_no DESC"
+            "SELECT v.id, v.package_id, v.version_no, v.approval_status, v.canonical_hash, v.manifest, "
+            "v.scan_report FROM skill_versions v WHERE v.package_id = :p ORDER BY v.version_no DESC"
         ), {"p": package_id}).mappings().all()
     else:
         rows = db.execute(text(
-            "SELECT v.id, v.package_id, v.version_no, v.approval_status, v.canonical_hash, v.manifest "
-            "FROM skill_versions v ORDER BY v.version_no DESC"
+            "SELECT v.id, v.package_id, v.version_no, v.approval_status, v.canonical_hash, v.manifest, "
+            "v.scan_report FROM skill_versions v ORDER BY v.version_no DESC"
         )).mappings().all()
     return [dict(r) for r in rows]

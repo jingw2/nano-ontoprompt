@@ -11,6 +11,10 @@ export interface ToolDescriptor {
   version: number
   source_kind: 'builtin' | 'logic' | 'action' | 'mcp'
   source_id: string
+  /** Human-readable name (the ontology's actual business rule / action name).
+   * Absent on descriptors compiled before this field existed — callers fall
+   * back to the generic category label + a source_id prefix in that case. */
+  name?: string
   input_schema?: Record<string, unknown>
   output_schema?: Record<string, unknown>
   capability: string
@@ -43,6 +47,9 @@ export interface OntologyBinding {
   /** Caps how many category-derived (non-selected_tools) tool descriptors
    * are turned into LLM tool schemas per turn. Null/undefined = unlimited. */
   tool_catalog_limit?: number | null
+  /** Caps how many relation hops the entity-relation traversal tool may walk
+   * per call. Null/undefined = runtime default (10). */
+  entity_search_depth?: number | null
 }
 
 export interface ToolValidationRequest {

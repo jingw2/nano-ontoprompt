@@ -12,7 +12,12 @@ export interface ToolConnection {
   provider_id: string
   status: string
   active_version_id: string | null
+  name?: string | null
+  active_version_endpoint?: string | null
+  active_version_search_provider?: SearchProvider | null
 }
+
+export type SearchProvider = 'generic' | 'bing' | 'google' | 'serper' | 'brave'
 
 export interface ToolConnectionVersion {
   id: string
@@ -22,6 +27,7 @@ export interface ToolConnectionVersion {
   audience: string | null
   scopes: string[]
   allowlists: Record<string, unknown>
+  search_provider: SearchProvider | null
   approval_status: 'pending' | 'approved' | 'rejected'
   health_status: 'healthy' | 'unhealthy' | 'unknown'
   created_by: string
@@ -35,6 +41,53 @@ export interface CreateConnectionVersionPayload {
   scopes?: string[]
   credential_reference?: string
   allowlists?: Record<string, unknown>
+  search_provider?: SearchProvider
+}
+
+export interface UpdateConnectionVersionPayload {
+  endpoint?: string
+  audience?: string
+  scopes?: string[]
+  credential_reference?: string
+  allowlists?: Record<string, unknown>
+  search_provider?: SearchProvider
+}
+
+/** Known real search-API request shapes an admin can pick without having to
+ * hand-assemble the right endpoint/auth contract themselves (see
+ * app/services/tools/search.py — each shape differs in auth placement,
+ * header name, and HTTP method, not just response format). `endpoint` is a
+ * starting template the admin still edits (Google's needs a real `cx`
+ * engine id substituted in). `labelKey`/`noteKey` resolve via i18n; the
+ * paired `label`/`note` values are the fallback shown if the key is ever
+ * missing (matching this codebase's t(key, fallback) convention). */
+export const SEARCH_PROVIDER_PRESETS: Record<SearchProvider, {
+  labelKey: string; label: string; endpoint: string; noteKey: string; note: string
+}> = {
+  generic: {
+    labelKey: 'toolConnections.search_provider_generic', label: '自定义（通用）', endpoint: '',
+    noteKey: 'toolConnections.search_provider_generic_note', note: 'GET 请求，密钥通过 Authorization: Bearer 头传递',
+  },
+  bing: {
+    labelKey: 'toolConnections.search_provider_bing', label: 'Bing Web Search API v7',
+    endpoint: 'https://api.bing.microsoft.com/v7.0/search',
+    noteKey: 'toolConnections.search_provider_bing_note', note: '密钥通过 Ocp-Apim-Subscription-Key 头传递',
+  },
+  google: {
+    labelKey: 'toolConnections.search_provider_google', label: 'Google Custom Search JSON API',
+    endpoint: 'https://www.googleapis.com/customsearch/v1?cx=YOUR_SEARCH_ENGINE_ID',
+    noteKey: 'toolConnections.search_provider_google_note', note: '请将 cx 替换为你的搜索引擎 ID；密钥作为 key 查询参数传递',
+  },
+  serper: {
+    labelKey: 'toolConnections.search_provider_serper', label: 'Serper.dev',
+    endpoint: 'https://google.serper.dev/search',
+    noteKey: 'toolConnections.search_provider_serper_note', note: 'POST 请求，密钥通过 X-API-KEY 头传递',
+  },
+  brave: {
+    labelKey: 'toolConnections.search_provider_brave', label: 'Brave Search API',
+    endpoint: 'https://api.search.brave.com/res/v1/web/search',
+    noteKey: 'toolConnections.search_provider_brave_note', note: '密钥通过 X-Subscription-Token 头传递',
+  },
 }
 
 export interface IssueMcpTokenPayload {
@@ -45,8 +98,8 @@ export interface IssueMcpTokenPayload {
   audience?: string
 }
 
-export const PROVIDER_KINDS = ['search', 'playwright', 'external_mcp', 'skill', 'ontology_mcp'] as const
-export const LIVE_PROVIDER_KINDS = ['search', 'playwright', 'external_mcp'] as const
+export const PROVIDER_KINDS = ['search', 'playwright', 'external_mcp', 'skill', 'ontology_mcp', 'browser_use'] as const
+export const LIVE_PROVIDER_KINDS = ['search', 'playwright', 'external_mcp', 'browser_use'] as const
 
 export const toolConnectionsApi = {
   listProviders: () => apiClientV2.get<{ items: ToolProvider[] }>('/tool-providers'),
@@ -58,10 +111,16 @@ export const toolConnectionsApi = {
     ),
   createConnection: (providerId: string) =>
     apiClientV2.post<ToolConnection>('/tool-connections', { provider_id: providerId }),
+  renameConnection: (connectionId: string, name: string) =>
+    apiClientV2.put<{ id: string; name: string }>(`/tool-connections/${connectionId}`, { name }),
   listVersions: (connectionId: string) =>
     apiClientV2.get<{ items: ToolConnectionVersion[] }>(`/tool-connections/${connectionId}/versions`),
   createVersion: (payload: CreateConnectionVersionPayload) =>
     apiClientV2.post<ToolConnectionVersion>('/tool-connections/versions', payload),
+  updateVersion: (versionId: string, payload: UpdateConnectionVersionPayload) =>
+    apiClientV2.put<{ id: string; approval_status: string }>(`/tool-connections/versions/${versionId}`, payload),
+  deleteVersion: (versionId: string) =>
+    apiClientV2.delete<{ id: string; deleted: boolean }>(`/tool-connections/versions/${versionId}`),
   approveVersion: (versionId: string) =>
     apiClientV2.post<{ id: string; approval_status: string }>(`/tool-connections/versions/${versionId}/approve`),
   activateVersion: (connectionId: string, versionId: string) =>

@@ -6,6 +6,10 @@ class CreateSkillPackageRequest(BaseModel):
     name: str
 
 
+class RenameSkillPackageRequest(BaseModel):
+    name: str
+
+
 class SkillSignatureIn(BaseModel):
     public_key_hex: str
     signature_hex: str

@@ -10,6 +10,8 @@ from app.schemas.tool_connections import (
     CreateConnectionVersionRequest,
     CreateProviderRequest,
     IssueMcpTokenRequest,
+    RenameConnectionRequest,
+    UpdateConnectionVersionRequest,
 )
 from app.services.tool_connections import (
     ToolConnectionError,
@@ -18,12 +20,15 @@ from app.services.tool_connections import (
     create_connection,
     create_connection_version,
     create_provider,
+    delete_connection_version,
     issue_mcp_token,
     list_connection_versions,
     list_connections,
     list_providers,
     pin_mcp_schema,
+    rename_connection,
     test_connection_version,
+    update_connection_version,
 )
 
 router = APIRouter()
@@ -73,6 +78,16 @@ def create_connection_route(body: CreateConnectionRequest, db: Session = Depends
     return {"data": result}
 
 
+@router.put("/tool-connections/{connection_id}")
+def rename_connection_route(connection_id: str, body: RenameConnectionRequest, db: Session = Depends(get_db),
+                            current_user: User = Depends(require_admin)):
+    try:
+        result = rename_connection(db, actor_id=current_user.id, connection_id=connection_id, name=body.name)
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
 @router.post("/tool-connections/versions", status_code=201)
 def create_connection_version_route(body: CreateConnectionVersionRequest, db: Session = Depends(get_db),
                                     current_user: User = Depends(require_admin)):
@@ -80,8 +95,32 @@ def create_connection_version_route(body: CreateConnectionVersionRequest, db: Se
         result = create_connection_version(
             db, actor_id=current_user.id, connection_id=body.connection_id, endpoint=body.endpoint,
             audience=body.audience, scopes=body.scopes, credential_reference=body.credential_reference,
-            allowlists=body.allowlists,
+            allowlists=body.allowlists, search_provider=body.search_provider,
         )
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
+@router.put("/tool-connections/versions/{version_id}")
+def update_connection_version_route(version_id: str, body: UpdateConnectionVersionRequest,
+                                    db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    try:
+        result = update_connection_version(
+            db, actor_id=current_user.id, version_id=version_id, endpoint=body.endpoint,
+            audience=body.audience, scopes=body.scopes, credential_reference=body.credential_reference,
+            allowlists=body.allowlists, search_provider=body.search_provider,
+        )
+    except ToolConnectionError as exc:
+        raise _error(exc)
+    return {"data": result}
+
+
+@router.delete("/tool-connections/versions/{version_id}")
+def delete_connection_version_route(version_id: str, db: Session = Depends(get_db),
+                                    current_user: User = Depends(require_admin)):
+    try:
+        result = delete_connection_version(db, actor_id=current_user.id, version_id=version_id)
     except ToolConnectionError as exc:
         raise _error(exc)
     return {"data": result}

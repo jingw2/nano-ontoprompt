@@ -37,6 +37,7 @@ EXTERNAL_TOOL_DESCRIPTORS = {
     "external.playwright": frozenset({"external_tool_call"}),
     "external.skill": frozenset({"external_tool_call"}),
     "external.mcp": frozenset({"external_tool_call"}),
+    "external.browser_use": frozenset({"external_tool_call"}),
 }
 
 
@@ -130,7 +131,8 @@ class ToolGateway:
         if binding_alive is None:
             raise ToolGatewayError("EXTERNAL_TOOL_BINDING_REVOKED")
         version = self._db.execute(text(
-            "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
+            "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, "
+            "tcv.search_provider, tp.kind "
             "FROM tool_connection_versions tcv "
             "JOIN tool_connections tc ON tc.id = tcv.connection_id "
             "JOIN tool_providers tp ON tp.id = tc.provider_id "
@@ -142,6 +144,8 @@ class ToolGateway:
             return self._execute_playwright(request, version, correlation_id)
         if version["kind"] == "external_mcp":
             return self._execute_mcp(request, correlation_id)
+        if version["kind"] == "browser_use":
+            return self._execute_browser_use(request, version, correlation_id)
         if version["kind"] != "search":
             raise ToolGatewayError("EXTERNAL_TOOL_KIND_UNSUPPORTED")
 
@@ -151,6 +155,7 @@ class ToolGateway:
                 endpoint=version["endpoint"] or "", api_key=version["credential_reference"],
                 query=str(request.parameters.get("query") or ""),
                 result_limit=int(request.parameters.get("result_limit") or 5),
+                provider=version["search_provider"],
             )
         except SearchError as exc:
             raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
@@ -188,6 +193,29 @@ class ToolGateway:
         payload = {"results": [
             {"title": safe_markdown(result["title"] if isinstance(result["title"], str) else ""),
              "url": _safe_external_url(result["final_url"] if isinstance(result["final_url"], str) else ""),
+             "content": result["artifact"].sanitized_content,
+             "source": result["artifact"].source, "sensitivity": result["artifact"].sensitivity}
+        ]}
+        return GatewayResult(descriptor_id=request.descriptor_id, outcome="untrusted_read",
+                             payload=payload, correlation_id=correlation_id,
+                             trace=[{"correlation_id": correlation_id, "descriptor": request.descriptor_id,
+                                    "grant_recheck": "passed", "binding_recheck": "passed"}])
+
+    def _execute_browser_use(self, request: GatewayRequest, version, correlation_id: str) -> GatewayResult:
+        from app.services.tools.browser_use import BrowserUseError, run_browser_task
+        from app.services.untrusted_artifact import safe_markdown
+        try:
+            result = run_browser_task(
+                endpoint=version["endpoint"] or "", api_key=version["credential_reference"],
+                task=str(request.parameters.get("task") or ""),
+            )
+        except BrowserUseError as exc:
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{exc}") from exc
+        except Exception as exc:  # raw transport errors escape the adapter's taxonomy
+            raise ToolGatewayError(f"EXTERNAL_TOOL_FAILED:{type(exc).__name__}") from exc
+        payload = {"results": [
+            {"title": safe_markdown(""),
+             "url": _safe_external_url(result["url"] if isinstance(result["url"], str) else ""),
              "content": result["artifact"].sanitized_content,
              "source": result["artifact"].source, "sensitivity": result["artifact"].sensitivity}
         ]}

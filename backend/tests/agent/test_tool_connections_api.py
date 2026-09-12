@@ -35,7 +35,7 @@ def session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
+    assert _alembic(schema, "upgrade", "head").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     s.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
@@ -53,6 +53,179 @@ def test_create_provider_rejects_unknown_kind(session):
     from app.services.tool_connections import create_provider, ToolConnectionError
     with pytest.raises(ToolConnectionError):
         create_provider(session, actor_id="u-1", name="X", kind="not_a_kind")
+
+
+def test_create_connection_version_rejects_unknown_search_provider(session):
+    from app.services.tool_connections import create_connection, create_provider, create_connection_version, ToolConnectionError
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    with pytest.raises(ToolConnectionError):
+        create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                  search_provider="not_a_real_provider")
+
+
+def test_create_connection_version_persists_search_provider(session):
+    from app.services.tool_connections import create_connection, create_provider, create_connection_version, list_connection_versions
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                              endpoint="https://api.bing.microsoft.com/v7.0/search", search_provider="bing")
+    versions = list_connection_versions(session, connection_id=connection["id"])
+    assert versions[0]["search_provider"] == "bing"
+
+
+def test_update_connection_version_edits_a_pending_version_in_place(session):
+    from app.services.tool_connections import (
+        create_connection, create_provider, create_connection_version, update_connection_version,
+        list_connection_versions,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://old.example.com", search_provider="generic")
+    update_connection_version(session, actor_id="u-1", version_id=version["id"],
+                              endpoint="https://google.serper.dev/search", search_provider="serper")
+    versions = list_connection_versions(session, connection_id=connection["id"])
+    assert len(versions) == 1  # edited in place, no new version row
+    assert versions[0]["endpoint"] == "https://google.serper.dev/search"
+    assert versions[0]["search_provider"] == "serper"
+
+
+def test_update_connection_version_omitted_credential_leaves_existing_one_untouched(session):
+    """No read endpoint ever returns `credential_reference` for the edit
+    form to prefill, so omitting it on update must not blank out the
+    existing key."""
+    from app.services.tool_connections import create_connection, create_provider, create_connection_version, update_connection_version
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://x.example.com", credential_reference="secret-key")
+    update_connection_version(session, actor_id="u-1", version_id=version["id"], endpoint="https://y.example.com")
+    stored = session.execute(text(
+        "SELECT credential_reference FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version["id"]}).scalar_one()
+    assert stored == "secret-key"
+
+
+def test_update_connection_version_rejects_once_approved(session):
+    from app.services.tool_connections import (
+        create_connection, create_provider, create_connection_version, approve_connection_version,
+        update_connection_version, ToolConnectionError,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://x.example.com")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    with pytest.raises(ToolConnectionError):
+        update_connection_version(session, actor_id="u-1", version_id=version["id"], endpoint="https://y.example.com")
+
+
+def test_update_connection_version_rejects_unknown_version(session):
+    from app.services.tool_connections import update_connection_version, ToolConnectionError
+    with pytest.raises(ToolConnectionError):
+        update_connection_version(session, actor_id="u-1", version_id="does-not-exist", endpoint="https://y.example.com")
+
+
+def test_list_connections_surfaces_active_version_target(session):
+    """A connection has no name of its own — the admin UI needs the active
+    version's search_provider/endpoint to show what it's actually pointed
+    at instead of an opaque id."""
+    from app.services.tool_connections import (
+        activate_connection_version, approve_connection_version, create_connection,
+        create_connection_version, create_provider, list_connections,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://api.bing.microsoft.com/v7.0/search", search_provider="bing")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    activate_connection_version(session, actor_id="u-1", connection_id=connection["id"], version_id=version["id"])
+    connections = list_connections(session, provider_id=provider["id"])
+    assert connections[0]["active_version_search_provider"] == "bing"
+    assert connections[0]["active_version_endpoint"] == "https://api.bing.microsoft.com/v7.0/search"
+
+
+def test_list_connections_active_version_fields_null_when_not_activated(session):
+    from app.services.tool_connections import create_connection, create_provider, list_connections
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    connections = list_connections(session, provider_id=provider["id"])
+    assert connections[0]["active_version_search_provider"] is None
+    assert connections[0]["active_version_endpoint"] is None
+
+
+def test_delete_connection_version_removes_a_pending_version(session):
+    from app.services.tool_connections import (
+        create_connection, create_provider, create_connection_version, delete_connection_version,
+        list_connection_versions,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"])
+    delete_connection_version(session, actor_id="u-1", version_id=version["id"])
+    assert list_connection_versions(session, connection_id=connection["id"]) == []
+
+
+def test_delete_connection_version_rejects_once_approved(session):
+    from app.services.tool_connections import (
+        create_connection, create_provider, create_connection_version, approve_connection_version,
+        delete_connection_version, ToolConnectionError,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://x.example.com")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    with pytest.raises(ToolConnectionError):
+        delete_connection_version(session, actor_id="u-1", version_id=version["id"])
+
+
+def test_delete_connection_version_rejects_unknown_version(session):
+    from app.services.tool_connections import delete_connection_version, ToolConnectionError
+    with pytest.raises(ToolConnectionError):
+        delete_connection_version(session, actor_id="u-1", version_id="does-not-exist")
+
+
+def test_rename_connection_sets_name(session):
+    from app.services.tool_connections import create_connection, create_provider, list_connections, rename_connection
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    result = rename_connection(session, actor_id="u-1", connection_id=connection["id"], name="生产环境-Bing")
+    assert result["name"] == "生产环境-Bing"
+    connections = list_connections(session, provider_id=provider["id"])
+    assert connections[0]["name"] == "生产环境-Bing"
+
+
+def test_rename_connection_rejects_blank_name(session):
+    from app.services.tool_connections import create_connection, create_provider, rename_connection, ToolConnectionError
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    with pytest.raises(ToolConnectionError):
+        rename_connection(session, actor_id="u-1", connection_id=connection["id"], name="   ")
+
+
+def test_rename_connection_rejects_unknown_connection(session):
+    from app.services.tool_connections import rename_connection, ToolConnectionError
+    with pytest.raises(ToolConnectionError):
+        rename_connection(session, actor_id="u-1", connection_id="does-not-exist", name="x")
+
+
+def test_agent_external_tool_catalog_prefers_connection_name(session):
+    from app.services.agent.catalog import agent_external_tool_catalog
+    from app.services.tool_connections import (
+        activate_connection_version, approve_connection_version, create_connection,
+        create_connection_version, create_provider, rename_connection,
+    )
+    provider = create_provider(session, actor_id="u-1", name="Web Search", kind="search")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://x.example.com")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    activate_connection_version(session, actor_id="u-1", connection_id=connection["id"], version_id=version["id"])
+    rename_connection(session, actor_id="u-1", connection_id=connection["id"], name="生产环境-Bing")
+    catalog = agent_external_tool_catalog(session)
+    assert catalog[0]["provider_name"] == "生产环境-Bing"
 
 
 def test_full_provider_connection_version_activation_flow(session):
@@ -91,7 +264,7 @@ def test_test_endpoint_search_healthy(session, monkeypatch):
         create_provider, test_connection_version,
     )
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         return []
 
     monkeypatch.setattr("app.services.tools.search.web_search", _fake_web_search)
@@ -107,6 +280,51 @@ def test_test_endpoint_search_healthy(session, monkeypatch):
         "SELECT health_status FROM tool_connection_versions WHERE id = :id"
     ), {"id": version["id"]}).scalar_one()
     assert persisted == "healthy"
+
+
+def test_create_provider_accepts_browser_use_kind(session):
+    from app.services.tool_connections import create_provider
+    provider = create_provider(session, actor_id="u-1", name="Browser Agent", kind="browser_use")
+    assert provider["kind"] == "browser_use"
+
+
+def test_test_endpoint_browser_use_healthy(session, monkeypatch):
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _fake_run_browser_task(*, endpoint, api_key, task, timeout_seconds=60.0):
+        return {"content": "ok", "url": endpoint, "artifact": None}
+
+    monkeypatch.setattr("app.services.tools.browser_use.run_browser_task", _fake_run_browser_task)
+    provider = create_provider(session, actor_id="u-1", name="Browser Agent", kind="browser_use")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://browser-use.example.com/run")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "healthy"
+
+
+def test_test_endpoint_browser_use_upstream_error_unhealthy(session, monkeypatch):
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version,
+        create_provider, test_connection_version,
+    )
+
+    def _fake_run_browser_task(*, endpoint, api_key, task, timeout_seconds=60.0):
+        from app.services.tools.browser_use import BrowserUseError
+        raise BrowserUseError("BROWSER_USE_UPSTREAM_ERROR:500")
+
+    monkeypatch.setattr("app.services.tools.browser_use.run_browser_task", _fake_run_browser_task)
+    provider = create_provider(session, actor_id="u-1", name="Browser Agent", kind="browser_use")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://browser-use.example.com/run")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    result = test_connection_version(session, version_id=version["id"])
+    assert result["status"] == "unhealthy"
 
 
 def test_test_endpoint_unapproved_version_rejected(session):
@@ -142,7 +360,7 @@ def test_test_endpoint_search_connection_error_unhealthy(session, monkeypatch):
         create_provider, test_connection_version,
     )
 
-    def _failing_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _failing_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         raise httpx.ConnectError("boom")
 
     monkeypatch.setattr("app.services.tools.search.web_search", _failing_web_search)
@@ -164,7 +382,7 @@ def test_test_endpoint_search_non_dict_json_unhealthy(session, monkeypatch):
         create_provider, test_connection_version,
     )
 
-    def _non_dict_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _non_dict_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         raise AttributeError("'list' object has no attribute 'get'")
 
     monkeypatch.setattr("app.services.tools.search.web_search", _non_dict_web_search)

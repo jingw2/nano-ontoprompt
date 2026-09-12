@@ -35,7 +35,7 @@ def session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
+    assert _alembic(schema, "upgrade", "0049_tool_provider_kind_browser_use").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     s.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
@@ -106,10 +106,25 @@ def _bound_playwright_version(session) -> str:
     return version["id"]
 
 
+def _bound_browser_use_version(session) -> str:
+    from app.services.tool_connections import (
+        approve_connection_version, create_connection, create_connection_version, create_provider,
+    )
+    from app.services.agent.configuration import bind_external_tool
+    provider = create_provider(session, actor_id="u-1", name="Browser Agent", kind="browser_use")
+    connection = create_connection(session, actor_id="u-1", provider_id=provider["id"])
+    version = create_connection_version(session, actor_id="u-1", connection_id=connection["id"],
+                                        endpoint="https://browser-use.example.com/run")
+    approve_connection_version(session, actor_id="u-1", version_id=version["id"])
+    bind_external_tool(session, actor_id="u-1", agent_version_id="av-1",
+                       tool_connection_version_id=version["id"], alias="browser_use")
+    return version["id"]
+
+
 def test_gateway_dispatches_search_and_wraps_results(session, monkeypatch):
     from app.services.tool_gateway import GatewayRequest, ToolGateway
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         from app.services.untrusted_artifact import make_artifact
         return [{"title": "Result", "url": "https://x.example.com",
                  "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
@@ -131,7 +146,7 @@ def test_gateway_sanitizes_title_and_url_at_payload_boundary(session, monkeypatc
     title goes through Safe Markdown, non-http(s) urls collapse to ''."""
     from app.services.tool_gateway import GatewayRequest, ToolGateway
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         from app.services.untrusted_artifact import make_artifact
         return [{"title": "<img src=x onerror=1>", "url": "javascript:alert(1)",
                  "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
@@ -154,7 +169,7 @@ def test_gateway_degrades_non_string_title_url(session, monkeypatch):
     not raise an unhandled TypeError at the sanitizer boundary."""
     from app.services.tool_gateway import GatewayRequest, ToolGateway
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         from app.services.untrusted_artifact import make_artifact
         return [{"title": 123, "url": {"nested": "object"},
                  "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
@@ -242,4 +257,45 @@ def test_gateway_playwright_domain_mismatch_fails_closed(session, monkeypatch):
             agent_id="ag-1", user_id="u-1", descriptor_id="external.playwright", operation="external_tool_call",
             parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id,
                         "url": "https://evil.example.com/"},
+        ))
+
+
+def test_gateway_dispatches_browser_use_and_wraps_results(session, monkeypatch):
+    from app.services.tool_gateway import GatewayRequest, ToolGateway
+
+    def _fake_run_browser_task(*, endpoint, api_key, task, timeout_seconds=60.0):
+        from app.services.untrusted_artifact import make_artifact
+        return {"content": "the price is $9.99", "url": "https://shop.example.com/item",
+                "artifact": make_artifact(source="https://shop.example.com/item", media_type="text/plain",
+                                          raw_content="the price is $9.99")}
+
+    monkeypatch.setattr("app.services.tools.browser_use.run_browser_task", _fake_run_browser_task)
+    version_id = _bound_browser_use_version(session)
+    gateway = ToolGateway(session)
+    result = gateway.execute(GatewayRequest(
+        agent_id="ag-1", user_id="u-1", descriptor_id="external.browser_use", operation="external_tool_call",
+        parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id,
+                    "task": "find the price"},
+    ))
+    assert result.outcome == "untrusted_read"
+    entry = result.payload["results"][0]
+    assert entry["content"] == "the price is $9.99"
+    assert entry["url"] == "https://shop.example.com/item"
+
+
+def test_gateway_browser_use_upstream_failure_fails_closed(session, monkeypatch):
+    from app.services.tool_gateway import GatewayRequest, ToolGateway, ToolGatewayError
+
+    def _fake_run_browser_task(*, endpoint, api_key, task, timeout_seconds=60.0):
+        from app.services.tools.browser_use import BrowserUseError
+        raise BrowserUseError("BROWSER_USE_UPSTREAM_ERROR:500")
+
+    monkeypatch.setattr("app.services.tools.browser_use.run_browser_task", _fake_run_browser_task)
+    version_id = _bound_browser_use_version(session)
+    gateway = ToolGateway(session)
+    with pytest.raises(ToolGatewayError):
+        gateway.execute(GatewayRequest(
+            agent_id="ag-1", user_id="u-1", descriptor_id="external.browser_use", operation="external_tool_call",
+            parameters={"agent_version_id": "av-1", "tool_connection_version_id": version_id,
+                        "task": "find the price"},
         ))

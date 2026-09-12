@@ -49,7 +49,7 @@ def session():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    assert _alembic(schema, "upgrade", "0015_external_mcp").returncode == 0
+    assert _alembic(schema, "upgrade", "head").returncode == 0
     s = sessionmaker(bind=create_engine(_scoped_url(schema)))()
     s.execute(text(
         "INSERT INTO users (id,username,email,password_hash,role,is_active,security_domain_id,created_at,updated_at) "
@@ -126,7 +126,7 @@ def _bind_playwright(session, agent_version_id: str) -> str:
 def test_search_tool_usable_for_domain_agent(session, monkeypatch, domain):
     from app.services.tool_gateway import GatewayRequest, ToolGateway
 
-    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0):
+    def _fake_web_search(*, endpoint, api_key, query, result_limit=5, timeout_seconds=10.0, provider=None):
         from app.services.untrusted_artifact import make_artifact
         return [{"title": f"{domain} 搜索结果", "url": "https://x.example.com",
                  "artifact": make_artifact(source="https://x.example.com", media_type="text/plain",
