@@ -6,6 +6,11 @@ import {
 
 export const BASE_CAPABILITIES = ['read_schema', 'read_instances', 'traverse_relations']
 
+/** Matches the runtime's DEFAULT_ENTITY_SEARCH_DEPTH (langgraph_runtime.py) —
+ * a freshly bound ontology starts at the same depth the runtime would fall
+ * back to anyway, so the field shows a concrete number instead of blank. */
+export const DEFAULT_ENTITY_SEARCH_DEPTH = 10
+
 export function categoryOf(d: ToolDescriptor): ToolCategory {
   if (d.category) return d.category
   if (d.source_kind === 'builtin') return 'query'
@@ -67,6 +72,7 @@ export function useOntologyToolSelection(ontologies: { id: string }[]) {
       allowlists: {},
       selected_tools: [],
       enabled_categories: [...TOOL_CATEGORIES],
+      entity_search_depth: DEFAULT_ENTITY_SEARCH_DEPTH,
     }])
     loadTools(ontology.id)
   }, [ontologies, loadTools])
@@ -112,8 +118,14 @@ export function useOntologyToolSelection(ontologies: { id: string }[]) {
     )))
   }, [])
 
+  const setEntitySearchDepth = useCallback((ontologyId: string, depth: number | null) => {
+    setBindings(prev => prev.map(b => (
+      b.ontology_id === ontologyId ? { ...b, entity_search_depth: depth } : b
+    )))
+  }, [])
+
   return {
     bindings, setBindings, toolsByOntology, setToolsByOntology, error, setError,
-    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit,
+    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit, setEntitySearchDepth,
   }
 }

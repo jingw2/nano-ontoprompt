@@ -5,7 +5,7 @@ import {
   TOOL_CATEGORIES, TOOL_CAPABILITY_GROUPS,
   type OntologyBinding, type PublishedOntology, type ToolCategory, type ToolDescriptor,
 } from '@/api/agentTools'
-import { categoryOf, effectiveCategories } from './useOntologyToolSelection'
+import { categoryOf, effectiveCategories, DEFAULT_ENTITY_SEARCH_DEPTH } from './useOntologyToolSelection'
 
 const CATEGORY_LABELS: Record<ToolCategory, { label: string; fallback: string }> = {
   mcp: { label: 'agent.tools.category_mcp', fallback: 'MCP 外部工具' },
@@ -25,6 +25,7 @@ interface Props {
   onToggleCategory: (ontologyId: string, category: ToolCategory, on: boolean) => void
   onToggleTool: (ontologyId: string, descriptorId: string, on: boolean) => void
   onSetToolCatalogLimit: (ontologyId: string, limit: number | null) => void
+  onSetEntitySearchDepth: (ontologyId: string, depth: number | null) => void
   /** When the caller has its own ontology-fetch error, suppress the "no ontologies" empty
    * state so the two messages don't render at once (caller still renders its own error text). */
   error?: string
@@ -32,7 +33,7 @@ interface Props {
 
 export default function OntologyToolSelector({
   ontologies, bindings, toolsByOntology, canEdit, onBind, onUnbind, onToggleCategory, onToggleTool,
-  onSetToolCatalogLimit, error,
+  onSetToolCatalogLimit, onSetEntitySearchDepth, error,
 }: Props) {
   const { t } = useTranslation()
   // one Agent binds at most one Ontology: once bound, the picker is disabled —
@@ -112,6 +113,22 @@ export default function OntologyToolSelector({
                   {t('agent.tools.catalog_limit_note', '本体逻辑规则/动作过多时，按此数量截断，超出显式勾选的工具不受影响')}
                 </span>
               </label>
+              <label className="flex items-center gap-2 text-xs mb-3">
+                {t('agent.tools.entity_search_depth', '实体搜索深度')}
+                <input type="number" min={1} max={50}
+                  data-testid={`entity-search-depth-${binding.ontology_id}`}
+                  disabled={!canEdit}
+                  value={binding.entity_search_depth ?? ''}
+                  onChange={e => {
+                    const raw = e.target.value
+                    onSetEntitySearchDepth(binding.ontology_id, raw === '' ? null : Number(raw))
+                  }}
+                  placeholder={String(DEFAULT_ENTITY_SEARCH_DEPTH)}
+                  className="border rounded px-2 py-1 w-24" />
+                <span className="text-gray-400">
+                  {t('agent.tools.entity_search_depth_note', '实体关系遍历工具单次调用最多可跳转的关系跳数，默认 10。数值越大搜索范围越广，但耗时更长、消耗上下文更多')}
+                </span>
+              </label>
               {TOOL_CATEGORIES.map(cat => {
                 const catTools = tools.filter(d => categoryOf(d) === cat)
                 if (catTools.length === 0) return null
@@ -135,9 +152,11 @@ export default function OntologyToolSelector({
                           className="mt-1" />
                         <span>
                           <span className="font-medium">
-                            {t(TOOL_CAPABILITY_GROUPS[cat]?.label ?? 'agent.tools.tool_other',
-                               TOOL_CAPABILITY_GROUPS[cat]?.fallback ?? d.source_kind)}
-                            {d.source_kind !== 'builtin' && ` · ${d.source_id.slice(0, 8)}`}
+                            {d.source_kind === 'logic' || d.source_kind === 'action'
+                              ? (d.name || `${d.source_kind}:${d.source_id.slice(0, 8)}`)
+                              : t(TOOL_CAPABILITY_GROUPS[cat]?.label ?? 'agent.tools.tool_other',
+                                 TOOL_CAPABILITY_GROUPS[cat]?.fallback ?? d.source_kind)}
+                            {d.source_kind === 'mcp' && ` · ${d.source_id.slice(0, 8)}`}
                           </span>
                           <span className="text-xs text-gray-400 ml-2 font-mono">{d.capability}</span>
                         </span>

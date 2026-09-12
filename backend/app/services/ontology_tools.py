@@ -124,23 +124,56 @@ def _read_instances(db: Session, parameters: dict, correlation_id: str) -> tuple
     return ("read", payload)
 
 
+MAX_TRAVERSE_DEPTH = 50
+MAX_TRAVERSE_LIMIT = 200
+
+
 def _traverse_relations(db: Session, parameters: dict, correlation_id: str) -> tuple[str, dict]:
+    """Bounded multi-hop BFS outward from `instance_id`, walking only relation
+    types this exact release exposes (release-filtered, matching the single-
+    hop behavior this replaces). `depth` (default 1 — unspecified callers,
+    e.g. the external MCP server's `ontology_traverse_relations` tool, keep
+    today's one-hop behavior) caps how many hops the walk may take; the
+    LangGraph Agent runtime always passes an explicit depth resolved from the
+    ontology binding's `entity_search_depth` (default 10, capped at
+    MAX_TRAVERSE_DEPTH). Edges are collected as they are traversed by the
+    walk itself (not by a separate "any edge touching a reached instance"
+    pass), so an edge one hop beyond the requested depth is never included."""
     ontology_id = parameters.get("ontology_id")
     release_id = parameters.get("release_id")
     instance_id = parameters.get("instance_id")
-    limit = int(parameters.get("limit", 20))
+    depth = max(1, min(int(parameters.get("depth") or 1), MAX_TRAVERSE_DEPTH))
+    limit = max(1, min(int(parameters.get("limit", 20)), MAX_TRAVERSE_LIMIT))
     if not ontology_id or not release_id or not instance_id:
         raise OntologyToolError("TRAVERSE_PARAMETERS_REQUIRED")
+    # relation types this exact release exposes — resolved once up front so
+    # the walk itself is a plain id-membership filter, not a per-hop jsonb
+    # containment check
+    released_relation_ids = db.execute(text(
+        "SELECT jsonb_array_elements(rel.manifest_projection->'relations')->>'id' "
+        "FROM ontology_releases rel WHERE rel.id = :rid AND rel.ontology_id = :o"
+    ), {"rid": release_id, "o": ontology_id}).scalars().all()
+    if not released_relation_ids:
+        return ("read", {"edges": [], "correlation_id": correlation_id})
     rows = db.execute(text(
-        "SELECT eir.id AS edge_id, eir.source_instance_id, eir.target_instance_id, "
+        "WITH RECURSIVE frontier(instance_id, edge_id, hop) AS ( "
+        "  SELECT CAST(:iid AS varchar), CAST(NULL AS varchar), 0 "
+        "  UNION "
+        "  SELECT "
+        "    CASE WHEN eir.source_instance_id = fr.instance_id THEN eir.target_instance_id "
+        "         ELSE eir.source_instance_id END, "
+        "    eir.id, fr.hop + 1 "
+        "  FROM frontier fr "
+        "  JOIN entity_instance_relations eir "
+        "    ON (eir.source_instance_id = fr.instance_id OR eir.target_instance_id = fr.instance_id) "
+        "  WHERE eir.ontology_id = :o AND eir.deleted_at IS NULL "
+        "  AND eir.relation_definition_id = ANY(:rel_ids) AND fr.hop < :depth "
+        ") "
+        "SELECT DISTINCT eir.id AS edge_id, eir.source_instance_id, eir.target_instance_id, "
         "eir.relation_definition_id "
         "FROM entity_instance_relations eir "
-        "WHERE eir.ontology_id = :o AND eir.deleted_at IS NULL "
-        "AND (eir.source_instance_id = :iid OR eir.target_instance_id = :iid) "
-        "AND EXISTS (SELECT 1 FROM ontology_releases rel WHERE rel.id = :rid "
-        "AND rel.ontology_id = eir.ontology_id "
-        "AND rel.manifest_projection @> jsonb_build_object('relations', "
-        "jsonb_build_array(jsonb_build_object('id', eir.relation_definition_id)))) "
+        "WHERE eir.id IN (SELECT edge_id FROM frontier WHERE edge_id IS NOT NULL) "
         "LIMIT :lim"
-    ), {"o": ontology_id, "rid": release_id, "iid": instance_id, "lim": limit}).mappings().all()
+    ), {"o": ontology_id, "iid": instance_id, "rel_ids": list(released_relation_ids),
+        "depth": depth, "lim": limit}).mappings().all()
     return ("read", {"edges": [dict(r) for r in rows], "correlation_id": correlation_id})

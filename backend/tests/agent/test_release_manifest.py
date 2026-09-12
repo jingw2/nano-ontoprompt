@@ -132,7 +132,7 @@ def test_all_named_definition_collections_sort_by_full_stable_id_only():
             for value, label in (("a2", "A"), ("a1", "Z"))
         ],
         tool_descriptors=[
-            {"descriptor_id": value, "version": 1, "source_kind": "action", "source_id": "a1", "input_schema": {}, "output_schema": {}, "capability": "read", "timeout_ms": 10, "result_limit": 2, "descriptor_hash": "b" * 64}
+            {"descriptor_id": value, "version": 1, "source_kind": "action", "source_id": "a1", "name": "Approve", "input_schema": {}, "output_schema": {}, "capability": "read", "timeout_ms": 10, "result_limit": 2, "descriptor_hash": "b" * 64}
             for value in ("t2", "t1")
         ],
     )
