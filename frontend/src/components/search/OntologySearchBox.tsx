@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
@@ -12,6 +13,7 @@ interface SearchResult {
 }
 
 export default function OntologySearchBox({ ontologyId }: { ontologyId: string }) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('keyword')
   const [results, setResults] = useState<SearchResult[]>([])
@@ -47,7 +49,7 @@ export default function OntologySearchBox({ ontologyId }: { ontologyId: string }
                 mode === m ? 'bg-black text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
               }`}
             >
-              {m === 'keyword' ? '关键词' : '语义'}
+              {m === 'keyword' ? t('search.mode_keyword') : t('search.mode_semantic')}
             </button>
           ))}
         </div>
@@ -55,7 +57,7 @@ export default function OntologySearchBox({ ontologyId }: { ontologyId: string }
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          placeholder={mode === 'semantic' ? '语义搜索...' : '关键词搜索...'}
+          placeholder={mode === 'semantic' ? t('search.ph_semantic') : t('search.ph_keyword')}
           className="flex-1 border rounded px-3 py-1.5 text-sm"
         />
         <button
@@ -68,7 +70,7 @@ export default function OntologySearchBox({ ontologyId }: { ontologyId: string }
       </div>
 
       {searched && results.length === 0 && (
-        <p className="text-sm text-gray-400">未找到相关结果。</p>
+        <p className="text-sm text-gray-400">{t('search.no_results')}</p>
       )}
 
       {results.length > 0 && (

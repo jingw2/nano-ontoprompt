@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
@@ -9,12 +10,6 @@ import { ArrowLeft, Pencil, Trash2, Save, X, Plus, Check, ToggleLeft, ToggleRigh
 import type { LogicRule, Action, Entity } from '@/types/ontology'
 
 const FUNCTION_TYPES = ['derived_property', 'aggregation', 'complex_edit', 'external_query'] as const
-const FUNCTION_TYPE_LABELS: Record<string, string> = {
-  derived_property: '派生属性 (Derived Property)',
-  aggregation: '聚合计算 (Aggregation)',
-  complex_edit: '批量编辑 (Complex Edit)',
-  external_query: '外部查询 (External Query)',
-}
 
 function ChipEditor({
   editing, items, onRemove, availableOptions, onAdd, color,
@@ -26,6 +21,7 @@ function ChipEditor({
   onAdd: (id: string) => void
   color: 'blue' | 'orange' | 'purple'
 }) {
+  const { t } = useTranslation()
   const [addId, setAddId] = useState('')
   const cls = {
     blue:   { chip: 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100', del: 'text-blue-400 hover:text-blue-700' },
@@ -34,7 +30,7 @@ function ChipEditor({
   }[color]
 
   if (!editing) {
-    if (items.length === 0) return <p className="text-sm text-gray-400">暂无</p>
+    if (items.length === 0) return <p className="text-sm text-gray-400">{t('common.none')}</p>
     return (
       <div className="flex flex-wrap gap-2">
         {items.map(item => (
@@ -63,14 +59,14 @@ function ChipEditor({
         <div className="flex items-center gap-2">
           <select value={addId} onChange={e => setAddId(e.target.value)}
             className="flex-1 border rounded-lg px-2 py-1.5 text-xs">
-            <option value="">— 选择添加 —</option>
+            <option value="">{t('detailPage.select_to_add')}</option>
             {availableOptions.map(o => (
               <option key={o.id} value={o.id}>{o.label}</option>
             ))}
           </select>
           <button disabled={!addId} onClick={() => { if (addId) { onAdd(addId); setAddId('') } }}
             className="flex items-center gap-1 px-2.5 py-1.5 bg-black text-white rounded-lg text-xs disabled:opacity-40">
-            <Plus size={12} /> 添加
+            <Plus size={12} /> {t('detailPage.add')}
           </button>
         </div>
       )}
@@ -79,6 +75,7 @@ function ChipEditor({
 }
 
 export default function LogicDetailPage() {
+  const { t } = useTranslation()
   const { id: oid, lid } = useParams<{ id: string; lid: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -150,8 +147,8 @@ export default function LogicDetailPage() {
     setEditing(true)
   }
 
-  if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
-  if (!rule) return <div className="p-6 text-red-500">逻辑规则未找到</div>
+  if (isLoading) return <div className="p-6 text-gray-400">{t('common.loading')}</div>
+  if (!rule) return <div className="p-6 text-red-500">{t('logicDetail.not_found')}</div>
 
   // linked_entities 可能是实体显示名(简易 LLM)或实体类型名(Pipeline Mapping)
   const linkedKeys = new Set(rule.linked_entities ?? [])
@@ -205,18 +202,18 @@ export default function LogicDetailPage() {
       <div className="flex items-center justify-between">
         <button onClick={() => navigate(`/ontologies/${oid}?tab=logic`)}
           className="flex items-center gap-2 text-gray-500 hover:text-black text-sm">
-          <ArrowLeft size={16} /> 返回逻辑规则列表
+          <ArrowLeft size={16} /> {t('logicDetail.back_to_list')}
         </button>
         <div className="flex items-center gap-2">
           {editing ? (
             <>
               <button onClick={() => setEditing(false)}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-                <X size={14} /> 取消
+                <X size={14} /> {t('common.cancel')}
               </button>
               <button onClick={handleSubmit(onSubmit)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white rounded-lg text-sm">
-                <Save size={14} /> 保存
+                <Save size={14} /> {t('common.save')}
               </button>
             </>
           ) : (
@@ -224,15 +221,15 @@ export default function LogicDetailPage() {
               <button onClick={() => toggleMut.mutate()} disabled={toggleMut.isPending}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                 {rule.enabled !== false ? <ToggleRight size={14} className="text-green-600" /> : <ToggleLeft size={14} />}
-                {rule.enabled !== false ? '已启用' : '已禁用'}
+                {rule.enabled !== false ? t('logicDetail.enabled') : t('logicDetail.disabled')}
               </button>
               <button onClick={startEdit}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-                <Pencil size={14} /> 编辑
+                <Pencil size={14} /> {t('common.edit')}
               </button>
               <button onClick={() => setShowDeleteConfirm(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50">
-                <Trash2 size={14} /> 删除
+                <Trash2 size={14} /> {t('common.delete')}
               </button>
             </>
           )}
@@ -241,36 +238,36 @@ export default function LogicDetailPage() {
 
       {/* Rule Info Card */}
       <div className="bg-white border rounded-xl p-6">
-        <h3 className="font-semibold mb-4">规则信息</h3>
+        <h3 className="font-semibold mb-4">{t('logicDetail.info_title')}</h3>
         {editing ? (
           <form className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">中文名 *</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('entities.ph_name_cn')}</label>
                 <input {...register('name_cn', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">英文名</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('entities.col_name_en')}</label>
                 <input {...register('name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">置信度 (0-1)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('detailPage.confidence')} (0-1)</label>
                 <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">类型（Palantir Ontology Functions）</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('logicDetail.function_type_label')}</label>
               <select {...register('function_type')} className="w-full border rounded-lg px-3 py-2 text-sm">
-                {FUNCTION_TYPES.map(ft => <option key={ft} value={ft}>{FUNCTION_TYPE_LABELS[ft]}</option>)}
+                {FUNCTION_TYPES.map(ft => <option key={ft} value={ft}>{t(`logic.type_${ft}`)}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">定义</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('logic.col_definition')}</label>
               <textarea {...register('definition')} rows={4} className="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-none"
-                placeholder="如 delay_minutes = actual_departure - scheduled_departure" />
+                placeholder={t('logic.ph_definition')} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">描述</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('detailPage.description')}</label>
               <textarea {...register('description')} rows={3} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
             </div>
           </form>
@@ -278,19 +275,19 @@ export default function LogicDetailPage() {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-xs text-gray-500 mb-1">中文名</p>
+                <p className="text-xs text-gray-500 mb-1">{t('entities.col_name_cn')}</p>
                 <p className="text-sm font-medium">{rule.name_cn}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">英文名</p>
+                <p className="text-xs text-gray-500 mb-1">{t('entities.col_name_en')}</p>
                 <p className="text-sm">{rule.name_en || '—'}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">版本</p>
+                <p className="text-xs text-gray-500 mb-1">{t('detailPage.version')}</p>
                 <p className="text-sm font-mono">{rule.version}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">状态</p>
+                <p className="text-xs text-gray-500 mb-1">{t('logic.col_status')}</p>
                 <span className={`inline-flex text-xs px-1.5 py-0.5 rounded border ${
                   rule.status === 'published' ? 'bg-green-50 text-green-700 border-green-200' :
                   rule.status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' :
@@ -298,7 +295,7 @@ export default function LogicDetailPage() {
                 }`}>{rule.status || 'draft'}</span>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">置信度</p>
+                <p className="text-xs text-gray-500 mb-1">{t('detailPage.confidence')}</p>
                 <div className="flex items-center gap-3">
                   <div className="w-32"><ConfidenceBar value={rule.confidence} /></div>
                   <span className="text-sm text-gray-600">{Math.round(rule.confidence * 100)}%</span>
@@ -307,29 +304,29 @@ export default function LogicDetailPage() {
             </div>
             {rule.function_type && (
               <div>
-                <p className="text-xs text-gray-500 mb-1">类型</p>
+                <p className="text-xs text-gray-500 mb-1">{t('logic.col_type')}</p>
                 <span className="inline-flex text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600">
-                  {FUNCTION_TYPE_LABELS[rule.function_type] || rule.function_type}
+                  {t(`logic.type_${rule.function_type}`, rule.function_type)}
                 </span>
               </div>
             )}
             {rule.definition && (
               <div>
-                <p className="text-xs text-gray-500 mb-1">定义</p>
+                <p className="text-xs text-gray-500 mb-1">{t('logic.col_definition')}</p>
                 <div className="bg-gray-50 rounded-lg p-3 font-mono text-xs text-gray-700 whitespace-pre-wrap">{rule.definition}</div>
               </div>
             )}
             <div>
-              <p className="text-xs text-gray-500 mb-1">描述</p>
+              <p className="text-xs text-gray-500 mb-1">{t('detailPage.description')}</p>
               <p className="text-sm text-gray-700">{rule.description || '—'}</p>
             </div>
             <div className="grid grid-cols-2 gap-4 pt-2 border-t">
               <div>
-                <p className="text-xs text-gray-500 mb-1">创建时间</p>
+                <p className="text-xs text-gray-500 mb-1">{t('detailPage.created_at')}</p>
                 <p className="text-xs text-gray-600">{formatDate(rule.created_at)}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-1">更新时间</p>
+                <p className="text-xs text-gray-500 mb-1">{t('detailPage.updated_at')}</p>
                 <p className="text-xs text-gray-600">{formatDate(rule.updated_at)}</p>
               </div>
             </div>
@@ -340,10 +337,10 @@ export default function LogicDetailPage() {
       {/* Related Entities — inline link management */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">关联实体</h3>
+          <h3 className="font-semibold">{t('actionDetail.related_entities_title')}</h3>
           <button onClick={() => setEntitiesEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${entitiesEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {entitiesEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {entitiesEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
         <ChipEditor
@@ -359,10 +356,10 @@ export default function LogicDetailPage() {
       {/* Related Actions — inline link management */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">关联动作</h3>
+          <h3 className="font-semibold">{t('logicDetail.related_actions_title')}</h3>
           <button onClick={() => setActionsEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${actionsEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {actionsEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {actionsEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
         <ChipEditor
@@ -379,13 +376,13 @@ export default function LogicDetailPage() {
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 w-80">
-            <h3 className="font-semibold mb-2">确认删除</h3>
-            <p className="text-sm text-gray-600 mb-4">确定要删除规则「{rule.name_cn}」吗？此操作不可撤销。</p>
+            <h3 className="font-semibold mb-2">{t('common.confirm_delete')}</h3>
+            <p className="text-sm text-gray-600 mb-4">{t('logic.delete_confirm', { name: rule.name_cn })}</p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setShowDeleteConfirm(false)}
-                className="px-4 py-2 border rounded-lg text-sm">取消</button>
+                className="px-4 py-2 border rounded-lg text-sm">{t('common.cancel')}</button>
               <button onClick={() => deleteMut.mutate()}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm">删除</button>
+                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm">{t('common.delete')}</button>
             </div>
           </div>
         </div>

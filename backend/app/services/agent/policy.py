@@ -93,6 +93,7 @@ _RUNTIME_OPERATIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/api/v1/agent-turns/{turn_id}/cancel"): frozenset({"run"}),
     ("POST", "/api/v1/agent-turns/{turn_id}/stream-ticket"): frozenset({"run"}),
     ("GET", "/api/v1/agent-turns/{turn_id}/events"): frozenset({"run"}),
+    ("GET", "/api/v1/agent-turns/{turn_id}/answer-stream"): frozenset({"run"}),
     ("GET", "/api/v1/agent-turns/{turn_id}/tool-evidence"): frozenset({"run"}),
     ("GET", "/api/v1/agent-turns/{turn_id}/stream"): frozenset({"run"}),
     ("GET", "/api/v1/agent-approvals/{approval_id}"): frozenset({"run"}),

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Database, Loader2, X, Table2 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
@@ -9,6 +10,7 @@ export default function OutputInspector({
   onChange: (key: string, value: unknown) => void
   readOnly?: boolean
 }) {
+  const { t } = useTranslation()
   const curatedIds = ((config.curated_dataset_ids as string[] | undefined) || (config.curated_dataset_id ? [config.curated_dataset_id as string] : []))
   const curatedKey = curatedIds.join('|')
   const [previews, setPreviews] = useState<Record<string, unknown[]>>({})
@@ -37,27 +39,27 @@ export default function OutputInspector({
   if (!readOnly) {
     return (
       <>
-        <div><label className="text-xs text-gray-500 mb-1 block">输出类型</label><select value={String(config.dataset_type || 'curated_dataset')} onChange={e => onChange('dataset_type', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="curated_dataset">Curated Dataset</option></select></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">主键字段</label><input value={String((config.primary_key as string[])?.join(', ') || '')} onChange={e => onChange('primary_key', e.target.value.split(',').map(s => s.trim()))} placeholder="例：order_id" className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">需要审核</label><label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={config.review_required !== false} onChange={e => onChange('review_required', e.target.checked)} className="accent-black" /><span className="text-xs">输出后需要人工审核</span></label></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{t('outputInspector.output_type_label')}</label><select value={String(config.dataset_type || 'curated_dataset')} onChange={e => onChange('dataset_type', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="curated_dataset">Curated Dataset</option></select></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{t('outputInspector.primary_key_label')}</label><input value={String((config.primary_key as string[])?.join(', ') || '')} onChange={e => onChange('primary_key', e.target.value.split(',').map(s => s.trim()))} placeholder={t('outputInspector.primary_key_ph')} className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{t('outputInspector.review_required_label')}</label><label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={config.review_required !== false} onChange={e => onChange('review_required', e.target.checked)} className="accent-black" /><span className="text-xs">{t('outputInspector.review_required_hint')}</span></label></div>
       </>
     )
   }
 
   if (curatedIds.length === 0) {
-    return <div className="text-center py-8 text-gray-400 text-xs">尚未运行，暂无数据</div>
+    return <div className="text-center py-8 text-gray-400 text-xs">{t('outputInspector.not_run_yet')}</div>
   }
 
   return (
     <div className="space-y-3">
       <div className="bg-green-50 border border-green-200 rounded-lg p-3">
         <div className="flex items-center gap-1.5 text-xs text-green-700 font-medium mb-1"><Database size={12} />Curated Dataset(s)</div>
-        <p className="text-xs text-green-600">{curatedIds.length} 张结构化输出表</p>
+        <p className="text-xs text-green-600">{t('outputInspector.output_tables_count', { count: curatedIds.length })}</p>
       </div>
 
       {/* Loading */}
       {previewLoading && (
-        <div className="flex items-center gap-1 text-xs text-gray-400 py-4 justify-center"><Loader2 size={12} className="animate-spin" />加载中...</div>
+        <div className="flex items-center gap-1 text-xs text-gray-400 py-4 justify-center"><Loader2 size={12} className="animate-spin" />{t('common.loading')}</div>
       )}
 
       {/* Table Card */}
@@ -66,7 +68,7 @@ export default function OutputInspector({
         const info = datasetInfo[id]
         return (
         <div key={id}>
-          <p className="text-xs text-gray-500 mb-2 font-medium">结构化数据表</p>
+          <p className="text-xs text-gray-500 mb-2 font-medium">{t('outputInspector.structured_table_label')}</p>
           <button
             onClick={() => setModalData({ title: info?.name || 'Curated Dataset', rows })}
             className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-gray-400 hover:bg-gray-50 transition-colors text-left"
@@ -75,8 +77,8 @@ export default function OutputInspector({
               <Table2 size={14} className="text-green-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-800 truncate">{info?.name || '数据集'}</p>
-              <p className="text-xs text-gray-400">{rows.length} 行 · {rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>).length : 0} 列 · v{info?.version_no || 1}</p>
+              <p className="text-sm font-medium text-gray-800 truncate">{info?.name || t('outputInspector.dataset_fallback_name')}</p>
+              <p className="text-xs text-gray-400">{t('outputInspector.rows_cols_summary', { rows: rows.length, cols: rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>).length : 0, version: info?.version_no || 1 })}</p>
             </div>
           </button>
         </div>
@@ -84,7 +86,7 @@ export default function OutputInspector({
 
       {/* Empty state */}
       {!previewLoading && curatedIds.length > 0 && Object.values(previews).every(rows => rows.length === 0) && (
-        <div className="text-center py-4 text-gray-400 text-xs">暂无数据</div>
+        <div className="text-center py-4 text-gray-400 text-xs">{t('outputInspector.no_data')}</div>
       )}
 
       {/* Data Detail Modal */}
@@ -94,7 +96,7 @@ export default function OutputInspector({
             <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
               <div>
                 <h3 className="font-semibold text-sm">{modalData.title}</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{modalData.rows.length} 行</p>
+                <p className="text-xs text-gray-400 mt-0.5">{t('outputInspector.rows_count', { count: modalData.rows.length })}</p>
               </div>
               <button onClick={() => setModalData(null)} className="text-gray-400 hover:text-black"><X size={18} /></button>
             </div>

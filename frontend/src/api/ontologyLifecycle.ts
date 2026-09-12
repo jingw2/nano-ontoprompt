@@ -65,13 +65,13 @@ export const ontologyLifecycleApi = {
     apiClient.get<OntologyReleaseDetail>(`/ontologies/${ontologyId}/releases/${releaseId}`),
 }
 
-export function displayStatus(status: OntologyStatus | string | undefined): string {
+export function displayStatus(status: OntologyStatus | string | undefined, t: (key: string, fallback?: string) => string): string {
   switch (status) {
-    case 'draft': return '草稿'
-    case 'creating': return '创建中'
-    case 'created': return '已创建'
-    case 'published': return '已发布'
-    case 'archived': return '已归档'
-    default: return status ?? '未知'
+    case 'draft': return t('ontology.status_draft', 'Draft')
+    case 'creating': return t('ontology.status_creating', 'Creating')
+    case 'created': return t('ontology.status_created', 'Created')
+    case 'published': return t('ontology.status_published', 'Published')
+    case 'archived': return t('ontology.status_archived', 'Archived')
+    default: return status ?? t('common.unknown', 'Unknown')
   }
 }

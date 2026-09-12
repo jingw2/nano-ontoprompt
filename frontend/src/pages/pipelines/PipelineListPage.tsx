@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2,
@@ -16,12 +17,8 @@ const STATUS_STYLE: Record<string, string> = {
   published: 'bg-green-50 text-green-600 border-green-200',
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  draft: '草稿', editing: '编辑中', running: '运行中',
-  failed: '失败', published: '已发布',
-}
-
 export default function PipelineListPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [loading, setLoading] = useState(true)
@@ -40,17 +37,17 @@ export default function PipelineListPage() {
   }, [search, filterDomain, filterStatus])
 
   useEffect(() => {
-    const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
+    const timer = setTimeout(load, 0)
+    return () => clearTimeout(timer)
   }, [search, filterDomain, filterStatus, load])
 
   const handleDelete = async (pl: Pipeline) => {
-    if (!window.confirm(`确认删除 Pipeline「${pl.name}」？删除后不会删除已生成的 Curated Dataset。`)) return
+    if (!window.confirm(t('pipelines.confirm_delete', { name: pl.name }))) return
     await pipelinesApi.delete(pl.id)
     load()
   }
 
-  const domains = [...new Set(pipelines.map(p => p.domain || '通用').filter(Boolean))]
+  const domains = [...new Set(pipelines.map(p => p.domain || t('data.domain_general')).filter(Boolean))]
 
   const filtered = pipelines.filter(p => {
     if (filterDomain && p.domain !== filterDomain) return false
@@ -67,14 +64,14 @@ export default function PipelineListPage() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">Pipeline 列表</h2>
-          <p className="text-xs text-gray-400 mt-0.5">管理数据管道，从数据接入到输出 Curated Dataset</p>
+          <h2 className="text-lg font-semibold">{t('pipelines.list_title')}</h2>
+          <p className="text-xs text-gray-400 mt-0.5">{t('pipelines.list_subtitle')}</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-sm rounded-lg hover:bg-gray-800"
         >
-          <Plus size={14} /> 新建 Pipeline
+          <Plus size={14} /> {t('pipelines.new_pipeline')}
         </button>
       </div>
 
@@ -85,7 +82,7 @@ export default function PipelineListPage() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="搜索名称 / ID..."
+            placeholder={t('pipelines.ph_search')}
             className="w-full pl-8 pr-3 py-1.5 border rounded-lg text-sm"
           />
           {search && (
@@ -99,7 +96,7 @@ export default function PipelineListPage() {
           onChange={e => setFilterDomain(e.target.value)}
           className="border rounded-lg px-3 py-1.5 text-sm"
         >
-          <option value="">全部领域</option>
+          <option value="">{t('pipelines.all_domains')}</option>
           {domains.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <select
@@ -107,35 +104,35 @@ export default function PipelineListPage() {
           onChange={e => setFilterStatus(e.target.value)}
           className="border rounded-lg px-3 py-1.5 text-sm"
         >
-          <option value="">全部状态</option>
-          {Object.entries(STATUS_LABEL).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
+          <option value="">{t('pipelines.all_status')}</option>
+          {Object.entries(STATUS_STYLE).map(([k]) => (
+            <option key={k} value={k}>{t(`pipelines.status_${k}`)}</option>
           ))}
         </select>
-        <button onClick={load} className="text-xs text-gray-500 hover:text-black px-2 py-1">重置</button>
+        <button onClick={load} className="text-xs text-gray-500 hover:text-black px-2 py-1">{t('pipelines.reset')}</button>
       </div>
 
       {/* List */}
       {loading ? (
-        <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
+        <div className="text-gray-400 text-sm p-8 text-center">{t('common.loading')}</div>
       ) : filtered.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <GitBranch size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">{search || filterDomain ? '没有匹配的 Pipeline' : '暂无 Pipeline'}</p>
-          <p className="text-xs">点击「新建 Pipeline」创建数据管道</p>
+          <p className="text-sm font-medium">{search || filterDomain ? t('pipelines.no_match') : t('pipelines.empty')}</p>
+          <p className="text-xs">{t('pipelines.empty_hint')}</p>
         </div>
       ) : (
         <div className="border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">ID</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">领域</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">状态</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">版本</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">分支</th>
-                <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">操作</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_id')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_name')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_domain')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_status')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_version')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_branch')}</th>
+                <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">{t('pipelines.col_actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -145,10 +142,10 @@ export default function PipelineListPage() {
                     {pl.id.slice(0, 8)}
                   </td>
                   <td className="px-4 py-3 font-medium">{pl.name}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{pl.domain || '通用'}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{pl.domain || t('data.domain_general')}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[pl.status] || STATUS_STYLE.draft}`}>
-                      {STATUS_LABEL[pl.status] || pl.status}
+                      {t(`pipelines.status_${pl.status}`, pl.status)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-500">v{pl.version || 1}</td>
@@ -158,21 +155,21 @@ export default function PipelineListPage() {
                       <button
                         onClick={() => navigate(`/data/pipelines/${pl.id}`)}
                         className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                        title="编辑"
+                        title={t('common.edit')}
                       >
                         <ExternalLink size={14} />
                       </button>
                       <button
                         onClick={() => pipelinesApi.runSync(pl.id).then(load)}
                         className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                        title="运行"
+                        title={t('pipelines.run_title')}
                       >
                         <Play size={14} />
                       </button>
                       <button
                         onClick={() => handleDelete(pl)}
                         className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                        title="删除"
+                        title={t('common.delete')}
                       >
                         <Trash2 size={14} />
                       </button>
@@ -199,13 +196,13 @@ export default function PipelineListPage() {
   )
 }
 
-/** Pipeline 创建弹窗 */
 function PipelineCreateModal({
   onClose, onCreated,
 }: {
   onClose: () => void
   onCreated: (pl: Pipeline) => void
 }) {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [domain, setDomain] = useState(DOMAINS[0])
   const [description, setDescription] = useState('')
@@ -213,7 +210,7 @@ function PipelineCreateModal({
   const [error, setError] = useState('')
 
   const handleCreate = async () => {
-    if (!name.trim()) { setError('请填写 Pipeline 名称'); return }
+    if (!name.trim()) { setError(t('pipelines.name_required_error')); return }
     setSaving(true)
     setError('')
     try {
@@ -226,7 +223,7 @@ function PipelineCreateModal({
       onCreated(pl)
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      setError(err?.detail || err?.message || '创建失败')
+      setError(err?.detail || err?.message || t('pipelines.create_failed'))
     } finally {
       setSaving(false)
     }
@@ -236,24 +233,24 @@ function PipelineCreateModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-lg p-6 w-[420px]" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-semibold">新建 Pipeline</h3>
+          <h3 className="font-semibold">{t('pipelines.create_title')}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-black">
             <X size={16} />
           </button>
         </div>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Pipeline 名称 *</label>
+            <label className="block text-xs text-gray-500 mb-1">{t('pipelines.name_label')} *</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               className="w-full border rounded-lg px-3 py-2 text-sm"
-              placeholder="例：供应链数据清洗"
+              placeholder={t('pipelines.name_ph')}
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">业务领域</label>
+            <label className="block text-xs text-gray-500 mb-1">{t('pipelines.domain_label')}</label>
             <select
               value={domain}
               onChange={e => setDomain(e.target.value)}
@@ -263,20 +260,20 @@ function PipelineCreateModal({
             </select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">描述</label>
+            <label className="block text-xs text-gray-500 mb-1">{t('pipelines.desc_label')}</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
               className="w-full border rounded-lg px-3 py-2 text-sm"
               rows={3}
-              placeholder="Pipeline 用途说明"
+              placeholder={t('pipelines.desc_ph')}
             />
           </div>
           {error && <p className="text-red-500 text-xs">{error}</p>}
         </div>
         <div className="flex justify-end gap-3 mt-4">
           <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleCreate}
@@ -284,7 +281,7 @@ function PipelineCreateModal({
             className="flex items-center gap-1.5 px-4 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-50"
           >
             {saving && <Loader2 size={13} className="animate-spin" />}
-            {saving ? '创建中...' : '创建'}
+            {saving ? t('pipelines.creating') : t('pipelines.create')}
           </button>
         </div>
       </div>

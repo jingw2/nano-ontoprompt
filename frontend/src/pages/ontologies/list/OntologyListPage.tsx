@@ -194,7 +194,7 @@ export default function OntologyListPage() {
                   onChange={() => toggleSelectAll(filteredItems.map(o => o.id))}
                   aria-label={t('ontology.select_all')} />
               </th>
-              {['ID', t('ontology.name'), t('ontology.domain'), '构建方式', '实体', '关系', t('ontology.status'), t('ontology.created_at'), t('ontology.actions')].map(h => (
+              {['ID', t('ontology.name'), t('ontology.domain'), t('ontology.build_mode'), t('ontology.col_entities'), t('ontology.col_relations'), t('ontology.status'), t('ontology.created_at'), t('ontology.actions')].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-gray-500 font-medium text-xs">{h}</th>
               ))}
             </tr>
@@ -214,7 +214,7 @@ export default function OntologyListPage() {
                 <td className="px-4 py-3">
                   {o.build_mode === 'pipeline_mapping'
                     ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700 whitespace-nowrap">🔄 Pipeline</span>
-                    : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-50 border border-amber-200 text-amber-700 whitespace-nowrap">⚡ 简易LLM</span>
+                    : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-50 border border-amber-200 text-amber-700 whitespace-nowrap">⚡ {t('ontology.build_mode_simple_llm')}</span>
                   }
                 </td>
                 <td className="px-4 py-3 text-gray-500 font-mono text-xs">{o.entity_count ?? 0}</td>

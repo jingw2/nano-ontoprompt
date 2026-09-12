@@ -46,7 +46,7 @@ describe('P2C-DETAIL create wizard', () => {
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
         HttpResponse.json({ data: { items: [
-          { id: 'm-1', name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
+          { id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
           { id: 'm-2', name: 'claude-3', provider: 'anthropic', version_no: 1, behavior_hash: 'i' + '0'.repeat(63) },
         ], next_cursor: null, has_more: false }, message: 'ok' })),
       http.post('*/api/v1/agents', async ({ request }) => {
@@ -57,7 +57,7 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(3))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
     await userEvent.type(screen.getByLabelText('初始系统提示词'), 'Be concise')
     await userEvent.click(screen.getByRole('button', { name: '创建' }))
     await waitFor(() => expect(createdBody).not.toBeNull())
@@ -74,14 +74,14 @@ describe('P2C-DETAIL create wizard', () => {
   it('disables submit until a name and model are chosen', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 3 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 3 }], next_cursor: null, has_more: false }, message: 'ok' })),
     )
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     expect((screen.getByRole('button', { name: '创建' }) as HTMLButtonElement).disabled).toBe(true)
     await userEvent.type(screen.getByLabelText('名称'), 'X')
     expect((screen.getByRole('button', { name: '创建' }) as HTMLButtonElement).disabled).toBe(true)
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
     expect((screen.getByRole('button', { name: '创建' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -89,7 +89,7 @@ describe('P2C-DETAIL create wizard', () => {
     let createdBody: Record<string, unknown> | null = null
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [{ id: 'o-1', name: 'Supply Ontology', status: 'published' }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/external-tools', () =>
@@ -104,7 +104,7 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
     await userEvent.selectOptions(screen.getByTestId('ontology-picker'), 'o-1')
     await userEvent.click(screen.getByRole('button', { name: '创建' }))
     await waitFor(() => expect(createdBody).not.toBeNull())
@@ -115,7 +115,7 @@ describe('P2C-DETAIL create wizard', () => {
     const bindCalls: string[] = []
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/external-tools', () =>
@@ -134,9 +134,10 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
-    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
-    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
     await userEvent.click(screen.getByRole('button', { name: '创建' }))
     await waitFor(() => expect(bindCalls.length).toBe(1))
     expect(screen.getByText('DETAIL:a-new')).toBeTruthy()
@@ -145,7 +146,7 @@ describe('P2C-DETAIL create wizard', () => {
   it('shows a recovery banner instead of auto-navigating when an external-tool bind fails', async () => {
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/external-tools', () =>
@@ -161,9 +162,10 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
-    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
-    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
     await userEvent.click(screen.getByRole('button', { name: '创建' }))
     await waitFor(() => expect(screen.getByText('前往详情页处理')).toBeTruthy())
     expect(screen.queryByText('DETAIL:a-new')).toBeNull()
@@ -175,7 +177,7 @@ describe('P2C-DETAIL create wizard', () => {
     let createCalls = 0
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/external-tools', () =>
@@ -193,9 +195,10 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
-    await waitFor(() => expect(screen.getByTestId('bind-tcv-1')).toBeTruthy())
-    await userEvent.click(screen.getByTestId('bind-tcv-1'))
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    await userEvent.click(screen.getByTestId('confirm-add-tool'))
     const submitButton = screen.getByRole('button', { name: '创建' }) as HTMLButtonElement
     await userEvent.click(submitButton)
     await waitFor(() => expect(screen.getByText('前往详情页处理')).toBeTruthy())
@@ -211,7 +214,7 @@ describe('P2C-DETAIL create wizard', () => {
     let createCalls = 0
     server.use(
       http.get('*/api/v1/agents/catalog/models', () =>
-        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
+        HttpResponse.json({ data: { items: [{ id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', version_no: 1 }], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/ontologies', () =>
         HttpResponse.json({ data: { items: [], next_cursor: null, has_more: false }, message: 'ok' })),
       http.get('*/api/v1/agents/catalog/external-tools', () =>
@@ -227,9 +230,10 @@ describe('P2C-DETAIL create wizard', () => {
     await renderWizard()
     await waitFor(() => expect((screen.getByLabelText('模型') as HTMLSelectElement).options.length).toBe(2))
     await userEvent.type(screen.getByLabelText('名称'), 'New Agent')
-    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1')
-    await waitFor(() => expect(screen.getByTestId('alias-input-tcv-1')).toBeTruthy())
-    const aliasInput = screen.getByTestId('alias-input-tcv-1')
+    await userEvent.selectOptions(screen.getByLabelText('模型'), 'm-1::gpt-4o')
+    await waitFor(() => expect(screen.getByTestId('add-external-tool')).toBeTruthy())
+    await userEvent.click(screen.getByTestId('add-external-tool'))
+    const aliasInput = screen.getByTestId('add-tool-alias')
     await userEvent.type(aliasInput, '{Enter}')
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(createCalls).toBe(0)

@@ -680,6 +680,11 @@
             ],
             "title": "Description"
           },
+          "max_tool_rounds": {
+            "default": 5,
+            "title": "Max Tool Rounds",
+            "type": "integer"
+          },
           "memory_settings": {
             "default": {},
             "title": "Memory Settings",
@@ -755,6 +760,11 @@
               }
             ],
             "title": "Description"
+          },
+          "max_tool_rounds": {
+            "default": 5,
+            "title": "Max Tool Rounds",
+            "type": "integer"
           },
           "memory_settings": {
             "default": {},
@@ -1045,6 +1055,25 @@
         "title": "Body_upload_file_api_v1_ontologies__ontology_id__files_post",
         "type": "object"
       },
+      "Body_upload_version_route_api_v2_skills_versions_upload_post": {
+        "properties": {
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "package_id": {
+            "title": "Package Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_id",
+          "file"
+        ],
+        "title": "Body_upload_version_route_api_v2_skills_versions_upload_post",
+        "type": "object"
+      },
       "CancelRefreshRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1280,6 +1309,17 @@
               }
             ],
             "title": "Scopes"
+          },
+          "search_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Provider"
           }
         },
         "required": [
@@ -2986,7 +3026,7 @@
         "type": "object"
       },
       "OntologyBindingPatch": {
-        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.  `tool_catalog_limit` caps how\nmany category-derived (non-`selected_tools`) tool descriptors are turned\ninto LLM tool schemas per turn; None means unlimited (today's behavior).",
+        "description": "One immutable ontology-binding child row: the bound ontology, the data\ncapabilities the Agent may use, and the exposed tool descriptors enabled\nfor it (query / Logic / Action descriptor ids).  `enabled_categories`\n(MCP/query/write/logic/action) is the category-level enablement — a\npresent value switches the runtime to category-mode filtering; None keeps\nthe legacy `selected_tools`-only filter.  `tool_catalog_limit` caps how\nmany category-derived (non-`selected_tools`) tool descriptors are turned\ninto LLM tool schemas per turn; None means unlimited (today's behavior).\n`entity_search_depth` caps how many relation hops `traverse_relations`\nmay walk per call for this binding; None falls back to the runtime\ndefault of 10 hops.",
         "properties": {
           "allowlists": {
             "default": {},
@@ -3014,6 +3054,17 @@
               }
             ],
             "title": "Enabled Categories"
+          },
+          "entity_search_depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Search Depth"
           },
           "ontology_id": {
             "title": "Ontology Id",
@@ -4526,6 +4577,32 @@
         "title": "RemediatePropertyRequest",
         "type": "object"
       },
+      "RenameConnectionRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RenameConnectionRequest",
+        "type": "object"
+      },
+      "RenameSkillPackageRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RenameSkillPackageRequest",
+        "type": "object"
+      },
       "ReplayRefreshRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4986,6 +5063,82 @@
           }
         },
         "title": "ToolValidationRequest",
+        "type": "object"
+      },
+      "UpdateConnectionVersionRequest": {
+        "description": "Every field is optional and only touches its column when provided —\n`credential_reference` omitted (the normal case) leaves the stored key\nuntouched, since no read endpoint ever echoes it back for the edit form\nto prefill. Only valid while the version is still `pending` (see\n`update_connection_version`).",
+        "properties": {
+          "allowlists": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowlists"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "credential_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Reference"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "search_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Provider"
+          }
+        },
+        "title": "UpdateConnectionVersionRequest",
         "type": "object"
       },
       "UserCreate": {
@@ -6327,6 +6480,52 @@
         "summary": "Get Turn",
         "tags": [
           "agent-turns"
+        ]
+      }
+    },
+    "/api/v1/agent-turns/{turn_id}/answer-stream": {
+      "get": {
+        "description": "Best-effort live preview of the model's in-progress answer (see\n`app.services.runtime.answer_stream`) — `{\"text\": ...}` while a chunk has\nbeen published, or `None` before the first chunk / after it expires.",
+        "operationId": "turn_answer_stream_api_v1_agent_turns__turn_id__answer_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Turn Answer Stream",
+        "tags": [
+          "agent-events"
         ]
       }
     },
@@ -19907,6 +20106,61 @@
         ]
       }
     },
+    "/api/v2/skills/packages/{package_id}": {
+      "put": {
+        "operationId": "rename_package_route_api_v2_skills_packages__package_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameSkillPackageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename Package Route",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
     "/api/v2/skills/versions": {
       "get": {
         "operationId": "list_versions_api_v2_skills_versions_get",
@@ -19996,6 +20250,50 @@
           }
         ],
         "summary": "Create Version Route",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v2/skills/versions/upload": {
+      "post": {
+        "operationId": "upload_version_route_api_v2_skills_versions_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_version_route_api_v2_skills_versions_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Version Route",
         "tags": [
           "skills"
         ]
@@ -20228,6 +20526,104 @@
         ]
       }
     },
+    "/api/v2/tool-connections/versions/{version_id}": {
+      "delete": {
+        "operationId": "delete_connection_version_route_api_v2_tool_connections_versions__version_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Connection Version Route",
+        "tags": [
+          "tool-connections"
+        ]
+      },
+      "put": {
+        "operationId": "update_connection_version_route_api_v2_tool_connections_versions__version_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnectionVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Connection Version Route",
+        "tags": [
+          "tool-connections"
+        ]
+      }
+    },
     "/api/v2/tool-connections/versions/{version_id}/approve": {
       "post": {
         "operationId": "approve_connection_version_route_api_v2_tool_connections_versions__version_id__approve_post",
@@ -20413,6 +20809,61 @@
           }
         ],
         "summary": "Test Connection Version Route",
+        "tags": [
+          "tool-connections"
+        ]
+      }
+    },
+    "/api/v2/tool-connections/{connection_id}": {
+      "put": {
+        "operationId": "rename_connection_route_api_v2_tool_connections__connection_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename Connection Route",
         "tags": [
           "tool-connections"
         ]

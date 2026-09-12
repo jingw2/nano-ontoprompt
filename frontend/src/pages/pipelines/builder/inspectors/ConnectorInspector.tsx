@@ -1,14 +1,15 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useDropzone } from 'react-dropzone'
 import { Upload, X, FileUp, Loader2, CheckCircle, XCircle } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
-const SOURCE_LABEL: Record<string, string> = { file: '文件上传', postgresql: 'PostgreSQL', mysql: 'MySQL', mongodb: 'MongoDB', rest_api: 'REST API' }
-const DB_CONFIG_FIELDS: Record<string, { key: string; label: string; placeholder: string; type?: string }[]> = {
-  postgresql: [{ key: 'host', label: '主机', placeholder: 'localhost' }, { key: 'port', label: '端口', placeholder: '5432' }, { key: 'database', label: '数据库名', placeholder: 'mydb' }, { key: 'user', label: '用户名', placeholder: 'postgres' }, { key: 'password', label: '密码', placeholder: '••••••', type: 'password' }],
-  mysql: [{ key: 'host', label: '主机', placeholder: 'localhost' }, { key: 'port', label: '端口', placeholder: '3306' }, { key: 'database', label: '数据库名', placeholder: 'mydb' }, { key: 'user', label: '用户名', placeholder: 'root' }, { key: 'password', label: '密码', placeholder: '••••••', type: 'password' }],
-  mongodb: [{ key: 'uri', label: '连接字符串', placeholder: 'mongodb://localhost:27017/mydb' }],
-  rest_api: [{ key: 'url', label: 'API URL', placeholder: 'https://api.example.com/data' }, { key: 'headers', label: '请求头 (JSON)', placeholder: '{"Authorization":"Bearer token"}' }, { key: 'method', label: '请求方法', placeholder: 'GET' }],
+const SOURCE_LABEL: Record<string, string> = { postgresql: 'PostgreSQL', mysql: 'MySQL', mongodb: 'MongoDB', rest_api: 'REST API' }
+const DB_CONFIG_FIELDS: Record<string, { key: string; labelKey: string; label?: string; placeholder: string; type?: string }[]> = {
+  postgresql: [{ key: 'host', labelKey: 'connectorInspector.field_host', placeholder: 'localhost' }, { key: 'port', labelKey: 'connectorInspector.field_port', placeholder: '5432' }, { key: 'database', labelKey: 'connectorInspector.field_database', placeholder: 'mydb' }, { key: 'user', labelKey: 'connectorInspector.field_user', placeholder: 'postgres' }, { key: 'password', labelKey: 'connectorInspector.field_password', placeholder: '••••••', type: 'password' }],
+  mysql: [{ key: 'host', labelKey: 'connectorInspector.field_host', placeholder: 'localhost' }, { key: 'port', labelKey: 'connectorInspector.field_port', placeholder: '3306' }, { key: 'database', labelKey: 'connectorInspector.field_database', placeholder: 'mydb' }, { key: 'user', labelKey: 'connectorInspector.field_user', placeholder: 'root' }, { key: 'password', labelKey: 'connectorInspector.field_password', placeholder: '••••••', type: 'password' }],
+  mongodb: [{ key: 'uri', labelKey: 'connectorInspector.field_uri', placeholder: 'mongodb://localhost:27017/mydb' }],
+  rest_api: [{ key: 'url', labelKey: '', label: 'API URL', placeholder: 'https://api.example.com/data' }, { key: 'headers', labelKey: 'connectorInspector.field_headers', placeholder: '{"Authorization":"Bearer token"}' }, { key: 'method', labelKey: 'connectorInspector.field_method', placeholder: 'GET' }],
 }
 
 interface UploadedFileMeta {
@@ -21,6 +22,7 @@ interface UploadedFileMeta {
 const NO_FILES: UploadedFileMeta[] = []
 
 export default function ConnectorInspector({ config, onChange, readOnly = false }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void; readOnly?: boolean }) {
+  const { t } = useTranslation()
   const sourceType = String(config.source_type || 'file')
   const cv = (config.config_values || {}) as Record<string, string>
   const storedFiles = (config.files || NO_FILES) as UploadedFileMeta[]
@@ -46,11 +48,11 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
       setTestStatus('idle')
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string } | null | undefined
-      setUploadError(err?.detail || err?.message || '上传失败')
+      setUploadError(err?.detail || err?.message || t('connectorInspector.upload_failed'))
     } finally {
       setUploading(false)
     }
-  }, [storedFiles, onChange])
+  }, [storedFiles, onChange, t])
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ onDrop, multiple: true, noClick: true })
 
   const hasStoredFiles = storedFiles.length > 0
@@ -62,15 +64,15 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
     return (
       <div className="space-y-3">
         <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs">
-          <p className="text-blue-700 font-medium mb-1">📋 已保存配置</p>
-          <p className="text-blue-600">类型: {SOURCE_LABEL[sourceType] || sourceType}</p>
+          <p className="text-blue-700 font-medium mb-1">📋 {t('connectorInspector.saved_config_title')}</p>
+          <p className="text-blue-600">{t('connectorInspector.type_label')}: {sourceType === 'file' ? t('connectorInspector.source_file') : (SOURCE_LABEL[sourceType] || sourceType)}</p>
           {sourceType === 'file' && hasStoredFiles && storedFiles.map((f, i: number) => (
             <p key={i} className="text-blue-500">📄 {f.name} {formatSize(f.size)}</p>
           ))}
           {sourceType !== 'file' && hasDbConfig && Object.entries(cv).filter(([k]) => k !== 'password').map(([k, v]) => (
             <p key={k} className="text-blue-500">{k}: {String(v).slice(0, 30)}</p>
           ))}
-          {!hasStoredFiles && !hasDbConfig && <p className="text-blue-400">暂无配置数据</p>}
+          {!hasStoredFiles && !hasDbConfig && <p className="text-blue-400">{t('connectorInspector.no_config')}</p>}
         </div>
       </div>
     )
@@ -78,15 +80,15 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
 
   return (
     <>
-      <div><label className="text-xs text-gray-500 mb-1 block">数据源类型</label>
-        <select value={sourceType} onChange={e => { onChange('source_type', e.target.value); onChange('config_values', {}); onChange('files', []); setTestStatus('idle') }} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="file">文件上传</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="mongodb">MongoDB</option><option value="rest_api">REST API</option></select></div>
+      <div><label className="text-xs text-gray-500 mb-1 block">{t('connectorInspector.source_type_label')}</label>
+        <select value={sourceType} onChange={e => { onChange('source_type', e.target.value); onChange('config_values', {}); onChange('files', []); setTestStatus('idle') }} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="file">{t('connectorInspector.source_file')}</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="mongodb">MongoDB</option><option value="rest_api">REST API</option></select></div>
       {sourceType === 'file' && (
         <div>
-          <label className="text-xs text-gray-500 mb-1 block">上传文件（支持多选）</label>
+          <label className="text-xs text-gray-500 mb-1 block">{t('connectorInspector.upload_label')}</label>
           <div {...getRootProps()} onClick={open} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-400'}`}>
             <input {...getInputProps()} /><Upload size={20} className="mx-auto mb-1 text-gray-400" />
-            {uploading ? <p className="text-xs text-blue-500 font-medium">上传中...</p> : isDragActive ? <p className="text-xs text-blue-500 font-medium">松开以添加文件</p> : <p className="text-xs text-gray-500">拖拽文件到此处，或<span className="underline ml-0.5">点击选择</span></p>}
-            <p className="text-[10px] text-gray-400 mt-1">支持 CSV/XLSX/JSON/PDF/DOCX 等，可批量多选</p>
+            {uploading ? <p className="text-xs text-blue-500 font-medium">{t('connectorInspector.uploading')}</p> : isDragActive ? <p className="text-xs text-blue-500 font-medium">{t('connectorInspector.drop_release')}</p> : <p className="text-xs text-gray-500">{t('connectorInspector.drop_hint')}<span className="underline ml-0.5">{t('connectorInspector.drop_hint_click')}</span></p>}
+            <p className="text-[10px] text-gray-400 mt-1">{t('connectorInspector.drop_formats_hint')}</p>
           </div>
           {uploadError && <p className="text-xs text-red-500 mt-1">{uploadError}</p>}
           {hasStoredFiles && (<div className="mt-2 space-y-1">{storedFiles.map((f, i: number) => (
@@ -98,13 +100,13 @@ export default function ConnectorInspector({ config, onChange, readOnly = false 
           ))}</div>)}
         </div>
       )}
-      {sourceType !== 'file' && (<div className="space-y-3">{DB_CONFIG_FIELDS[sourceType]?.map(f => (<div key={f.key}><label className="text-xs text-gray-500 mb-1 block">{f.label}</label><input type={f.type || 'text'} value={String((config.config_values as Record<string, string> | undefined)?.[f.key] || '')} onChange={e => { const cv2 = { ...((config.config_values as Record<string, string> | undefined) || {}), [f.key]: e.target.value }; onChange('config_values', cv2); setTestStatus('idle') }} placeholder={f.placeholder} className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>))}</div>)}
+      {sourceType !== 'file' && (<div className="space-y-3">{DB_CONFIG_FIELDS[sourceType]?.map(f => (<div key={f.key}><label className="text-xs text-gray-500 mb-1 block">{f.label || t(f.labelKey)}</label><input type={f.type || 'text'} value={String((config.config_values as Record<string, string> | undefined)?.[f.key] || '')} onChange={e => { const cv2 = { ...((config.config_values as Record<string, string> | undefined) || {}), [f.key]: e.target.value }; onChange('config_values', cv2); setTestStatus('idle') }} placeholder={f.placeholder} className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>))}</div>)}
       <div>
-        <button onClick={async () => { setTestStatus('testing'); try { if (sourceType === 'file') { setTestStatus(hasStoredFiles ? 'success' : 'failed'); setTestMessage(hasStoredFiles ? '就绪' : '请上传'); return } await apiClientV2.post('/connections/test-config', { type: sourceType, config: cv }); setTestStatus('success'); setTestMessage('连接成功') } catch (e: unknown) { setTestStatus('failed'); setTestMessage((e as { detail?: string } | null | undefined)?.detail || '失败') } }} disabled={testStatus === 'testing' || uploading}
+        <button onClick={async () => { setTestStatus('testing'); try { if (sourceType === 'file') { setTestStatus(hasStoredFiles ? 'success' : 'failed'); setTestMessage(hasStoredFiles ? t('connectorInspector.test_ready') : t('connectorInspector.test_please_upload')); return } await apiClientV2.post('/connections/test-config', { type: sourceType, config: cv }); setTestStatus('success'); setTestMessage(t('connectorInspector.test_success')) } catch (e: unknown) { setTestStatus('failed'); setTestMessage((e as { detail?: string } | null | undefined)?.detail || t('connectorInspector.test_failed')) } }} disabled={testStatus === 'testing' || uploading}
           className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border ${testStatus === 'success' ? 'bg-green-50 text-green-700 border-green-200' : testStatus === 'failed' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
-          {testStatus === 'testing' && <Loader2 size={11} className="animate-spin" />}{testStatus === 'success' ? <CheckCircle size={11} /> : testStatus === 'failed' ? <XCircle size={11} /> : null}{testStatus === 'testing' ? '测试中...' : testStatus === 'success' ? '连接成功' : testStatus === 'failed' ? testMessage : '测试连接'}</button>
+          {testStatus === 'testing' && <Loader2 size={11} className="animate-spin" />}{testStatus === 'success' ? <CheckCircle size={11} /> : testStatus === 'failed' ? <XCircle size={11} /> : null}{testStatus === 'testing' ? t('connectorInspector.test_testing') : testStatus === 'success' ? t('connectorInspector.test_success') : testStatus === 'failed' ? testMessage : t('connectorInspector.test_connection')}</button>
       </div>
-      <div><label className="text-xs text-gray-500 mb-1 block">同步模式</label><select value={String(config.sync_mode || 'snapshot')} onChange={e => onChange('sync_mode', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="snapshot">SNAPSHOT</option><option value="append">APPEND</option></select></div>
+      <div><label className="text-xs text-gray-500 mb-1 block">{t('connectorInspector.sync_mode_label')}</label><select value={String(config.sync_mode || 'snapshot')} onChange={e => onChange('sync_mode', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="snapshot">SNAPSHOT</option><option value="append">APPEND</option></select></div>
     </>
   )
 }

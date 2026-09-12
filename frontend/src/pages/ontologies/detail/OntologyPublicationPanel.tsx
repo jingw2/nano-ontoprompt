@@ -136,7 +136,7 @@ export default function OntologyPublicationPanel({ ontologyId, status, isDirty =
     <div className="bg-white rounded-xl border p-4 space-y-3" data-testid="ontology-publication-panel">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-semibold">{t('lifecycle.title', '发布生命周期')}</span>
-        <span className="px-2 py-0.5 rounded text-xs border border-gray-200 text-gray-600">{displayStatus(status)}</span>
+        <span className="px-2 py-0.5 rounded text-xs border border-gray-200 text-gray-600">{displayStatus(status, t)}</span>
         {published && (
           <span className="px-2 py-0.5 rounded text-xs bg-green-50 border border-green-200 text-green-700">
             {t('lifecycle.published_badge', '已发布')} ({releases.length})

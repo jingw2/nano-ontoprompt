@@ -174,7 +174,15 @@ def test_upsert_and_query_similar_roundtrips_when_chroma_available():
 
 def test_upsert_returns_false_when_chroma_unavailable(monkeypatch):
     from app.services.memory import vector_store
-    monkeypatch.setattr(vector_store, "is_available", lambda: False)
+
+    class _UnavailableService:
+        available = False
+
+    # upsert/query/delete each call `_service().available` directly (never
+    # the module-level `is_available()`, which is a separate convenience
+    # wrapper) — patching `is_available` alone leaves them talking to a
+    # real, actually-available ChromaService and never exercises this path.
+    monkeypatch.setattr(vector_store, "_service", lambda: _UnavailableService())
     assert vector_store.upsert_memory_embedding("mem-x", "ag-1", "u-1", "sd-1", "text") is False
     assert vector_store.query_similar("sd-1", "ag-1", "u-1", "query", n_results=5) == []
     assert vector_store.delete_memory_embedding("mem-x", "sd-1") is False
@@ -312,7 +320,9 @@ def test_sweep_claim_query_holds_locks_on_all_batch_rows_until_commit(session):
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
-    second_session = sessionmaker(bind=create_engine(str(session.bind.url)))()
+    # str(url) masks the password as "***"; render_as_string(hide_password=False)
+    # is required to actually authenticate a second, independent connection.
+    second_session = sessionmaker(bind=create_engine(session.bind.url.render_as_string(hide_password=False)))()
     try:
         claim_query = text(
             "SELECT ov.id FROM agent_memory_vector_outbox ov "

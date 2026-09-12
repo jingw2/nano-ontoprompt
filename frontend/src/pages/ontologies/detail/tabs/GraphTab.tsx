@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ontologyApi } from '@/api/ontologies'
 import cytoscape from 'cytoscape'
@@ -80,6 +81,7 @@ interface SelectedData {
 }
 
 export default function GraphTab({ ontologyId }: { ontologyId: string }) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const [selected, setSelected] = useState<SelectedData | null>(null)
@@ -130,8 +132,8 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     // Collect unique types for legend
     const typeSet = new Map<string, string>()
     nodes.forEach((n) => {
-      const t = n.data.type || '未分类'
-      if (!typeSet.has(t)) typeSet.set(t, typeColor(t))
+      const ty = n.data.type || t('graph.uncategorized')
+      if (!typeSet.has(ty)) typeSet.set(ty, typeColor(ty))
     })
     void Promise.resolve().then(() => setLegendTypes(Array.from(typeSet.entries()).map(([type, color]) => ({ type, color }))))
 
@@ -308,13 +310,13 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     cy.on('tap', 'node', (e) => {
       const d = e.target.data() as SelectedData
       setSelected(d)
-      setInfo(`${d.label}（${d.type || '未分类'}）置信度 ${Math.round((d.confidence || 1) * 100)}%`)
+      setInfo(t('graph.node_info', { label: d.label, type: d.type || t('graph.uncategorized'), pct: Math.round((d.confidence || 1) * 100) }))
     })
 
     cy.on('tap', 'edge', (e) => {
       const d = e.target.data() as SelectedData
       setSelected(d)
-      setInfo(`关系类型: ${d.label} — 置信度 ${Math.round((d.confidence || 1) * 100)}%`)
+      setInfo(t('graph.edge_info', { label: d.label, pct: Math.round((d.confidence || 1) * 100) }))
     })
 
     cy.on('tap', (e) => {
@@ -325,7 +327,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     void Promise.resolve().then(() => setCyReady(true))
     } catch (err) {
       console.error('Cytoscape init error:', err)
-      void Promise.resolve().then(() => setInitError(err instanceof Error ? err.message : '图谱初始化失败，请检查数据格式'))
+      void Promise.resolve().then(() => setInitError(err instanceof Error ? err.message : t('graph.init_error')))
       return
     }
 
@@ -361,12 +363,12 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
     })
   }, [searchQ])
 
-  if (isLoading) return <div className="text-gray-400 text-center py-12">加载图谱中...</div>
+  if (isLoading) return <div className="text-gray-400 text-center py-12">{t('graph.loading')}</div>
   if (initError) return (
     <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
-      <p className="text-red-600 font-medium mb-2">知识图谱渲染失败</p>
+      <p className="text-red-600 font-medium mb-2">{t('graph.render_failed')}</p>
       <p className="text-red-400 text-sm font-mono mb-4">{initError}</p>
-      <button onClick={() => setInitError(null)} className="px-3 py-1.5 text-sm border border-red-300 text-red-500 rounded-lg hover:bg-red-100">重试</button>
+      <button onClick={() => setInitError(null)} className="px-3 py-1.5 text-sm border border-red-300 text-red-500 rounded-lg hover:bg-red-100">{t('graph.retry')}</button>
     </div>
   )
 
@@ -381,7 +383,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
         <input
           value={searchQ}
           onChange={e => setSearchQ(e.target.value)}
-          placeholder="搜索节点（名称 / 类型）…"
+          placeholder={t('graph.ph_search_node')}
           className="w-full border rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
         />
         {searchQ && (
@@ -395,18 +397,18 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-sm text-gray-600">
-          <span className="font-medium">节点 {meta?.entity_count ?? 0}</span>
+          <span className="font-medium">{t('graph.nodes_count', { count: meta?.entity_count ?? 0 })}</span>
           <span className="text-gray-300">|</span>
-          <span className="font-medium">边 {meta?.relation_count ?? 0}</span>
+          <span className="font-medium">{t('graph.edges_count', { count: meta?.relation_count ?? 0 })}</span>
         </div>
 
         {/* Layout selector */}
         <div className="flex items-center gap-1 text-sm border rounded px-2 py-1">
-          <span className="text-gray-500 text-xs mr-1">布局</span>
+          <span className="text-gray-500 text-xs mr-1">{t('graph.layout')}</span>
           {(['cose', 'breadthfirst', 'circle'] as const).map(l => (
             <button key={l} onClick={() => setLayout(l)}
               className={`px-2 py-0.5 rounded text-xs ${layout === l ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-              {l === 'cose' ? '力导向' : l === 'breadthfirst' ? '层级' : '圆形'}
+              {l === 'cose' ? t('graph.layout_cose') : l === 'breadthfirst' ? t('graph.layout_breadthfirst') : t('graph.layout_circle')}
             </button>
           ))}
         </div>
@@ -426,7 +428,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
         {info && <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm">{info}</span>}
         {selected?.source && (
           <button onClick={() => deleteMut.mutate(selected.id)}
-            className="text-red-500 hover:underline text-xs ml-auto">删除此关系</button>
+            className="text-red-500 hover:underline text-xs ml-auto">{t('graph.delete_relation')}</button>
         )}
       </div>
 
@@ -444,7 +446,7 @@ export default function GraphTab({ ontologyId }: { ontologyId: string }) {
 
       {isEmpty ? (
         <div className="bg-white border rounded-lg h-96 flex items-center justify-center text-gray-400">
-          <p>暂无图谱数据 — 请先上传文件并执行 LLM 提取</p>
+          <p>{t('graph.empty')}</p>
         </div>
       ) : (
         <div ref={containerRef} className="bg-white border rounded-lg" style={{ height: '580px' }} />

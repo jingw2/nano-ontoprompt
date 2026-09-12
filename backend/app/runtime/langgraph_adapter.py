@@ -69,6 +69,7 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
                           release_id: str | None = None,
                           model_config_version_id: str | None = None,
                           model_name: str | None = None,
+                          max_tool_rounds: int | None = None,
                           runtime_artifact_id: str | None = None,
                           ontology_bindings: list[dict] | None = None,
                           external_tool_bindings: list[dict] | None = None,
@@ -111,6 +112,8 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
                 entry["enabled_categories"] = list(b["enabled_categories"])
             if b.get("tool_catalog_limit") is not None:
                 entry["tool_catalog_limit"] = b["tool_catalog_limit"]
+            if b.get("entity_search_depth") is not None:
+                entry["entity_search_depth"] = b["entity_search_depth"]
             extra["ontology_tool_selection"].append(entry)
     if external_tool_bindings:
         extra["external_tool_bindings"] = [dict(b) for b in external_tool_bindings]
@@ -122,6 +125,7 @@ def assemble_turn_context(*, turn_id: str, session_id: str, agent_id: str,
         turn_id=turn_id, session_id=session_id, agent_id=agent_id,
         agent_version_id=agent_version_id, release_id=release_id,
         model_config_version_id=model_config_version_id, model_name=model_name,
+        max_tool_rounds=max_tool_rounds,
         runtime_artifact_id=runtime_artifact_id, user_message=user_message,
         extra=extra,
     )

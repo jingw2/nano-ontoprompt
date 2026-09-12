@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     JSON,
     String,
     Text,
@@ -68,6 +69,7 @@ class AgentVersion(Base):
     default_model_name: Mapped[str] = mapped_column(String(200), nullable=False)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    max_tool_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
     application_state_schema_version_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("application_state_schema_versions.id", ondelete="RESTRICT"), nullable=False
     )

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
+import { useForm, type UseFormRegister } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import {
-  toolConnectionsApi, PROVIDER_KINDS, LIVE_PROVIDER_KINDS, type ToolProvider, type ToolConnection, type ToolConnectionVersion,
+  toolConnectionsApi, PROVIDER_KINDS, LIVE_PROVIDER_KINDS, SEARCH_PROVIDER_PRESETS,
+  type ToolProvider, type ToolConnection, type ToolConnectionVersion, type SearchProvider,
 } from '@/api/toolConnections'
 import { skillsApi, type SkillVersion } from '@/api/skills'
 import { Plus, Loader2, X } from 'lucide-react'
@@ -176,11 +177,77 @@ interface VersionFormValues {
   scopes_str?: string
   credential_reference?: string
   domains_str?: string
+  search_provider?: SearchProvider
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   const e = err as { detail?: string; message?: string }
   return e?.detail || e?.message || fallback
+}
+
+/** Field set shared by the create-version and edit-version forms — the
+ * fields a version needs depend only on its provider kind, not on whether
+ * it's being created or edited. */
+function ConnectionVersionFields({
+  providerKind, register, setValue, credentialHint,
+}: {
+  providerKind: string
+  register: UseFormRegister<VersionFormValues>
+  setValue: (name: 'endpoint', value: string) => void
+  credentialHint?: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      {providerKind === 'search' && (
+        <select {...register('search_provider')}
+          onChange={e => {
+            const preset = SEARCH_PROVIDER_PRESETS[e.target.value as SearchProvider]
+            if (preset?.endpoint) setValue('endpoint', preset.endpoint)
+          }}
+          className="w-full border rounded px-2 py-1 bg-white" data-testid="version-search-provider-select">
+          {(Object.keys(SEARCH_PROVIDER_PRESETS) as SearchProvider[]).map(key => (
+            <option key={key} value={key}>{t(SEARCH_PROVIDER_PRESETS[key].labelKey, SEARCH_PROVIDER_PRESETS[key].label)}</option>
+          ))}
+        </select>
+      )}
+      {providerKind !== 'playwright' && (
+        <input {...register('endpoint')} placeholder={t('toolConnections.endpoint')} className="w-full border rounded px-2 py-1" data-testid="version-endpoint-input" />
+      )}
+      {providerKind === 'external_mcp' && (
+        <>
+          <input {...register('audience')} placeholder={t('toolConnections.audience')} className="w-full border rounded px-2 py-1" />
+          <textarea {...register('scopes_str')} placeholder={t('toolConnections.scopes')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
+        </>
+      )}
+      {providerKind !== 'playwright' && (
+        <input {...register('credential_reference')} type="password"
+          placeholder={credentialHint ?? ((providerKind === 'search' || providerKind === 'browser_use') ? t('toolConnections.api_key') : t('toolConnections.credential_reference'))}
+          className="w-full border rounded px-2 py-1" />
+      )}
+      {providerKind !== 'search' && providerKind !== 'browser_use' && (
+        <textarea {...register('domains_str')} placeholder={t('toolConnections.allowlist_domains')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
+      )}
+    </>
+  )
+}
+
+/** Prefer the admin's own name for a connection (set via renameConnection);
+ * otherwise it has no name of its own, so fall back to what its active
+ * version is actually pointed at — the configured search preset, then the
+ * raw endpoint, then the provider kind (e.g. Playwright, which has no
+ * endpoint at all) — so two connections of the same kind are never both
+ * shown as an indistinguishable opaque id. */
+function connectionLabel(connection: ToolConnection, providerKind: string, t: (key: string, fallback?: string) => string): string {
+  if (connection.name) return connection.name
+  if (connection.active_version_search_provider) {
+    const preset = SEARCH_PROVIDER_PRESETS[connection.active_version_search_provider]
+    return t(preset.labelKey, preset.label)
+  }
+  if (connection.active_version_endpoint) {
+    return connection.active_version_endpoint
+  }
+  return t(`toolConnections.provider_kind_${providerKind}`, providerKind)
 }
 
 function ConnectionRow({ connection, providerKind }: { connection: ToolConnection; providerKind: string }) {
@@ -192,7 +259,21 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
   const [testResult, setTestResult] = useState<Record<string, { status: string; detail: string }>>({})
   const [pinResult, setPinResult] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
-  const { register, handleSubmit, reset } = useForm<VersionFormValues>()
+  const [editingVersionId, setEditingVersionId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const { register, handleSubmit, reset, setValue } = useForm<VersionFormValues>()
+  const editForm = useForm<VersionFormValues>()
+
+  const renameMut = useMutation({
+    mutationFn: (name: string) => toolConnectionsApi.renameConnection(connection.id, name),
+    onSuccess: () => {
+      setError('')
+      qc.invalidateQueries({ queryKey: ['tool-connections'] })
+      setEditingName(false)
+    },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.rename_failed'))),
+  })
 
   const { data: versions, isLoading } = useQuery({
     queryKey: ['tool-connection-versions', connection.id],
@@ -210,6 +291,7 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
       allowlists: data.domains_str
         ? { domains: data.domains_str.split('\n').map(s => s.trim()).filter(Boolean) }
         : undefined,
+      search_provider: providerKind === 'search' ? data.search_provider : undefined,
     }),
     onSuccess: () => {
       setError('')
@@ -219,6 +301,48 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
     },
     onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
+
+  const updateVersionMut = useMutation({
+    mutationFn: ({ versionId, data }: { versionId: string; data: VersionFormValues }) =>
+      toolConnectionsApi.updateVersion(versionId, {
+        endpoint: data.endpoint || undefined,
+        audience: data.audience || undefined,
+        scopes: data.scopes_str ? data.scopes_str.split('\n').map(s => s.trim()).filter(Boolean) : undefined,
+        credential_reference: data.credential_reference || undefined,
+        allowlists: data.domains_str
+          ? { domains: data.domains_str.split('\n').map(s => s.trim()).filter(Boolean) }
+          : undefined,
+        search_provider: providerKind === 'search' ? data.search_provider : undefined,
+      }),
+    onSuccess: () => {
+      setError('')
+      qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
+      setEditingVersionId(null)
+      editForm.reset()
+    },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.update_failed'))),
+  })
+
+  const deleteVersionMut = useMutation({
+    mutationFn: (versionId: string) => toolConnectionsApi.deleteVersion(versionId),
+    onSuccess: () => {
+      setError('')
+      qc.invalidateQueries({ queryKey: ['tool-connection-versions', connection.id] })
+    },
+    onError: (err: unknown) => setError(extractErrorMessage(err, t('toolConnections.delete_failed'))),
+  })
+
+  const openEditForm = (v: ToolConnectionVersion) => {
+    editForm.reset({
+      endpoint: v.endpoint ?? '',
+      audience: v.audience ?? '',
+      scopes_str: v.scopes.join('\n'),
+      credential_reference: '',
+      domains_str: ((v.allowlists?.domains as string[] | undefined) ?? []).join('\n'),
+      search_provider: v.search_provider ?? 'generic',
+    })
+    setEditingVersionId(v.id)
+  }
 
   const testMut = useMutation({
     mutationFn: (versionId: string) => toolConnectionsApi.testVersion(versionId),
@@ -291,12 +415,41 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
 
   return (
     <li className="border rounded p-2 text-xs" data-testid={`connection-row-${connection.id}`}>
-      <button type="button" onClick={() => setExpanded(e => !e)} className="w-full text-left flex items-center justify-between">
-        <span>
-          <span className="font-mono text-gray-400">{connection.id.slice(0, 8)}</span>
-          <span className="ml-2">{t('toolConnections.active_version')}: {connection.active_version_id ? connection.active_version_id.slice(0, 8) : t('toolConnections.none')}</span>
-        </span>
-      </button>
+      <div className="w-full flex items-center justify-between">
+        <button type="button" onClick={() => setExpanded(e => !e)} className="flex-1 text-left flex items-center">
+          <span className="font-medium">{connectionLabel(connection, providerKind, t)}</span>
+          <span className="ml-1.5 font-mono text-gray-400 text-[10px]">#{connection.id.slice(0, 6)}</span>
+          <span className="ml-2">
+            {connection.active_version_id
+              ? <span className="text-green-600">{t('toolConnections.activated')}</span>
+              : <span className="text-gray-400">{t('toolConnections.none')}</span>}
+          </span>
+        </button>
+        <button type="button"
+          onClick={() => { setNameDraft(connection.name ?? ''); setEditingName(v => !v) }}
+          data-testid={`rename-connection-${connection.id}`}
+          className="ml-2 px-1.5 py-0.5 text-[10px] border rounded hover:bg-gray-50 shrink-0">
+          {t('toolConnections.rename')}
+        </button>
+      </div>
+
+      {editingName && (
+        <div className="mt-1.5 flex items-center gap-1">
+          <input value={nameDraft} onChange={e => setNameDraft(e.target.value)}
+            placeholder={t('toolConnections.rename_placeholder')}
+            data-testid={`rename-connection-input-${connection.id}`}
+            className="border rounded px-1.5 py-0.5 text-xs flex-1" />
+          <button type="button" disabled={renameMut.isPending || !nameDraft.trim()}
+            onClick={() => renameMut.mutate(nameDraft)}
+            data-testid={`save-rename-connection-${connection.id}`}
+            className="px-2 py-0.5 bg-black text-white rounded disabled:opacity-50">
+            {t('toolConnections.save')}
+          </button>
+          <button type="button" onClick={() => setEditingName(false)} className="px-2 py-0.5 border rounded">
+            {t('toolConnections.cancel')}
+          </button>
+        </div>
+      )}
 
       {expanded && (
         <div className="mt-2 border-t pt-2" data-testid={`connection-detail-${connection.id}`}>
@@ -318,23 +471,8 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
               {/* Only external_mcp actually uses every field (OAuth audience/scopes plus a
                   domain allowlist); search and playwright each use a narrow subset — showing
                   the full generic set for those kinds is what made this form confusing. */}
-              {providerKind !== 'playwright' && (
-                <input {...register('endpoint')} placeholder={t('toolConnections.endpoint')} className="w-full border rounded px-2 py-1" data-testid="version-endpoint-input" />
-              )}
-              {providerKind === 'external_mcp' && (
-                <>
-                  <input {...register('audience')} placeholder={t('toolConnections.audience')} className="w-full border rounded px-2 py-1" />
-                  <textarea {...register('scopes_str')} placeholder={t('toolConnections.scopes')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
-                </>
-              )}
-              {providerKind !== 'playwright' && (
-                <input {...register('credential_reference')} type="password"
-                  placeholder={providerKind === 'search' ? t('toolConnections.api_key') : t('toolConnections.credential_reference')}
-                  className="w-full border rounded px-2 py-1" />
-              )}
-              {providerKind !== 'search' && (
-                <textarea {...register('domains_str')} placeholder={t('toolConnections.allowlist_domains')} rows={2} className="w-full border rounded px-2 py-1 font-mono" />
-              )}
+              <ConnectionVersionFields providerKind={providerKind} register={register}
+                setValue={(name, value) => setValue(name, value)} />
               <button type="submit" disabled={createVersionMut.isPending} className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid="submit-create-version">
                 {t('toolConnections.save')}
               </button>
@@ -371,10 +509,22 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
                         </button>
                       )}
                       {v.approval_status === 'pending' && (
-                        <button type="button" onClick={() => setApprovingVersion(v)}
-                          className="px-2 py-0.5 border rounded hover:bg-gray-50 text-blue-600" data-testid={`approve-version-${v.id}`}>
-                          {t('toolConnections.approve')}
-                        </button>
+                        <>
+                          <button type="button" onClick={() => (editingVersionId === v.id ? setEditingVersionId(null) : openEditForm(v))}
+                            className="px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`edit-version-${v.id}`}>
+                            {t('toolConnections.edit_version')}
+                          </button>
+                          <button type="button" onClick={() => setApprovingVersion(v)}
+                            className="px-2 py-0.5 border rounded hover:bg-gray-50 text-blue-600" data-testid={`approve-version-${v.id}`}>
+                            {t('toolConnections.approve')}
+                          </button>
+                          <button type="button"
+                            onClick={() => { if (window.confirm(t('toolConnections.delete_version_confirm'))) deleteVersionMut.mutate(v.id) }}
+                            disabled={deleteVersionMut.isPending}
+                            className="px-2 py-0.5 border rounded hover:bg-gray-50 text-red-600 disabled:opacity-50" data-testid={`delete-version-${v.id}`}>
+                            {t('toolConnections.delete_version')}
+                          </button>
+                        </>
                       )}
                       {v.approval_status === 'approved' && connection.active_version_id !== v.id && (
                         <button type="button" onClick={() => activateMut.mutate(v.id)} disabled={activateMut.isPending}
@@ -403,6 +553,18 @@ function ConnectionRow({ connection, providerKind }: { connection: ToolConnectio
                   )}
                   {pinResult[v.id] && (
                     <p className="mt-1 text-gray-500" data-testid={`pin-result-${v.id}`}>{pinResult[v.id]}</p>
+                  )}
+                  {editingVersionId === v.id && (
+                    <form onSubmit={editForm.handleSubmit(data => updateVersionMut.mutate({ versionId: v.id, data }))}
+                      className="mt-2 space-y-2 p-2 bg-gray-50 rounded" data-testid={`edit-version-form-${v.id}`}>
+                      <ConnectionVersionFields providerKind={providerKind} register={editForm.register}
+                        setValue={(name, value) => editForm.setValue(name, value)}
+                        credentialHint={t('toolConnections.credential_reference_edit_hint')} />
+                      <button type="submit" disabled={updateVersionMut.isPending}
+                        className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid={`submit-edit-version-${v.id}`}>
+                        {t('toolConnections.save_changes')}
+                      </button>
+                    </form>
                   )}
                   {tokenForm[v.id] && (
                     <form onSubmit={handleTokenSubmit(data => issueTokenMut.mutate({ versionId: v.id, data }))}
@@ -531,6 +693,9 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [showCreateVersion, setShowCreateVersion] = useState(false)
+  const [showUploadVersion, setShowUploadVersion] = useState(false)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadResult, setUploadResult] = useState<string | null>(null)
   const [approvingVersion, setApprovingVersion] = useState<SkillVersion | null>(null)
   const [versionError, setVersionError] = useState('')
   const { register, handleSubmit, reset } = useForm<{ manifest_json: string; signatures_json: string }>()
@@ -553,6 +718,17 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
     onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
+  const uploadVersionMut = useMutation({
+    mutationFn: (file: File) => skillsApi.uploadVersion(packageId, file),
+    onSuccess: result => {
+      setVersionError('')
+      setUploadResult(result.id)
+      qc.invalidateQueries({ queryKey: ['skill-versions', packageId] })
+      setUploadFile(null)
+    },
+    onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.upload_failed'))),
+  })
+
   const approveMut = useMutation({
     mutationFn: (versionId: string) => skillsApi.approveVersion(versionId),
     onSuccess: () => {
@@ -563,21 +739,81 @@ function SkillPackageCard({ packageId, packageName }: { packageId: string; packa
     onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.load_failed'))),
   })
 
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+
+  const renameMut = useMutation({
+    mutationFn: (name: string) => skillsApi.renamePackage(packageId, name),
+    onSuccess: () => {
+      setVersionError('')
+      qc.invalidateQueries({ queryKey: ['skill-packages'] })
+      setEditingName(false)
+    },
+    onError: (err: unknown) => setVersionError(extractErrorMessage(err, t('toolConnections.rename_failed'))),
+  })
+
   return (
     <div className="bg-white border rounded-lg p-4" data-testid={`skill-package-card-${packageId}`}>
-      <button type="button" onClick={() => setExpanded(e => !e)} className="w-full text-left text-sm font-semibold">
-        {packageName}
-      </button>
+      <div className="flex items-center justify-between">
+        <button type="button" onClick={() => setExpanded(e => !e)} className="flex-1 text-left text-sm font-semibold">
+          {packageName}
+        </button>
+        <button type="button" onClick={() => { setNameDraft(packageName); setEditingName(v => !v) }}
+          data-testid={`rename-skill-package-${packageId}`}
+          className="ml-2 px-1.5 py-0.5 text-[10px] border rounded hover:bg-gray-50 shrink-0">
+          {t('toolConnections.rename')}
+        </button>
+      </div>
+      {editingName && (
+        <div className="mt-1.5 flex items-center gap-1">
+          <input value={nameDraft} onChange={e => setNameDraft(e.target.value)}
+            placeholder={t('toolConnections.rename_placeholder')}
+            data-testid={`rename-skill-package-input-${packageId}`}
+            className="border rounded px-1.5 py-0.5 text-xs flex-1" />
+          <button type="button" disabled={renameMut.isPending || !nameDraft.trim()}
+            onClick={() => renameMut.mutate(nameDraft)}
+            data-testid={`save-rename-skill-package-${packageId}`}
+            className="px-2 py-0.5 text-xs bg-black text-white rounded disabled:opacity-50">
+            {t('toolConnections.save')}
+          </button>
+          <button type="button" onClick={() => setEditingName(false)} className="px-2 py-0.5 text-xs border rounded">
+            {t('toolConnections.cancel')}
+          </button>
+        </div>
+      )}
       {expanded && (
         <div className="mt-3 border-t pt-3 text-xs" data-testid={`skill-package-detail-${packageId}`}>
           {versionError && <p className="text-red-600 mb-2" role="alert" data-testid={`skill-version-error-${packageId}`}>{versionError}</p>}
           <div className="flex items-center justify-between mb-2">
             <h5 className="font-medium">{t('toolConnections.skill_versions')}</h5>
-            <button type="button" onClick={() => setShowCreateVersion(v => !v)}
-              className="flex items-center gap-1 px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`create-skill-version-${packageId}`}>
-              <Plus size={11} /> {t('toolConnections.create_skill_version')}
-            </button>
+            <span className="flex gap-1">
+              <button type="button" onClick={() => setShowUploadVersion(v => !v)}
+                className="flex items-center gap-1 px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`upload-skill-version-${packageId}`}>
+                <Plus size={11} /> {t('toolConnections.upload_skill_version')}
+              </button>
+              <button type="button" onClick={() => setShowCreateVersion(v => !v)}
+                className="flex items-center gap-1 px-2 py-0.5 border rounded hover:bg-gray-50" data-testid={`create-skill-version-${packageId}`}>
+                <Plus size={11} /> {t('toolConnections.create_skill_version')}
+              </button>
+            </span>
           </div>
+          {showUploadVersion && (
+            <div className="space-y-2 mb-3 p-2 bg-gray-50 rounded">
+              <p className="text-gray-500">{t('toolConnections.upload_skill_hint')}</p>
+              <input type="file" accept=".md,.zip" data-testid="skill-upload-file-input"
+                onChange={e => setUploadFile(e.target.files?.[0] ?? null)} className="text-xs" />
+              <button type="button" disabled={!uploadFile || uploadVersionMut.isPending}
+                onClick={() => uploadFile && uploadVersionMut.mutate(uploadFile)}
+                className="px-3 py-1 bg-black text-white rounded disabled:opacity-50" data-testid="submit-upload-skill-version">
+                {t('toolConnections.upload')}
+              </button>
+              {uploadResult && (
+                <p className="text-green-600" data-testid={`skill-upload-result-${packageId}`}>
+                  {t('toolConnections.upload_scan_clean')}
+                </p>
+              )}
+            </div>
+          )}
           {showCreateVersion && (
             <form onSubmit={handleSubmit(d => createVersionMut.mutate(d))} className="space-y-2 mb-3 p-2 bg-gray-50 rounded">
               <textarea {...register('manifest_json', { required: true })} rows={4}

@@ -7,7 +7,7 @@ export interface ExternalToolCatalogItem {
   version_no: number
   provider_id: string
   provider_name: string
-  provider_kind: 'search' | 'playwright' | 'external_mcp'
+  provider_kind: 'search' | 'playwright' | 'external_mcp' | 'browser_use'
   health_status: 'healthy' | 'unhealthy' | 'unknown'
 }
 

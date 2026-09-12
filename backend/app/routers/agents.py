@@ -181,6 +181,9 @@ def _validate_ontology_bindings(db: Session, current_user: User, bindings: list[
         tool_catalog_limit = binding.get("tool_catalog_limit")
         if tool_catalog_limit is not None and not (1 <= tool_catalog_limit <= 500):
             raise HTTPException(422, detail="AGENTS_BINDING_TOOL_CATALOG_LIMIT_INVALID")
+        entity_search_depth = binding.get("entity_search_depth")
+        if entity_search_depth is not None and not (1 <= entity_search_depth <= 50):
+            raise HTTPException(422, detail="AGENTS_BINDING_ENTITY_SEARCH_DEPTH_INVALID")
         effective = ceiling_intersection(
             _ontology_data_capabilities(db, current_user.id, ontology_id), current_user.role)
         if not validate_agent_tools(effective, requested):
@@ -310,7 +313,8 @@ def create_agent_route(body: AgentCreateRequest, db: Session = Depends(get_db),
             db, actor_id=current_user.id, name=body.name, description=body.description,
             default_model_config_version_id=body.default_model_config_version_id,
             default_model_name=body.default_model_name, system_prompt=body.system_prompt,
-            memory_settings=body.memory_settings, application_state_schema_version_id=app_schema,
+            memory_settings=body.memory_settings, max_tool_rounds=body.max_tool_rounds,
+            application_state_schema_version_id=app_schema,
             ontology_bindings=bindings,
         )
     except AgentConfigError as exc:
@@ -494,7 +498,7 @@ def create_agent_version(agent_id: str, body: AgentBasicVersionRequest, db: Sess
             name=body.name, description=body.description,
             default_model_config_version_id=body.default_model_config_version_id,
             default_model_name=body.default_model_name, system_prompt=body.system_prompt,
-            memory_settings=body.memory_settings,
+            memory_settings=body.memory_settings, max_tool_rounds=body.max_tool_rounds,
             application_state_schema_version_id=app_schema, change_note=body.change_note,
             ontology_bindings=bindings,
         )
@@ -511,7 +515,8 @@ def list_agent_versions(agent_id: str, db: Session = Depends(get_db), current_us
     rows = db.execute(text(
         "SELECT id, version_no, name, description, config_hash, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
-        "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
+        "max_tool_rounds, application_state_schema_version_id, change_note, prompt_generation_id, "
+        "created_by, created_at "
         "FROM agent_versions WHERE agent_id = :id ORDER BY version_no"
     ), {"id": agent_id}).mappings().all()
     items = []

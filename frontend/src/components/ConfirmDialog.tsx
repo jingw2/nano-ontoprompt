@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 interface Props {
   open: boolean
   title: string
@@ -8,7 +10,8 @@ interface Props {
   error?: string
 }
 
-export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = '确认删除', error }: Props) {
+export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel, error }: Props) {
+  const { t } = useTranslation()
   if (!open) return null
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -17,8 +20,8 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
         <p className="text-gray-600 text-sm mb-6">{message}</p>
         {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
         <div className="flex justify-end gap-3">
-          <button onClick={onCancel} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">取消</button>
-          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">{confirmLabel}</button>
+          <button onClick={onCancel} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">{t('common.cancel')}</button>
+          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">{confirmLabel ?? t('common.confirm_delete')}</button>
         </div>
       </div>
     </div>

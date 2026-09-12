@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
 import { CheckCircle, Loader2, Plus, Play, Database, ChevronDown, ChevronRight } from 'lucide-react'
@@ -60,6 +61,7 @@ function StatusChip({ status }: { status: string }) {
 }
 
 function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; ontologyId: string; onApplied: () => void }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null)
@@ -77,7 +79,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
       onApplied()
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      setApplyError(err?.detail || err?.message || '执行失败')
+      setApplyError(err?.detail || err?.message || t('curatedMapping.apply_failed'))
     } finally {
       setApplying(false)
     }
@@ -104,7 +106,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
           </div>
           <p className="text-xs text-gray-400 truncate mt-0.5">
             {mapping.dataset_name ?? mapping.curated_dataset_id?.slice(0, 8)}
-            {mapping.row_count != null && ` · ${mapping.row_count.toLocaleString()} 行`}
+            {mapping.row_count != null && ` · ${t('curatedMapping.rows_suffix', { count: mapping.row_count })}`}
           </p>
         </div>
         <button
@@ -113,7 +115,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
           className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white rounded-lg text-xs hover:bg-gray-800 disabled:opacity-50 flex-shrink-0"
         >
           {applying ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-          {applying ? '执行中...' : '应用 Mapping'}
+          {applying ? t('curatedMapping.applying') : t('curatedMapping.apply_mapping')}
         </button>
       </div>
 
@@ -121,8 +123,8 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
       {applyResult && (
         <div className="mx-4 mb-3 flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
           <CheckCircle size={13} />
-          写入完成：实体 {applyResult.v1_entities_written ?? applyResult.nodes_created} 条
-          {applyResult.total_rows != null && applyResult.total_rows > 0 && `（共 ${applyResult.total_rows} 行）`}
+          {t('curatedMapping.write_done', { count: applyResult.v1_entities_written ?? applyResult.nodes_created })}
+          {applyResult.total_rows != null && applyResult.total_rows > 0 && t('curatedMapping.write_done_total_rows', { count: applyResult.total_rows })}
         </div>
       )}
       {applyError && (
@@ -134,7 +136,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
       {/* Field mapping detail */}
       {expanded && fieldEntries.length > 0 && (
         <div className="border-t mx-4 mb-3 pt-3">
-          <p className="text-xs font-medium text-gray-500 mb-2">字段映射</p>
+          <p className="text-xs font-medium text-gray-500 mb-2">{t('curatedMapping.field_mapping')}</p>
           <div className="grid grid-cols-2 gap-1.5">
             {fieldEntries.map(([col, prop]) => (
               <div key={col} className="flex items-center gap-1.5 text-xs bg-gray-50 rounded px-2 py-1">
@@ -151,6 +153,7 @@ function MappingRow({ mapping, ontologyId, onApplied }: { mapping: Mapping; onto
 }
 
 function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: () => void }) {
+  const { t } = useTranslation()
   const [selectedId, setSelectedId] = useState('')
   const [suggesting, setSuggesting] = useState(false)
   const [suggestion, setSuggestion] = useState<MappingSuggestion | null>(null)
@@ -183,7 +186,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
       setSuggestion(res)
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      setError(err?.detail || err?.message || '自动建议失败')
+      setError(err?.detail || err?.message || t('curatedMapping.suggest_failed'))
     } finally {
       setSuggesting(false)
     }
@@ -211,7 +214,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
       onDone()
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      setError(err?.detail || err?.message || '保存失败')
+      setError(err?.detail || err?.message || t('curatedMapping.save_failed'))
     } finally {
       setSaving(false)
     }
@@ -219,12 +222,12 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
 
   return (
     <div className="border rounded-xl bg-white p-4 space-y-4">
-      <p className="text-sm font-medium">关联 Curated 数据集</p>
+      <p className="text-sm font-medium">{t('curatedMapping.link_dataset_title')}</p>
 
       {isLoading ? (
-        <p className="text-xs text-gray-400">加载中...</p>
+        <p className="text-xs text-gray-400">{t('curatedMapping.loading')}</p>
       ) : approvedDatasets.length === 0 ? (
-        <p className="text-xs text-gray-400">暂无已审批的 Curated Dataset。请先在 Pipeline → Curated 中完成审批。</p>
+        <p className="text-xs text-gray-400">{t('curatedMapping.no_approved_datasets')}</p>
       ) : (
         <>
           <select
@@ -232,10 +235,10 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
             onChange={e => { setSelectedId(e.target.value); setSuggestion(null) }}
             className="w-full border rounded-lg px-3 py-2 text-sm"
           >
-            <option value="">选择 Curated Dataset...</option>
+            <option value="">{t('curatedMapping.select_dataset_placeholder')}</option>
             {approvedDatasets.map(d => (
               <option key={d.id} value={d.id}>
-                {d.name}{d.row_count != null ? ` (${d.row_count.toLocaleString()} 行)` : ''}
+                {d.name}{d.row_count != null ? ` (${t('curatedMapping.rows_suffix', { count: d.row_count })})` : ''}
               </option>
             ))}
           </select>
@@ -247,7 +250,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
               className="flex items-center gap-1.5 px-4 py-2 border border-black rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
             >
               {suggesting ? <Loader2 size={14} className="animate-spin" /> : null}
-              {suggesting ? '生成映射中...' : '自动生成 Mapping'}
+              {suggesting ? t('curatedMapping.suggesting') : t('curatedMapping.auto_generate')}
             </button>
           )}
 
@@ -256,15 +259,15 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
           {suggestion && (
             <div className="space-y-3">
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs space-y-1">
-                <p className="font-medium text-blue-700">实体类型：{suggestion.entity_class}
+                <p className="font-medium text-blue-700">{t('curatedMapping.entity_type_label', { name: suggestion.entity_class })}
                   {suggestion.entity_class_cn && <span className="ml-1 text-blue-500">({suggestion.entity_class_cn})</span>}
                 </p>
                 {suggestion.primary_key_column && (
-                  <p className="text-blue-600">主键列：<span className="font-mono">{suggestion.primary_key_column}</span></p>
+                  <p className="text-blue-600">{t('curatedMapping.primary_key_label')}<span className="font-mono">{suggestion.primary_key_column}</span></p>
                 )}
               </div>
               <div className="space-y-1">
-                <p className="text-xs font-medium text-gray-500">字段映射建议</p>
+                <p className="text-xs font-medium text-gray-500">{t('curatedMapping.field_mapping_suggestion')}</p>
                 {(suggestion.field_mappings ?? []).map(fm => (
                   <div key={fm.column_name} className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2 py-1.5">
                     <span className="font-mono text-gray-600 w-32 truncate">{fm.column_name}</span>
@@ -283,13 +286,13 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
                   className="flex items-center gap-1.5 px-4 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-50"
                 >
                   {saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
-                  {saving ? '保存中...' : '确认并保存 Mapping'}
+                  {saving ? t('curatedMapping.saving') : t('curatedMapping.confirm_save')}
                 </button>
                 <button
                   onClick={() => setSuggestion(null)}
                   className="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
                 >
-                  重新生成
+                  {t('curatedMapping.regenerate')}
                 </button>
               </div>
             </div>
@@ -301,6 +304,7 @@ function LinkDatasetPanel({ ontologyId, onDone }: { ontologyId: string; onDone: 
 }
 
 export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string }) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const [showLink, setShowLink] = useState(false)
 
@@ -320,20 +324,20 @@ export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string 
     qc.invalidateQueries({ queryKey: ['mappings', ontologyId] })
   }
 
-  if (isLoading) return <div className="text-gray-400 text-sm py-8 text-center">加载中...</div>
+  if (isLoading) return <div className="text-gray-400 text-sm py-8 text-center">{t('curatedMapping.loading')}</div>
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          关联已审批的 Curated Dataset，配置字段映射后即可构建本体实体。
+          {t('curatedMapping.link_desc')}
         </p>
         <button
           onClick={() => setShowLink(v => !v)}
           className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50"
         >
           <Plus size={14} />
-          关联数据集
+          {t('curatedMapping.link_dataset_button')}
         </button>
       </div>
 
@@ -344,8 +348,8 @@ export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string 
       {(mappings as Mapping[]).length === 0 && !showLink ? (
         <div className="border-2 border-dashed rounded-xl py-16 text-center text-gray-400">
           <Database size={32} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">尚未关联任何 Curated Dataset</p>
-          <p className="text-xs mt-1">点击右上角"关联数据集"开始配置 Mapping</p>
+          <p className="text-sm">{t('curatedMapping.empty_title')}</p>
+          <p className="text-xs mt-1">{t('curatedMapping.empty_hint')}</p>
         </div>
       ) : (
         <div className="space-y-2">

@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Integer,
@@ -108,11 +109,128 @@ def _pre_refresh_tables() -> MetaData:
         Column("created_by", String(36), nullable=False),
     )
     # Referenced by runtime_plans/sandbox_simulations/managed_action_bindings
-    # (0030, 0032, 0033) as the Action a writable plan proposes.
+    # (0030, 0032, 0033) as the Action a writable plan proposes. 0042 drops
+    # execution_rule/function_code; 0046 backfills v2_ontology_action_types
+    # from the remaining columns by name.
     Table(
         "actions", metadata,
         Column("id", String(36), primary_key=True),
         Column("ontology_id", String(36), nullable=False),
+        Column("name_cn", String(200), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("execution_rule", Text, nullable=True),
+        Column("function_code", Text, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
+    )
+    # Referenced by governed_turn_plans (0035) as the Agent turn/tool-call an
+    # in-conversation governed action proposal is created from.
+    Table(
+        "agent_turns", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    Table(
+        "agent_tool_executions", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0040 (adds title).
+    Table(
+        "agent_sessions", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0052 (adds max_tool_rounds).
+    Table(
+        "agent_versions", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0043/0045 (add tool_catalog_limit/entity_search_depth).
+    Table(
+        "agent_ontology_bindings", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0042, which drops the pre-existing `formula` column
+    # after backfilling `definition` from it; 0046 backfills
+    # v2_ontology_logic_rules from the remaining columns by name.
+    Table(
+        "logic_rules", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name_cn", String(200), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("formula", Text, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
+    )
+    # Referenced by 0050 (adds scan_report).
+    Table(
+        "skill_versions", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0047/0048 (add/alter the search_provider check constraint).
+    Table(
+        "tool_connection_versions", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0051 (adds name).
+    Table(
+        "tool_connections", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0049, which drops and recreates the pre-existing
+    # ck_tool_providers_kind check constraint (originally added by 0012,
+    # before this fixture's MIGRATION_BASE).
+    Table(
+        "tool_providers", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("kind", String(20), nullable=False, server_default="search"),
+        CheckConstraint(
+            "kind IN ('search', 'playwright', 'skill', 'external_mcp', 'ontology_mcp')",
+            name="ck_tool_providers_kind",
+        ),
+    )
+    # Referenced by 0037 (adds pipeline_run_id).
+    Table(
+        "v2_curated_reviews", metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0046, which backfills mirror rows from logic_rules/
+    # actions into these two v2 tables (INSERT ... SELECT by column name).
+    Table(
+        "v2_ontology_logic_rules", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name", String(200), nullable=False),
+        Column("logic_type", String(50), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("expression", JSON, nullable=False),
+        Column("severity", String(20), nullable=False),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
+    )
+    Table(
+        "v2_ontology_action_types", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name", String(200), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("action_category", String(50), nullable=False),
+        Column("parameters", JSON, nullable=False),
+        Column("submission_criteria", JSON, nullable=True),
+        Column("effects", JSON, nullable=False),
+        Column("side_effects", JSON, nullable=True),
+        Column("permission_rules", JSON, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
     )
     for table_name, columns in {
         "v2_connections": [

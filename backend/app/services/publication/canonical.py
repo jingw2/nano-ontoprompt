@@ -135,6 +135,7 @@ class ToolDescriptor(ClosedModel):
     version: int
     source_kind: str
     source_id: str
+    name: str
     input_schema: dict[str, JsonValue]
     output_schema: dict[str, JsonValue]
     capability: str

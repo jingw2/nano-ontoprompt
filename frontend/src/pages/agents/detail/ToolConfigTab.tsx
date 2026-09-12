@@ -21,12 +21,23 @@ interface Props {
   onDirtyChange: (dirty: boolean) => void
 }
 
+// Must match backend/app/services/agent/configuration.py exactly.
+const DEFAULT_MAX_TOOL_ROUNDS = 5
+const MAX_TOOL_ROUNDS_RANGE = [1, 20] as const
+
+function clampToolRounds(value: number): number {
+  const [lo, hi] = MAX_TOOL_ROUNDS_RANGE
+  if (Number.isNaN(value)) return lo
+  return Math.min(Math.max(Math.trunc(value), lo), hi)
+}
+
 export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved, onDirtyChange }: Props) {
   const { t } = useTranslation()
   const [ontologies, setOntologies] = useState<PublishedOntology[]>([])
+  const [maxToolRounds, setMaxToolRounds] = useState(String(DEFAULT_MAX_TOOL_ROUNDS))
   const {
     bindings, setBindings, toolsByOntology, error, setError,
-    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit,
+    bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit, setEntitySearchDepth,
   } = useOntologyToolSelection(ontologies)
   const [validation, setValidation] = useState<ToolValidationResult | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -124,7 +135,11 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         ...(b.tool_catalog_limit !== undefined && b.tool_catalog_limit !== null
           ? { tool_catalog_limit: b.tool_catalog_limit }
           : {}),
+        ...(b.entity_search_depth !== undefined && b.entity_search_depth !== null
+          ? { entity_search_depth: b.entity_search_depth }
+          : {}),
       })))
+      setMaxToolRounds(String(activeVersion?.max_tool_rounds ?? DEFAULT_MAX_TOOL_ROUNDS))
       setError('')
     })
     onDirtyChange(false)
@@ -148,8 +163,16 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
     ...(b.enabled_categories !== undefined && b.enabled_categories !== null
       ? { enabled_categories: b.enabled_categories }
       : {}),
+    ...(b.tool_catalog_limit !== undefined && b.tool_catalog_limit !== null
+      ? { tool_catalog_limit: b.tool_catalog_limit }
+      : {}),
+    ...(b.entity_search_depth !== undefined && b.entity_search_depth !== null
+      ? { entity_search_depth: b.entity_search_depth }
+      : {}),
   }))
+  const persistedMaxToolRounds = String(activeVersion?.max_tool_rounds ?? DEFAULT_MAX_TOOL_ROUNDS)
   const dirty = JSON.stringify(bindings) !== JSON.stringify(persistedBindings)
+    || maxToolRounds !== persistedMaxToolRounds
   useEffect(() => {
     onDirtyChange(dirty)
   }, [dirty, onDirtyChange])
@@ -167,6 +190,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         default_model_name: activeVersion.default_model_name ?? '',
         system_prompt: activeVersion.system_prompt ?? null,
         memory_settings: activeVersion.memory_settings ?? {},
+        max_tool_rounds: clampToolRounds(Number(maxToolRounds)),
         application_state_schema_version_id: activeVersion.application_state_schema_version_id ?? null,
         change_note: t('agent.tools.change_note', '工具选择更新'),
         ontology_bindings: bindings,
@@ -179,10 +203,24 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
     } finally {
       setSaving(false)
     }
-  }, [agentId, activeVersion, bindings, onSaved, t])
+  }, [agentId, activeVersion, bindings, maxToolRounds, onSaved, t])
 
   return (
     <div className="p-6 space-y-6" data-testid="tool-config-tab">
+      <div>
+        <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.max_tool_rounds', '工具调用轮数上限')}</h3>
+        <input type="number" min={MAX_TOOL_ROUNDS_RANGE[0]} max={MAX_TOOL_ROUNDS_RANGE[1]}
+          value={maxToolRounds} disabled={!canEdit} data-testid="max-tool-rounds-input"
+          onChange={e => setMaxToolRounds(e.target.value)}
+          onBlur={() => setMaxToolRounds(String(clampToolRounds(Number(maxToolRounds))))}
+          className="w-24 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500" />
+        <p className="text-xs text-gray-400 mt-1">
+          {t('agent.tools.max_tool_rounds_hint',
+             '最多支持 {{min}}-{{max}} 轮工具调用；超过后本轮对话会以 TOOL_ROUND_LIMIT 结束',
+             { min: MAX_TOOL_ROUNDS_RANGE[0], max: MAX_TOOL_ROUNDS_RANGE[1] })}
+        </p>
+      </div>
+
       <div>
         <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.ontology_bindings', '本体绑定')}</h3>
         {bindings[0]?.selected_tools?.[0] && (
@@ -195,7 +233,7 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
           canEdit={canEdit} onBind={bindOntology} onUnbind={unbindOntology}
           onToggleCategory={toggleCategory} onToggleTool={toggleTool}
-          onSetToolCatalogLimit={setToolCatalogLimit} error={error} />
+          onSetToolCatalogLimit={setToolCatalogLimit} onSetEntitySearchDepth={setEntitySearchDepth} error={error} />
       </div>
 
       {validation && (
@@ -221,13 +259,10 @@ export default function ToolConfigTab({ agentId, activeVersion, canEdit, onSaved
         </button>
       )}
 
-      <div>
-        <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.external', '外部工具')}</h3>
-        <ExternalToolCard bindings={externalBindings} canEdit={canEdit}
-          onBind={bindExternal} onUnbind={unbindExternal} bindError={externalError}
-          skillBindings={skillBindings} onBindSkill={bindSkillFn} onUnbindSkill={unbindSkillFn}
-          skillBindError={skillBindError} />
-      </div>
+      <ExternalToolCard bindings={externalBindings} canEdit={canEdit}
+        onBind={bindExternal} onUnbind={unbindExternal} bindError={externalError}
+        skillBindings={skillBindings} onBindSkill={bindSkillFn} onUnbindSkill={unbindSkillFn}
+        skillBindError={skillBindError} />
 
       <p className="text-xs text-gray-400">
         {t('agent.tools.next_turn_refresh', '工具选择将在下一次 Turn 生效并刷新')}

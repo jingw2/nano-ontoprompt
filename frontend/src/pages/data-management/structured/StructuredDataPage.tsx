@@ -26,12 +26,6 @@ const STATUS_ICON = (status: string) => {
   return <Clock size={13} className="text-yellow-400" />
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审核',
-  approved:       '已审核',
-  rejected:       '已拒绝',
-}
-
 const STATUS_STYLE: Record<string, string> = {
   pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
@@ -80,7 +74,7 @@ export default function StructuredDataPage() {
         ids.forEach(cid => {
           const c = curatedById.get(cid)
           if (c) rows.push({
-            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || '通用',
+            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || t('data.domain_general'),
             curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
           })
         })
@@ -88,12 +82,12 @@ export default function StructuredDataPage() {
         const matched = curated.filter(c => c.name.startsWith(pl.name))
         if (matched.length > 0) {
           matched.forEach(c => rows.push({
-            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || '通用',
+            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || t('data.domain_general'),
             curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
           }))
         } else {
           rows.push({
-            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || '通用',
+            pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || t('data.domain_general'),
             curatedId: '', curatedName: '—', curatedStatus: '',
           })
         }
@@ -145,7 +139,7 @@ export default function StructuredDataPage() {
     }
   }
 
-  if (loading) return <p className="text-gray-400 text-sm p-6">加载中...</p>
+  if (loading) return <p className="text-gray-400 text-sm p-6">{t('common.loading')}</p>
 
   return (
     <div className="space-y-4">
@@ -184,7 +178,7 @@ export default function StructuredDataPage() {
             </button>
           )}
         </div>
-        <span className="text-xs text-gray-400 self-center">共 {filtered.length} 条</span>
+        <span className="text-xs text-gray-400 self-center">{t('data.row_count_summary', { count: filtered.length })}</span>
       </div>
 
       {/* Table */}
@@ -204,7 +198,7 @@ export default function StructuredDataPage() {
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('data.col_domain')}</th>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('data.col_curated_name')}</th>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">{t('data.col_curated_status')}</th>
-                <th className="px-4 py-2.5 text-gray-600 text-xs text-right">操作</th>
+                <th className="px-4 py-2.5 text-gray-600 text-xs text-right">{t('data.col_actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -228,7 +222,10 @@ export default function StructuredDataPage() {
                     {row.curatedStatus ? (
                       <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[row.curatedStatus] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                         {STATUS_ICON(row.curatedStatus)}
-                        {STATUS_LABEL[row.curatedStatus] || row.curatedStatus}
+                        {row.curatedStatus === 'pending_review' ? t('data.status_pending')
+                          : row.curatedStatus === 'approved' ? t('data.status_approved')
+                          : row.curatedStatus === 'rejected' ? t('data.status_rejected')
+                          : row.curatedStatus}
                       </span>
                     ) : (
                       <span className="text-xs text-gray-300">—</span>
@@ -242,7 +239,7 @@ export default function StructuredDataPage() {
                           onClick={e => handleQuickApprove(e, row)}
                           disabled={approvingId === row.curatedId}
                           className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 disabled:opacity-50"
-                          title="批准"
+                          title={t('data.approve_title')}
                         >
                           {approvingId === row.curatedId
                             ? <Loader2 size={13} className="animate-spin" />
@@ -254,7 +251,7 @@ export default function StructuredDataPage() {
                       <button
                         onClick={() => navigate(`/data/pipelines/${row.pipelineId}`)}
                         className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-black"
-                        title="打开管道"
+                        title={t('data.open_pipeline')}
                       >
                         <ExternalLink size={13} />
                       </button>
@@ -264,7 +261,7 @@ export default function StructuredDataPage() {
                         <button
                           onClick={() => setDeleteRow(row)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
-                          title="删除"
+                          title={t('data.delete_title')}
                         >
                           <Trash2 size={13} />
                         </button>
@@ -294,9 +291,9 @@ export default function StructuredDataPage() {
       {/* Quick delete confirm */}
       <ConfirmDialog
         open={!!deleteRow}
-        title="删除数据集"
-        message={`确认删除「${deleteRow?.curatedName}」？此操作不可撤销。`}
-        confirmLabel={deleting ? '删除中...' : '确认删除'}
+        title={t('data.delete_dataset_title')}
+        message={t('data.delete_dataset_msg', { name: deleteRow?.curatedName })}
+        confirmLabel={deleting ? t('data.deleting') : t('common.confirm_delete')}
         onConfirm={handleQuickDelete}
         onCancel={() => setDeleteRow(null)}
       />

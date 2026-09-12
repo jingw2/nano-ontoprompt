@@ -68,7 +68,7 @@ class ToolProvider(Base):
     __table_args__ = (
         CheckConstraint("status IN ('active', 'disabled')", name="ck_tool_providers_status"),
         CheckConstraint(
-            "kind IN ('search', 'playwright', 'skill', 'external_mcp', 'ontology_mcp')",
+            "kind IN ('search', 'playwright', 'skill', 'external_mcp', 'ontology_mcp', 'browser_use')",
             name="ck_tool_providers_kind",
         ),
     )
@@ -96,6 +96,7 @@ class ToolConnection(Base):
     active_version_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("tool_connection_versions.id", ondelete="RESTRICT"), nullable=True
     )
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

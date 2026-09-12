@@ -2,6 +2,7 @@
  * 数据集详细审核视图 — 行级编辑 + 批量审批
  */
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Save, CheckCircle, XCircle } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function CuratedReviewView({ reviewId, data, onComplete }: Props) {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<Array<Record<string, string | number>>>(data.map((r, i) => ({ ...r, __idx__: i })))
   const [pendingEdits, setPendingEdits] = useState<RowEdit[]>([])
   const [saving, setSaving] = useState(false)
@@ -66,7 +68,7 @@ export default function CuratedReviewView({ reviewId, data, onComplete }: Props)
         <input
           value={notes}
           onChange={e => setNotes(e.target.value)}
-          placeholder="审核备注（可选）"
+          placeholder={t('curatedReview.notes_ph')}
           className="flex-1 border rounded px-3 py-1.5 text-sm"
         />
         {pendingEdits.length > 0 && (
@@ -75,20 +77,20 @@ export default function CuratedReviewView({ reviewId, data, onComplete }: Props)
             disabled={saving}
             className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded hover:bg-gray-100 disabled:opacity-50"
           >
-            <Save size={14} /> 保存修改 ({pendingEdits.length})
+            <Save size={14} /> {t('curatedReview.save_edits', { count: pendingEdits.length })}
           </button>
         )}
         <button
           onClick={() => handleDecision('approve')}
           className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700"
         >
-          <CheckCircle size={14} /> 批准全部
+          <CheckCircle size={14} /> {t('curatedReview.approve_all')}
         </button>
         <button
           onClick={() => handleDecision('reject')}
           className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-500 text-white rounded hover:bg-red-600"
         >
-          <XCircle size={14} /> 拒绝
+          <XCircle size={14} /> {t('curatedReview.reject')}
         </button>
       </div>
 
@@ -128,7 +130,7 @@ export default function CuratedReviewView({ reviewId, data, onComplete }: Props)
       </div>
 
       {pendingEdits.length > 0 && (
-        <p className="text-xs text-yellow-600">有 {pendingEdits.length} 处未保存的修改</p>
+        <p className="text-xs text-yellow-600">{t('curatedReview.unsaved_edits', { count: pendingEdits.length })}</p>
       )}
     </div>
   )

@@ -646,9 +646,15 @@ def create_next_version(
     model_contract: list,
     credential_binding: str | None,
     changelog: str | None = None,
+    validate_contract: bool = True,
 ) -> "ModelConfigVersion":
     """Behavioral N+1: creates the next immutable version, binds an optional
     new credential and advances the active pointer.  Never updates old rows.
+
+    `validate_contract=False` is for a `legacy_contract_for()` fallback
+    contract (unverified fields, same trust class `create_model()` already
+    bootstraps without validation) — a caller asserting real verified data
+    via an explicit `model_contract` must always leave this at the default.
     `base_version` (when given) must equal the current active version number."""
     from app.models.model_version import ModelConfigVersion
 
@@ -663,7 +669,7 @@ def create_next_version(
             f"MODEL_REVISION_CONFLICT base_version {base_version} != active {active.version_no}"
         )
     if model_contract:
-        limit = _validate_contract(model_contract)
+        limit = _validate_contract(model_contract) if validate_contract else None
     else:
         model_contract = active.model_contract
         limit = active.conservative_input_limit

@@ -359,6 +359,7 @@ def _call_llm(provider: str, api_key: str, api_base: str | None, model: str, mes
 def chat_completion(
     provider: str, api_key: str, api_base: str | None, model: str, messages: list,
     *, tools: list | None = None, options: dict | None = None, timeout: float = 300,
+    on_delta=None,
 ) -> dict:
     """Conversation chat completion (Agent Turn model call).
 
@@ -367,6 +368,12 @@ def chat_completion(
     the optional `tools` schema for tool calling); `anthropic` maps the
     messages/tools onto the Messages API.  Returns a normalized dict with
     `content` (str) and `tool_calls` (list of {id, name, arguments_json}).
+
+    `on_delta`, when given, streams the response from an OpenAI-compatible
+    provider (`stream=True`) and is called with the cumulative answer text
+    after every content chunk — lets the caller show the answer as it's
+    generated instead of only once the full response returns. Ignored for
+    `anthropic` (streaming not implemented there; falls back to blocking).
     """
     if provider == "anthropic":
         return _anthropic_chat_completion(api_key, model, messages, tools, timeout)
@@ -383,6 +390,15 @@ def chat_completion(
             create_kwargs["temperature"] = float(options["temperature"])
         if options.get("max_tokens") is not None:
             create_kwargs["max_tokens"] = int(options["max_tokens"])
+    if on_delta is not None:
+        create_kwargs["stream"] = True
+        try:
+            stream = client.chat.completions.create(**create_kwargs)
+        except TypeError:
+            create_kwargs.pop("temperature", None)
+            create_kwargs.pop("max_tokens", None)
+            stream = client.chat.completions.create(**create_kwargs)
+        return _consume_chat_stream(stream, on_delta)
     try:
         resp = client.chat.completions.create(**create_kwargs)
     except TypeError:
@@ -399,6 +415,38 @@ def chat_completion(
             "arguments_json": call.function.arguments or "{}",
         })
     return {"content": message.content or "", "tool_calls": tool_calls}
+
+
+def _consume_chat_stream(stream, on_delta) -> dict:
+    """Accumulate an OpenAI-compatible streaming response into the same
+    `{"content", "tool_calls"}` shape the blocking call returns. Tool-call
+    argument fragments arrive over several chunks keyed by index — they are
+    buffered and joined, never shown live (raw partial JSON isn't
+    meaningful to a user); content fragments are shown live via `on_delta`."""
+    content_parts: list[str] = []
+    tool_call_slots: dict[int, dict[str, str]] = {}
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta is None:
+            continue
+        if delta.content:
+            content_parts.append(delta.content)
+            on_delta("".join(content_parts))
+        for tc_delta in delta.tool_calls or []:
+            slot = tool_call_slots.setdefault(tc_delta.index, {"id": "", "name": "", "arguments": ""})
+            if tc_delta.id:
+                slot["id"] = tc_delta.id
+            if tc_delta.function and tc_delta.function.name:
+                slot["name"] = tc_delta.function.name
+            if tc_delta.function and tc_delta.function.arguments:
+                slot["arguments"] += tc_delta.function.arguments
+    tool_calls = [
+        {"id": slot["id"], "name": slot["name"], "arguments_json": slot["arguments"] or "{}"}
+        for _, slot in sorted(tool_call_slots.items())
+    ]
+    return {"content": "".join(content_parts), "tool_calls": tool_calls}
 
 
 def _anthropic_chat_completion(api_key: str, model: str, messages: list, tools: list | None,

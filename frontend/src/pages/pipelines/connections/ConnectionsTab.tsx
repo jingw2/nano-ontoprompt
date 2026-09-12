@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useDropzone } from 'react-dropzone'
 import { Plus, Database, FileUp, Globe, X, Loader2, RefreshCw } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
@@ -10,13 +11,14 @@ interface Connection {
   status: string
 }
 
-const KIND_META: Record<string, { icon: React.ReactNode; label: string }> = {
-  file:     { icon: <FileUp size={14} />,   label: '文件上传' },
-  mysql:    { icon: <Database size={14} />, label: 'MySQL' },
-  postgres: { icon: <Database size={14} />, label: 'PostgreSQL' },
-  mongo:    { icon: <Database size={14} />, label: 'MongoDB' },
-  rest:     { icon: <Globe size={14} />,    label: 'REST API' },
+const KIND_META: Record<string, { icon: React.ReactNode; labelKey: string }> = {
+  file:     { icon: <FileUp size={14} />,   labelKey: 'connectorInspector.source_file' },
+  mysql:    { icon: <Database size={14} />, labelKey: '' },
+  postgres: { icon: <Database size={14} />, labelKey: '' },
+  mongo:    { icon: <Database size={14} />, labelKey: '' },
+  rest:     { icon: <Globe size={14} />,    labelKey: '' },
 }
+const KIND_LABEL_FALLBACK: Record<string, string> = { mysql: 'MySQL', postgres: 'PostgreSQL', mongo: 'MongoDB', rest: 'REST API' }
 
 const STATUS_STYLE: Record<string, string> = {
   active:   'text-green-600 bg-green-50 border-green-200',
@@ -24,36 +26,37 @@ const STATUS_STYLE: Record<string, string> = {
   error:    'text-red-500 bg-red-50 border-red-200',
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  active: '活跃', inactive: '未激活', error: '错误',
+const STATUS_LABEL_KEY: Record<string, string> = {
+  active: 'connectionsTab.status_active', inactive: 'connectionsTab.status_inactive', error: 'connectionsTab.status_error',
 }
 
-const KIND_CONFIG_FIELDS: Record<string, { key: string; label: string; placeholder: string; type?: string }[]> = {
+const KIND_CONFIG_FIELDS: Record<string, { key: string; labelKey: string; placeholder: string; type?: string }[]> = {
   mysql:    [
-    { key: 'host', label: '主机', placeholder: 'localhost' },
-    { key: 'port', label: '端口', placeholder: '3306' },
-    { key: 'database', label: '数据库名', placeholder: 'mydb' },
-    { key: 'user', label: '用户名', placeholder: 'root' },
-    { key: 'password', label: '密码', placeholder: '••••••', type: 'password' },
+    { key: 'host', labelKey: 'connectorInspector.field_host', placeholder: 'localhost' },
+    { key: 'port', labelKey: 'connectorInspector.field_port', placeholder: '3306' },
+    { key: 'database', labelKey: 'connectorInspector.field_database', placeholder: 'mydb' },
+    { key: 'user', labelKey: 'connectorInspector.field_user', placeholder: 'root' },
+    { key: 'password', labelKey: 'connectorInspector.field_password', placeholder: '••••••', type: 'password' },
   ],
   postgres: [
-    { key: 'host', label: '主机', placeholder: 'localhost' },
-    { key: 'port', label: '端口', placeholder: '5432' },
-    { key: 'database', label: '数据库名', placeholder: 'mydb' },
-    { key: 'user', label: '用户名', placeholder: 'postgres' },
-    { key: 'password', label: '密码', placeholder: '••••••', type: 'password' },
+    { key: 'host', labelKey: 'connectorInspector.field_host', placeholder: 'localhost' },
+    { key: 'port', labelKey: 'connectorInspector.field_port', placeholder: '5432' },
+    { key: 'database', labelKey: 'connectorInspector.field_database', placeholder: 'mydb' },
+    { key: 'user', labelKey: 'connectorInspector.field_user', placeholder: 'postgres' },
+    { key: 'password', labelKey: 'connectorInspector.field_password', placeholder: '••••••', type: 'password' },
   ],
   mongo:    [
-    { key: 'uri', label: '连接字符串', placeholder: 'mongodb://localhost:27017/mydb' },
+    { key: 'uri', labelKey: 'connectorInspector.field_uri', placeholder: 'mongodb://localhost:27017/mydb' },
   ],
   rest:     [
-    { key: 'url', label: 'API URL', placeholder: 'https://api.example.com/data' },
-    { key: 'headers', label: '请求头 (JSON)', placeholder: '{"Authorization": "Bearer token"}' },
+    { key: 'url', labelKey: '', placeholder: 'https://api.example.com/data' },
+    { key: 'headers', labelKey: 'connectorInspector.field_headers', placeholder: '{"Authorization": "Bearer token"}' },
   ],
   file: [],
 }
 
 function FileUploadZone({ files, onFilesChange }: { files: File[]; onFilesChange: (f: File[]) => void }) {
+  const { t } = useTranslation()
   const onDrop = useCallback((accepted: File[]) => {
     onFilesChange([...files, ...accepted])
   }, [files, onFilesChange])
@@ -71,11 +74,11 @@ function FileUploadZone({ files, onFilesChange }: { files: File[]; onFilesChange
         <input {...getInputProps()} />
         <FileUp size={28} className="mx-auto mb-2 text-gray-400" />
         {isDragActive ? (
-          <p className="text-sm text-black font-medium">松开以添加文件</p>
+          <p className="text-sm text-black font-medium">{t('connectionsTab.drop_release')}</p>
         ) : (
           <>
-            <p className="text-sm text-gray-600">拖拽文件到此处，或<span className="underline ml-1 cursor-pointer">点击选择</span></p>
-            <p className="text-xs text-gray-400 mt-1">支持 CSV、XLSX、JSON、PDF、DOCX 等格式，可多选</p>
+            <p className="text-sm text-gray-600">{t('connectionsTab.drop_hint')}<span className="underline ml-1 cursor-pointer">{t('connectionsTab.drop_hint_click')}</span></p>
+            <p className="text-xs text-gray-400 mt-1">{t('connectionsTab.drop_formats_hint')}</p>
           </>
         )}
       </div>
@@ -102,6 +105,7 @@ function FileUploadZone({ files, onFilesChange }: { files: File[]; onFilesChange
 }
 
 export default function ConnectionsTab() {
+  const { t } = useTranslation()
   const [connections, setConnections] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -139,8 +143,8 @@ export default function ConnectionsTab() {
   }
 
   const handleSave = async () => {
-    if (!formName.trim()) { setFormError('请填写连接名称'); return }
-    if (formKind === 'file' && formFiles.length === 0) { setFormError('请至少选择一个文件'); return }
+    if (!formName.trim()) { setFormError(t('connectionsTab.name_required_error')); return }
+    if (formKind === 'file' && formFiles.length === 0) { setFormError(t('connectionsTab.files_required_error')); return }
     setSaving(true)
     setFormError('')
     try {
@@ -167,7 +171,7 @@ export default function ConnectionsTab() {
       loadConnections()
     } catch (e: unknown) {
       const err = e as { detail?: string; response?: { data?: { detail?: string } }; message?: string }
-      setFormError(err?.detail || err?.response?.data?.detail || err?.message || '保存失败')
+      setFormError(err?.detail || err?.response?.data?.detail || err?.message || t('connectionsTab.save_failed'))
     } finally {
       setSaving(false)
     }
@@ -186,49 +190,49 @@ export default function ConnectionsTab() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('确认删除此连接？')) return
+    if (!window.confirm(t('connectionsTab.confirm_delete'))) return
     await apiClientV2.delete(`/connections/${id}`)
     loadConnections()
   }
 
-  if (loading) return <div className="text-gray-400 text-sm p-4">加载中...</div>
+  if (loading) return <div className="text-gray-400 text-sm p-4">{t('common.loading')}</div>
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">数据连接</h2>
-          <p className="text-xs text-gray-400 mt-0.5">管理数据源连接，支持数据库、API 和文件上传</p>
+          <h2 className="text-lg font-semibold">{t('connectionsTab.title')}</h2>
+          <p className="text-xs text-gray-400 mt-0.5">{t('connectionsTab.subtitle')}</p>
         </div>
         <button
           onClick={() => { resetForm(); setShowForm(true) }}
           className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-lg text-sm"
         >
-          <Plus size={14} /> 新建连接
+          <Plus size={14} /> {t('connectionsTab.new_connection')}
         </button>
       </div>
 
       {showForm && (
         <div className="border rounded-xl p-5 bg-white space-y-4">
           <div className="flex justify-between items-center">
-            <h3 className="font-medium text-sm">新建连接</h3>
+            <h3 className="font-medium text-sm">{t('connectionsTab.new_connection')}</h3>
             <button onClick={() => { setShowForm(false); resetForm() }} className="text-gray-400 hover:text-black">
               <X size={16} />
             </button>
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">连接名称 *</label>
+            <label className="text-xs text-gray-500 mb-1 block">{t('connectionsTab.name_label')} *</label>
             <input
               value={formName}
               onChange={e => setFormName(e.target.value)}
-              placeholder="例：ERP 订单数据库"
+              placeholder={t('connectionsTab.name_ph')}
               className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-black"
             />
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 mb-2 block">连接类型</label>
+            <label className="text-xs text-gray-500 mb-2 block">{t('connectionsTab.type_label')}</label>
             <div className="flex gap-2 flex-wrap">
               {Object.entries(KIND_META).map(([k, m]) => (
                 <button
@@ -238,7 +242,7 @@ export default function ConnectionsTab() {
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-colors
                     ${formKind === k ? 'bg-black text-white border-black' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                 >
-                  {m.icon} {m.label}
+                  {m.icon} {m.labelKey ? t(m.labelKey) : KIND_LABEL_FALLBACK[k]}
                 </button>
               ))}
             </div>
@@ -250,7 +254,7 @@ export default function ConnectionsTab() {
             <div className="space-y-3">
               {KIND_CONFIG_FIELDS[formKind]?.map(f => (
                 <div key={f.key}>
-                  <label className="text-xs text-gray-500 mb-1 block">{f.label}</label>
+                  <label className="text-xs text-gray-500 mb-1 block">{f.labelKey ? t(f.labelKey) : 'API URL'}</label>
                   <input
                     type={f.type || 'text'}
                     value={formConfig[f.key] || ''}
@@ -264,7 +268,7 @@ export default function ConnectionsTab() {
           )}
 
           <div>
-            <label className="text-xs text-gray-500 mb-2 block">同步模式</label>
+            <label className="text-xs text-gray-500 mb-2 block">{t('connectionsTab.sync_mode_label')}</label>
             <div className="flex gap-4">
               {(['snapshot', 'append'] as const).map(m => (
                 <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -276,7 +280,7 @@ export default function ConnectionsTab() {
                     onChange={() => setFormSyncMode(m)}
                     className="accent-black"
                   />
-                  <span>{m === 'snapshot' ? 'SNAPSHOT（全量覆盖）' : 'APPEND（增量追加）'}</span>
+                  <span>{m === 'snapshot' ? t('connectionsTab.sync_snapshot_label') : t('connectionsTab.sync_append_label')}</span>
                 </label>
               ))}
             </div>
@@ -286,7 +290,7 @@ export default function ConnectionsTab() {
 
           <div className="flex gap-2 justify-end">
             <button onClick={() => { setShowForm(false); resetForm() }} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={handleSave}
@@ -294,7 +298,7 @@ export default function ConnectionsTab() {
               className="flex items-center gap-2 px-4 py-2 text-sm bg-black text-white rounded-lg disabled:opacity-50"
             >
               {saving && <Loader2 size={13} className="animate-spin" />}
-              {saving ? '保存中...' : '保存'}
+              {saving ? t('connectionsTab.saving') : t('common.save')}
             </button>
           </div>
         </div>
@@ -303,15 +307,15 @@ export default function ConnectionsTab() {
       {connections.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-10 text-center text-gray-400 space-y-2">
           <Database size={28} className="mx-auto opacity-30" />
-          <p className="text-sm">暂无数据连接</p>
-          <p className="text-xs">点击「新建连接」添加数据源</p>
+          <p className="text-sm">{t('connectionsTab.empty')}</p>
+          <p className="text-xs">{t('connectionsTab.empty_hint')}</p>
         </div>
       ) : (
         <div className="border rounded-xl divide-y overflow-hidden">
           {connections.map(c => {
             const meta = KIND_META[c.kind] ?? KIND_META.file
             const statusStyle = STATUS_STYLE[c.status] ?? STATUS_STYLE.inactive
-            const statusLabel = STATUS_LABEL[c.status] ?? c.status
+            const statusLabel = STATUS_LABEL_KEY[c.status] ? t(STATUS_LABEL_KEY[c.status]) : c.status
             return (
               <div key={c.id} className="p-4 flex items-center gap-3">
                 <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
@@ -319,7 +323,7 @@ export default function ConnectionsTab() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{c.name}</p>
-                  <p className="text-xs text-gray-400">{meta.label}</p>
+                  <p className="text-xs text-gray-400">{meta.labelKey ? t(meta.labelKey) : KIND_LABEL_FALLBACK[c.kind]}</p>
                 </div>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded border ${statusStyle}`}>
                   {statusLabel}
@@ -330,13 +334,13 @@ export default function ConnectionsTab() {
                   className="flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
                 >
                   <RefreshCw size={11} className={syncing === c.id ? 'animate-spin' : ''} />
-                  同步
+                  {t('connectionsTab.sync_button')}
                 </button>
                 <button
                   onClick={() => handleDelete(c.id)}
                   className="text-gray-400 hover:text-red-500 text-xs px-1 transition-colors"
                 >
-                  删除
+                  {t('common.delete')}
                 </button>
               </div>
             )

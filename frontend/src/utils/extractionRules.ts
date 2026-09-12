@@ -1,7 +1,9 @@
 export interface ExtractionRuleDef {
   id: string
   label_cn: string
+  label_en: string
   description_cn: string
+  description_en: string
   has_value: boolean
   default_enabled: boolean
   default_value?: number
@@ -17,7 +19,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'cross_doc_entity',
     label_cn: '多文档实体验证',
+    label_en: 'Cross-Document Entity Verification',
     description_cn: '同一实体需在 N 个或以上独立文档中均有体现才提取',
+    description_en: 'Only extract an entity if it appears in N or more independent documents',
     has_value: true,
     default_enabled: false,
     default_value: 2,
@@ -27,7 +31,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'cross_doc_logic',
     label_cn: '多文档规则验证',
+    label_en: 'Cross-Document Rule Verification',
     description_cn: '同一逻辑规则需在 N 个或以上独立文档中均有体现才提取',
+    description_en: 'Only extract a logic rule if it appears in N or more independent documents',
     has_value: true,
     default_enabled: false,
     default_value: 2,
@@ -37,7 +43,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'cross_doc_action',
     label_cn: '多文档动作验证',
+    label_en: 'Cross-Document Action Verification',
     description_cn: '同一动作需在 N 个或以上独立文档中均有体现才提取',
+    description_en: 'Only extract an action if it appears in N or more independent documents',
     has_value: true,
     default_enabled: false,
     default_value: 2,
@@ -47,7 +55,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'no_duplicate',
     label_cn: '实体去重',
+    label_en: 'Entity Deduplication',
     description_cn: '避免提取语义相同但名称略有不同的重复实体',
+    description_en: 'Avoid extracting duplicate entities that are semantically the same but named slightly differently',
     has_value: false,
     default_enabled: false,
     constraint_fn: () =>
@@ -56,7 +66,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'strict_type',
     label_cn: '严格类型校验',
+    label_en: 'Strict Type Validation',
     description_cn: '实体必须归属于 Prompt 中定义的预设类型，不允许自定义类型',
+    description_en: 'Entities must belong to a preset type defined in the prompt; custom types are not allowed',
     has_value: false,
     default_enabled: false,
     constraint_fn: () =>
@@ -65,7 +77,9 @@ export const EXTRACTION_RULES: ExtractionRuleDef[] = [
   {
     id: 'min_confidence',
     label_cn: '最低置信度阈值',
+    label_en: 'Minimum Confidence Threshold',
     description_cn: '置信度低于阈值的实体、规则、动作不输出',
+    description_en: 'Entities, rules, and actions below the confidence threshold are not output',
     has_value: true,
     default_enabled: false,
     default_value: 0.8,
@@ -92,7 +106,9 @@ interface ActionLike {
 export interface ValidationRuleDef {
   id: string
   label_cn: string
+  label_en: string
   description_cn: string
+  description_en: string
   check_fn: (entities: EntityLike[], logic: LogicLike[], actions: ActionLike[]) => { pass: boolean; detail: string }
 }
 
@@ -100,7 +116,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   {
     id: 'bidirectional_links',
     label_cn: '双向关联完整性',
+    label_en: 'Bidirectional Link Integrity',
     description_cn: '逻辑规则的 linked_entities 中引用的实体，在该实体详情页应能看到此逻辑规则',
+    description_en: 'Entities referenced in a logic rule\'s linked_entities should show that rule on their own detail page',
     check_fn: (entities, logic) => {
       const entityNames = new Set(entities.map(e => e.name_cn).filter(Boolean))
       const broken: string[] = []
@@ -117,7 +135,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   {
     id: 'entity_properties',
     label_cn: '实体属性完整性',
+    label_en: 'Entity Property Completeness',
     description_cn: '所有提取的实体都应包含至少一个属性（properties 字段不为空）',
+    description_en: 'Every extracted entity should have at least one property (a non-empty properties field)',
     check_fn: (entities) => {
       const empty = entities.filter(e => !e.properties || Object.keys(e.properties).length === 0)
       return empty.length === 0
@@ -128,7 +148,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   {
     id: 'logic_linked_entities',
     label_cn: '逻辑规则实体关联',
+    label_en: 'Logic Rule Entity Linkage',
     description_cn: '所有逻辑规则都应关联至少一个实体（linked_entities 不为空）',
+    description_en: 'Every logic rule should be linked to at least one entity (a non-empty linked_entities)',
     check_fn: (_, logic) => {
       const empty = logic.filter(r => !(r.linked_entities ?? []).length)
       return empty.length === 0
@@ -139,7 +161,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   {
     id: 'action_logic_links',
     label_cn: '动作逻辑关联',
+    label_en: 'Action-Logic Linkage',
     description_cn: '所有动作都应关联至少一条逻辑规则（linked_logic_ids 不为空）',
+    description_en: 'Every action should be linked to at least one logic rule (a non-empty linked_logic_ids)',
     check_fn: (_, __, actions) => {
       const empty = actions.filter(a => !(a.linked_logic_ids ?? []).length)
       return empty.length === 0
@@ -150,7 +174,9 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
   {
     id: 'action_linked_entities',
     label_cn: '动作实体关联',
+    label_en: 'Action-Entity Linkage',
     description_cn: '所有动作都应关联至少一个实体（linked_entities 不为空）',
+    description_en: 'Every action should be linked to at least one entity (a non-empty linked_entities)',
     check_fn: (_, __, actions) => {
       const empty = actions.filter(a => !(a.linked_entities ?? []).length)
       return empty.length === 0

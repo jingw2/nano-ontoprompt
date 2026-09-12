@@ -103,7 +103,7 @@ describe('ReconciliationPage', () => {
 
     await userEvent.click(screen.getByTestId('create-rollback-plan'))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/denied/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent('回滚计划创建被拒绝')
     expect(screen.queryByTestId('rollback-plan-result')).toBeNull()
   })
 })

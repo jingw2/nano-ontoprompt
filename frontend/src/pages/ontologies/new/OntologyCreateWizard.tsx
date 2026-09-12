@@ -39,14 +39,14 @@ interface BuildResult {
 
 // Human Review 已移除 — 用户可在本体详情页自行修改
 const BUILD_PHASES = [
-  { key: 'entity',    label: '① Entity Type 识别',  icon: '🧩' },
-  { key: 'property',  label: '② Property Mapping',   icon: '📋' },
-  { key: 'relation',  label: '③ Relation 推断',      icon: '🔗' },
-  { key: 'logic',     label: '④ Logic Discovery',    icon: '⚖️' },
-  { key: 'action',    label: '⑤ Action Discovery',   icon: '⚡' },
-  { key: 'neo4j',     label: '⑥ 写入 Neo4j',         icon: '🕸️' },
-  { key: 'chroma',    label: '⑦ 写入 ChromaDB',      icon: '📊' },
-  { key: 'publish',   label: '⑧ 完成',               icon: '🚀' },
+  { key: 'entity',    labelKey: 'wizard.phase_entity',   icon: '🧩' },
+  { key: 'property',  labelKey: 'wizard.phase_property', icon: '📋' },
+  { key: 'relation',  labelKey: 'wizard.phase_relation', icon: '🔗' },
+  { key: 'logic',     labelKey: 'wizard.phase_logic',    icon: '⚖️' },
+  { key: 'action',    labelKey: 'wizard.phase_action',   icon: '⚡' },
+  { key: 'neo4j',     labelKey: 'wizard.phase_neo4j',    icon: '🕸️' },
+  { key: 'chroma',    labelKey: 'wizard.phase_chroma',   icon: '📊' },
+  { key: 'publish',   labelKey: 'wizard.phase_publish',  icon: '🚀' },
 ]
 
 const STATUS_ICON = (status: string) => {
@@ -54,17 +54,14 @@ const STATUS_ICON = (status: string) => {
   if (status === 'rejected') return <AlertTriangle size={12} className="text-red-400" />
   return <Clock size={12} className="text-yellow-400" />
 }
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审核', approved: '已审核', rejected: '已拒绝',
-}
 const STATUS_STYLE: Record<string, string> = {
   pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved: 'bg-green-50 text-green-700 border-green-200',
   rejected: 'bg-red-50 text-red-600 border-red-200',
 }
 
-function StepIndicator({ current }: { current: 0 | 1 | 2 }) {
-  const labels = ['基本信息', '选择数据集', 'Mapping 配置']
+function StepIndicator({ current, t }: { current: 0 | 1 | 2; t: (key: string) => string }) {
+  const labels = [t('wizard.step1_basic_info'), t('wizard.step2_select_datasets'), t('wizard.step3_mapping_config')]
   return (
     <div className="flex gap-2 mb-6 text-xs">
       {labels.map((s, i) => (
@@ -144,7 +141,7 @@ export default function OntologyCreateWizard() {
         ? ids.map(id => curatedById.get(id)).filter(Boolean) as CuratedDataset[]
         : datasets.filter(c => c.name.startsWith(pl.name))
       matched.forEach(c => rows.push({
-        pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || '通用',
+        pipelineId: pl.id, pipelineName: pl.name, domain: pl.domain || t('data.domain_general'),
         curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
         rowCount: c.row_count, qualityScore: c.quality_score,
       }))
@@ -153,7 +150,7 @@ export default function OntologyCreateWizard() {
     const linked = new Set(rows.map(r => r.curatedId))
     datasets.forEach(c => {
       if (!linked.has(c.id)) rows.push({
-        pipelineId: '', pipelineName: '（未关联管道）', domain: '—',
+        pipelineId: '', pipelineName: t('wizard.unlinked_pipeline'), domain: '—',
         curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
         rowCount: c.row_count, qualityScore: c.quality_score,
       })
@@ -281,7 +278,7 @@ export default function OntologyCreateWizard() {
     } catch (e: unknown) {
       const err = e as { message?: string; detail?: string }
       mark(2, 'failed')
-      setBuildError(err?.message || err?.detail || '构建失败')
+      setBuildError(err?.message || err?.detail || t('wizard.build_failed'))
     }
   }
 
@@ -293,7 +290,7 @@ export default function OntologyCreateWizard() {
       if (mode === 'simple_llm') navigate(`/ontologies/${res.id}?tab=files`)
       else { setCreatedOntologyId(res.id); setStep('select_datasets') }
     },
-    onError: (e: { message?: string; detail?: { message?: string } }) => { setError(e?.message || e?.detail?.message || '创建失败') },
+    onError: (e: { message?: string; detail?: { message?: string } }) => { setError(e?.message || e?.detail?.message || t('wizard.create_failed')) },
   })
 
   // ── Steps ──────────────────────────────────────────────────────────
@@ -303,18 +300,18 @@ export default function OntologyCreateWizard() {
       <button onClick={() => navigate('/ontologies')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-black mb-6">
         <ArrowLeft size={14} /> {t('ontology.back')}
       </button>
-      <h2 className="text-xl font-semibold mb-2">新建本体</h2>
-      <p className="text-sm text-gray-500 mb-8">选择构建方式</p>
+      <h2 className="text-xl font-semibold mb-2">{t('wizard.title_new')}</h2>
+      <p className="text-sm text-gray-500 mb-8">{t('wizard.subtitle_select_mode')}</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
         <button onClick={() => { setMode('simple_llm'); setStep('fill_info') }}
           className="group text-left p-6 rounded-xl border-2 transition-all hover:border-black hover:shadow-md border-gray-200">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center"><Zap size={20} className="text-amber-600" /></div>
-            <span className="font-semibold">简易 LLM 提取</span>
+            <span className="font-semibold">{t('wizard.mode_simple_title')}</span>
           </div>
-          <p className="text-sm text-gray-600 mb-4">上传文件，选择模型和提示词，LLM 一键提取。</p>
-          <ul className="text-xs text-gray-500 space-y-1"><li>✓ 快速原型验证</li><li>✓ 少量文档</li><li>✓ 探索性分析</li></ul>
-          <div className="mt-4 flex items-center gap-1 text-sm font-medium text-black">选择此方式 <ArrowRight size={14} /></div>
+          <p className="text-sm text-gray-600 mb-4">{t('wizard.mode_simple_desc')}</p>
+          <ul className="text-xs text-gray-500 space-y-1"><li>{t('wizard.mode_simple_bullet1')}</li><li>{t('wizard.mode_simple_bullet2')}</li><li>{t('wizard.mode_simple_bullet3')}</li></ul>
+          <div className="mt-4 flex items-center gap-1 text-sm font-medium text-black">{t('wizard.select_this_mode')} <ArrowRight size={14} /></div>
         </button>
         <button onClick={() => { setMode('pipeline_mapping'); setStep('fill_info') }}
           className="group text-left p-6 rounded-xl border-2 transition-all hover:border-black hover:shadow-md border-gray-200">
@@ -322,9 +319,9 @@ export default function OntologyCreateWizard() {
             <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center"><GitBranch size={20} className="text-blue-600" /></div>
             <span className="font-semibold">Pipeline Mapping</span>
           </div>
-          <p className="text-sm text-gray-600 mb-4">从已审批的 Curated Datasets 映射生成本体。</p>
-          <ul className="text-xs text-gray-500 space-y-1"><li>✓ 结构化/半结构化数据</li><li>✓ 精细化建模</li><li>✓ 企业级大规模数据</li></ul>
-          <div className="mt-4 flex items-center gap-1 text-sm font-medium text-black">选择此方式 <ArrowRight size={14} /></div>
+          <p className="text-sm text-gray-600 mb-4">{t('wizard.mode_pipeline_desc')}</p>
+          <ul className="text-xs text-gray-500 space-y-1"><li>{t('wizard.mode_pipeline_bullet1')}</li><li>{t('wizard.mode_pipeline_bullet2')}</li><li>{t('wizard.mode_pipeline_bullet3')}</li></ul>
+          <div className="mt-4 flex items-center gap-1 text-sm font-medium text-black">{t('wizard.select_this_mode')} <ArrowRight size={14} /></div>
         </button>
       </div>
     </div>
@@ -333,34 +330,34 @@ export default function OntologyCreateWizard() {
   if (step === 'fill_info') return (
     <div className="max-w-xl">
       <button onClick={() => setStep('select_mode')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-black mb-6">
-        <ArrowLeft size={14} /> 返回选择方式
+        <ArrowLeft size={14} /> {t('wizard.back_to_mode')}
       </button>
-      <h2 className="text-xl font-semibold mb-1">新建本体</h2>
-      <p className="text-sm text-gray-400 mb-2">{mode === 'simple_llm' ? '⚡ 简易 LLM 提取' : '🔄 Pipeline Mapping'}</p>
-      {mode === 'pipeline_mapping' && <StepIndicator current={0} />}
+      <h2 className="text-xl font-semibold mb-1">{t('wizard.title_new')}</h2>
+      <p className="text-sm text-gray-400 mb-2">{mode === 'simple_llm' ? `⚡ ${t('wizard.mode_simple_title')}` : '🔄 Pipeline Mapping'}</p>
+      {mode === 'pipeline_mapping' && <StepIndicator current={0} t={t} />}
       <div className="bg-white rounded-xl border p-6 space-y-4">
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">名称 *</label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="本体名称" className="w-full border rounded-lg px-3 py-2 text-sm" />
+          <label className="block text-xs font-medium text-gray-600 mb-1">{t('wizard.name_label')} *</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder={t('wizard.name_placeholder')} className="w-full border rounded-lg px-3 py-2 text-sm" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">领域 *</label>
+          <label className="block text-xs font-medium text-gray-600 mb-1">{t('wizard.domain_label')} *</label>
           <select value={domain} onChange={e => setDomain(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
             {DOMAINS.map(d => <option key={d}>{d}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">描述（可选）</label>
-          <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2} placeholder="简要描述本体用途"
+          <label className="block text-xs font-medium text-gray-600 mb-1">{t('wizard.desc_label')}</label>
+          <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2} placeholder={t('wizard.desc_placeholder')}
             className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
         </div>
         {error && <p className="text-red-500 text-xs">{error}</p>}
         <div className="flex justify-between pt-2">
-          <button onClick={() => setStep('select_mode')} className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">上一步</button>
+          <button onClick={() => setStep('select_mode')} className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">{t('wizard.prev_step')}</button>
           <button onClick={() => createMut.mutate()} disabled={!name || createMut.isPending}
             className="px-5 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-40 flex items-center gap-2">
             {createMut.isPending && <Loader2 size={14} className="animate-spin" />}
-            {mode === 'pipeline_mapping' ? '下一步' : '创建本体'}
+            {mode === 'pipeline_mapping' ? t('wizard.next_step') : t('wizard.create_ontology')}
           </button>
         </div>
       </div>
@@ -369,41 +366,41 @@ export default function OntologyCreateWizard() {
 
   if (step === 'select_datasets') return (
     <div>
-      <h2 className="text-xl font-semibold mb-1">选择数据集</h2>
+      <h2 className="text-xl font-semibold mb-1">{t('wizard.select_datasets_title')}</h2>
       <p className="text-sm text-gray-400 mb-4">🔄 Pipeline Mapping</p>
-      <StepIndicator current={1} />
+      <StepIndicator current={1} t={t} />
 
       <div className="bg-white rounded-xl border p-6">
         {datasetsLoading ? (
           <div className="flex items-center gap-2 text-gray-400 py-10 justify-center">
-            <Loader2 size={16} className="animate-spin" /> 加载中...
+            <Loader2 size={16} className="animate-spin" /> {t('common.loading')}
           </div>
         ) : approvedRows.length === 0 ? (
           /* ── 无已审批数据 ── */
           <div className="py-8 text-center space-y-3">
-            <p className="text-sm text-gray-600 font-medium">暂无已审批的结构化数据</p>
-            <p className="text-xs text-gray-400">请先在数据管理中运行 Pipeline 并审批生成的结构化数据，再回到此步骤。</p>
+            <p className="text-sm text-gray-600 font-medium">{t('wizard.no_approved_data')}</p>
+            <p className="text-xs text-gray-400">{t('wizard.no_approved_hint')}</p>
             {pendingRows.length > 0 && (
-              <p className="text-xs text-amber-600">当前有 {pendingRows.length} 条待审批数据</p>
+              <p className="text-xs text-amber-600">{t('wizard.pending_count', { count: pendingRows.length })}</p>
             )}
             <button
               onClick={() => setStep('approve_data')}
               className="inline-flex items-center gap-1.5 px-4 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800"
             >
-              <CheckCircle size={14} /> 前往审批结构化数据
+              <CheckCircle size={14} /> {t('wizard.go_approve')}
             </button>
           </div>
         ) : (
           /* ── 有已审批数据，展示表格 ── */
           <>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-sm font-medium text-gray-700">选择已审批的 Curated Datasets</p>
+              <p className="text-sm font-medium text-gray-700">{t('wizard.select_approved_title')}</p>
               {pendingRows.length > 0 && (
                 <button
                   onClick={() => setStep('approve_data')}
                   className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 rounded-lg px-2.5 py-1 hover:bg-blue-50"
                 >
-                  <Clock size={12} /> {pendingRows.length} 条待审批 → 前往审批
+                  <Clock size={12} /> {t('wizard.pending_go_approve', { count: pendingRows.length })}
                 </button>
               )}
             </div>
@@ -413,21 +410,21 @@ export default function OntologyCreateWizard() {
               <div className="relative">
                 <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input value={pipelineFilter} onChange={e => setPipelineFilter(e.target.value)}
-                  placeholder="按管道 ID / 名称筛选" className="pl-7 pr-6 py-1.5 border rounded-lg text-xs w-48" />
+                  placeholder={t('wizard.filter_pipeline_ph')} className="pl-7 pr-6 py-1.5 border rounded-lg text-xs w-48" />
                 {pipelineFilter && <button onClick={() => setPipelineFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400"><X size={11} /></button>}
               </div>
               <div className="relative">
                 <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input value={curatedFilter} onChange={e => setCuratedFilter(e.target.value)}
-                  placeholder="按数据集名称 / ID 筛选" className="pl-7 pr-6 py-1.5 border rounded-lg text-xs w-48" />
+                  placeholder={t('wizard.filter_curated_ph')} className="pl-7 pr-6 py-1.5 border rounded-lg text-xs w-48" />
                 {curatedFilter && <button onClick={() => setCuratedFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400"><X size={11} /></button>}
               </div>
-              <span className="text-xs text-gray-400 self-center">共 {filteredApproved.length} 条</span>
+              <span className="text-xs text-gray-400 self-center">{t('data.row_count_summary', { count: filteredApproved.length })}</span>
             </div>
 
             {/* Table */}
             {filteredApproved.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">没有匹配的记录</p>
+              <p className="text-sm text-gray-400 py-4 text-center">{t('wizard.no_match')}</p>
             ) : (
               <div className="border rounded-xl overflow-hidden mb-4">
                 <table className="w-full text-xs">
@@ -440,11 +437,11 @@ export default function OntologyCreateWizard() {
                             : <Square size={14} className="text-gray-300" />}
                         </button>
                       </th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">管道 ID</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">管道名称</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">业务域</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">结构数据集名称</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">行数</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">{t('wizard.col_pipeline_id')}</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">{t('wizard.col_pipeline_name')}</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">{t('wizard.col_domain')}</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">{t('wizard.col_curated_name')}</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">{t('wizard.col_row_count')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -483,14 +480,14 @@ export default function OntologyCreateWizard() {
         )}
 
         <div className="flex justify-between pt-2 border-t mt-2">
-          <span className="text-xs text-gray-400 self-center">已选 {selectedDatasetIds.size} 个数据集</span>
+          <span className="text-xs text-gray-400 self-center">{t('wizard.selected_count', { count: selectedDatasetIds.size })}</span>
           <button
             onClick={handleGetSuggestions}
             disabled={selectedDatasetIds.size === 0 || suggestionsLoading}
             className="px-5 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {suggestionsLoading && <Loader2 size={14} className="animate-spin" />}
-            下一步：Mapping 配置
+            {t('wizard.next_mapping_config')}
           </button>
         </div>
       </div>
@@ -503,29 +500,29 @@ export default function OntologyCreateWizard() {
         onClick={() => { loadDatasets(); setStep('select_datasets') }}
         className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-black mb-5"
       >
-        <ArrowLeft size={14} /> 返回选择数据集
+        <ArrowLeft size={14} /> {t('wizard.back_to_select_datasets')}
       </button>
-      <h2 className="text-xl font-semibold mb-1">审批结构化数据</h2>
-      <p className="text-sm text-gray-400 mb-5">批准数据后，可返回上一步继续选择数据集进行 Mapping。</p>
+      <h2 className="text-xl font-semibold mb-1">{t('wizard.approve_title')}</h2>
+      <p className="text-sm text-gray-400 mb-5">{t('wizard.approve_subtitle')}</p>
 
       {datasetsLoading ? (
-        <div className="flex items-center gap-2 text-gray-400 py-10"><Loader2 size={16} className="animate-spin" /> 加载中...</div>
+        <div className="flex items-center gap-2 text-gray-400 py-10"><Loader2 size={16} className="animate-spin" /> {t('common.loading')}</div>
       ) : datasetRows.length === 0 ? (
         <div className="bg-white border rounded-xl p-10 text-center text-gray-400">
-          <p className="text-sm">暂无结构化数据</p>
-          <p className="text-xs mt-1">请先在数据管理中运行 Pipeline 生成数据集</p>
-          <button onClick={() => navigate('/data/pipelines')} className="text-xs text-blue-600 hover:underline mt-3 inline-block">→ 前往数据管道</button>
+          <p className="text-sm">{t('wizard.no_structured_data')}</p>
+          <p className="text-xs mt-1">{t('wizard.no_structured_hint')}</p>
+          <button onClick={() => navigate('/data/pipelines')} className="text-xs text-blue-600 hover:underline mt-3 inline-block">{t('wizard.go_to_pipelines')}</button>
         </div>
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">管道名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">业务域</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">结构数据集名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">状态</th>
-                <th className="px-4 py-2.5 text-xs text-right">操作</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">{t('wizard.col_pipeline_name')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">{t('wizard.col_domain')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">{t('wizard.col_curated_name')}</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">{t('wizard.col_status')}</th>
+                <th className="px-4 py-2.5 text-xs text-right">{t('wizard.col_actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -539,7 +536,10 @@ export default function OntologyCreateWizard() {
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[row.curatedStatus] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                       {STATUS_ICON(row.curatedStatus)}
-                      {STATUS_LABEL[row.curatedStatus] || row.curatedStatus}
+                      {row.curatedStatus === 'pending_review' ? t('data.status_pending')
+                        : row.curatedStatus === 'approved' ? t('data.status_approved')
+                        : row.curatedStatus === 'rejected' ? t('data.status_rejected')
+                        : row.curatedStatus}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -550,11 +550,11 @@ export default function OntologyCreateWizard() {
                         className="inline-flex items-center gap-1 px-3 py-1 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
                       >
                         {approvingId === row.curatedId ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />}
-                        批准
+                        {t('wizard.approve_btn')}
                       </button>
                     )}
                     {row.curatedStatus === 'approved' && (
-                      <span className="text-xs text-green-600 font-medium">✓ 已审批</span>
+                      <span className="text-xs text-green-600 font-medium">{t('wizard.approved_badge')}</span>
                     )}
                   </td>
                 </tr>
@@ -569,7 +569,7 @@ export default function OntologyCreateWizard() {
           onClick={() => { loadDatasets(); setStep('select_datasets') }}
           className="px-5 py-2 bg-black text-white rounded-lg text-sm flex items-center gap-2"
         >
-          <ArrowLeft size={14} /> 返回选择数据集
+          <ArrowLeft size={14} /> {t('wizard.back_to_select_datasets')}
         </button>
       </div>
     </div>
@@ -577,9 +577,9 @@ export default function OntologyCreateWizard() {
 
   if (step === 'mapping_config') return (
     <div>
-      <h2 className="text-xl font-semibold mb-1">Mapping 配置</h2>
-      <p className="text-sm text-gray-400 mb-4">🔄 Pipeline Mapping — LLM 辅助建议，可修改后确认</p>
-      <StepIndicator current={2} />
+      <h2 className="text-xl font-semibold mb-1">{t('wizard.mapping_config_title')}</h2>
+      <p className="text-sm text-gray-400 mb-4">{t('wizard.mapping_config_subtitle')}</p>
+      <StepIndicator current={2} t={t} />
       <div className="space-y-4">
         {[...selectedDatasetIds].map(dsId => {
           const ds = datasets.find(d => d.id === dsId)
@@ -601,7 +601,7 @@ export default function OntologyCreateWizard() {
               </div>
               {sug.field_mappings.length > 0 && (
                 <div className="border-t pt-3 space-y-1">
-                  <p className="text-xs text-gray-500 mb-2">字段映射（列名 → 属性名）</p>
+                  <p className="text-xs text-gray-500 mb-2">{t('wizard.field_mapping_label')}</p>
                   {sug.field_mappings.slice(0, 6).map((fm, i) => (
                     <div key={i} className="flex items-center gap-2 text-xs">
                       <span className="font-mono text-gray-500 w-32 truncate">{fm.column_name}</span>
@@ -609,21 +609,21 @@ export default function OntologyCreateWizard() {
                       <span className="font-mono text-gray-700">{fm.property_name}</span>
                     </div>
                   ))}
-                  {sug.field_mappings.length > 6 && <p className="text-xs text-gray-400">+ {sug.field_mappings.length - 6} 个字段...</p>}
+                  {sug.field_mappings.length > 6 && <p className="text-xs text-gray-400">{t('wizard.more_fields', { count: sug.field_mappings.length - 6 })}</p>}
                 </div>
               )}
               <div className="border-t pt-3 mt-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
                 <div className="bg-blue-50 border border-blue-100 rounded-lg p-2">
-                  <p className="font-medium text-blue-700">Link Type 推断</p>
-                  <p className="text-blue-600 mt-1">基于外键、值模式和 Link Mapping 生成，并推断 cardinality。</p>
+                  <p className="font-medium text-blue-700">{t('wizard.link_type_title')}</p>
+                  <p className="text-blue-600 mt-1">{t('wizard.link_type_desc')}</p>
                 </div>
                 <div className="bg-amber-50 border border-amber-100 rounded-lg p-2">
-                  <p className="font-medium text-amber-700">Logic Discovery</p>
-                  <p className="text-amber-600 mt-1">从 mapping、schema 质量、状态列和关系生成 draft 规则。</p>
+                  <p className="font-medium text-amber-700">{t('wizard.logic_discovery_title')}</p>
+                  <p className="text-amber-600 mt-1">{t('wizard.logic_discovery_desc')}</p>
                 </div>
                 <div className="bg-purple-50 border border-purple-100 rounded-lg p-2">
-                  <p className="font-medium text-purple-700">Action Discovery</p>
-                  <p className="text-purple-600 mt-1">从 Object Type、Link Type、Review 和 Writeback 生成 draft 动作。</p>
+                  <p className="font-medium text-purple-700">{t('wizard.action_discovery_title')}</p>
+                  <p className="text-purple-600 mt-1">{t('wizard.action_discovery_desc')}</p>
                 </div>
               </div>
             </div>
@@ -631,10 +631,10 @@ export default function OntologyCreateWizard() {
         })}
         <div className="flex justify-between">
           <button onClick={() => setStep('select_datasets')} className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-            <ArrowLeft size={14} className="inline mr-1" /> 上一步
+            <ArrowLeft size={14} className="inline mr-1" /> {t('wizard.prev_step')}
           </button>
           <button onClick={handleStartBuild} className="px-6 py-2 bg-black text-white rounded-lg text-sm flex items-center gap-2 hover:bg-gray-800">
-            <Zap size={14} /> 开始构建
+            <Zap size={14} /> {t('wizard.start_build')}
           </button>
         </div>
       </div>
@@ -645,10 +645,10 @@ export default function OntologyCreateWizard() {
     const pct = Math.round(currentPhase / BUILD_PHASES.length * 100)
     return (
       <div className="max-w-xl mx-auto py-8">
-        <h2 className="text-xl font-semibold mb-2 text-center">Ontology Mapping 进行中</h2>
+        <h2 className="text-xl font-semibold mb-2 text-center">{t('wizard.building_title')}</h2>
         <p className="text-sm text-gray-400 text-center mb-6">{createdOntologyId?.slice(0, 8)}</p>
         <div className="mb-6">
-          <div className="flex justify-between text-xs text-gray-500 mb-1"><span>进度</span><span>{pct}%</span></div>
+          <div className="flex justify-between text-xs text-gray-500 mb-1"><span>{t('wizard.progress_label')}</span><span>{pct}%</span></div>
           <div className="w-full bg-gray-100 rounded-full h-2.5">
             <div className="bg-black h-2.5 rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
           </div>
@@ -668,8 +668,8 @@ export default function OntologyCreateWizard() {
                    <span className="text-gray-300 text-xs">{phase.icon}</span>}
                 </div>
                 <div className="flex-1">
-                  <p className={`text-sm font-medium ${st === 'done' ? 'text-green-700' : st === 'running' ? 'text-blue-700' : ''}`}>{phase.label}</p>
-                  <p className="text-xs text-gray-400">{st === 'done' ? '完成' : st === 'running' ? '进行中...' : st === 'failed' ? '失败' : '等待中'}</p>
+                  <p className={`text-sm font-medium ${st === 'done' ? 'text-green-700' : st === 'running' ? 'text-blue-700' : ''}`}>{t(phase.labelKey)}</p>
+                  <p className="text-xs text-gray-400">{st === 'done' ? t('wizard.phase_done') : st === 'running' ? t('wizard.phase_running') : st === 'failed' ? t('wizard.phase_failed') : t('wizard.phase_pending')}</p>
                 </div>
                 {st === 'done' && <span className="text-green-500 text-xs">✅</span>}
               </div>
@@ -680,29 +680,29 @@ export default function OntologyCreateWizard() {
         {buildError && (
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
             <p className="text-xs text-red-600">{buildError}</p>
-            <button onClick={() => navigate(`/ontologies/${createdOntologyId}`)} className="text-xs text-blue-600 hover:underline mt-2">查看本体</button>
+            <button onClick={() => navigate(`/ontologies/${createdOntologyId}`)} className="text-xs text-blue-600 hover:underline mt-2">{t('wizard.view_ontology')}</button>
           </div>
         )}
 
         {buildDone && (
           <div className="mt-5 p-5 bg-white border rounded-xl">
-            <p className="text-sm font-semibold text-gray-800 mb-1">🎉 构建完成</p>
+            <p className="text-sm font-semibold text-gray-800 mb-1">{t('wizard.build_complete')}</p>
             <p className="text-xs text-gray-500 mb-3">
-              实体、关系、Logic 与 Actions 已生成。你可以在本体详情页自由查看和修改每一项。
+              {t('wizard.build_complete_desc')}
             </p>
             {buildResult && (
               <div className="grid grid-cols-4 gap-2 mb-4 text-xs">
-                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">实体</p><p className="font-bold text-base">{buildResult.total_entities || 0}</p></div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">关系</p><p className="font-bold text-base">{buildResult.total_relations || 0}</p></div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">逻辑规则</p><p className="font-bold text-base">{buildResult.total_logic || 0}</p></div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">动作</p><p className="font-bold text-base">{buildResult.total_actions || 0}</p></div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">{t('wizard.stat_entities')}</p><p className="font-bold text-base">{buildResult.total_entities || 0}</p></div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">{t('wizard.stat_relations')}</p><p className="font-bold text-base">{buildResult.total_relations || 0}</p></div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">{t('wizard.stat_logic')}</p><p className="font-bold text-base">{buildResult.total_logic || 0}</p></div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-gray-400">{t('wizard.stat_actions')}</p><p className="font-bold text-base">{buildResult.total_actions || 0}</p></div>
               </div>
             )}
             <button
               onClick={() => navigate(`/ontologies/${createdOntologyId}`)}
               className="w-full px-4 py-2.5 bg-black text-white rounded-lg text-sm font-medium hover:bg-gray-800 flex items-center justify-center gap-2"
             >
-              进入本体详情 <ArrowRight size={14} />
+              {t('wizard.go_to_detail')} <ArrowRight size={14} />
             </button>
           </div>
         )}

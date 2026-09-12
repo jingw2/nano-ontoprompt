@@ -211,6 +211,54 @@ def test_agent_catalog_filters(ctx):
         app.dependency_overrides.clear()
 
 
+def test_agent_catalog_flattens_one_row_per_model_in_the_contract(ctx):
+    """An Agent must be able to pin a specific model (e.g. deepseek-v4-pro
+    vs deepseek-v4-flash) from a single "deepseek" config, not just the
+    config as a whole — the catalog expands each contract entry into its
+    own selectable row, sharing the identity's version id."""
+    from fastapi.testclient import TestClient
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    deepseek_id = str(uuid.uuid4())
+    session.execute(text(
+        "INSERT INTO model_configs (id,name,config_type,api_base,api_key_encrypted,provider,models,options,created_by,created_at,updated_at) "
+        "VALUES (:id,'deepseek','llm','https://api.deepseek.com','','compatible','[]'::json,'{}'::json,:owner,now(),now())"
+    ), {"id": deepseek_id, "owner": editor_id})
+    deepseek_version_id = str(uuid.uuid4())
+    contract = (
+        '[{"provider_model_revision": "deepseek-v4-pro", "tokenizer_family": null, '
+        '"tokenizer_revision": null, "verified_context_window_tokens": null, '
+        '"verified_maximum_output_tokens": null, "provider_contract_revision": null, '
+        '"provider_contract_hash": null}, '
+        '{"provider_model_revision": "deepseek-v4-flash", "tokenizer_family": null, '
+        '"tokenizer_revision": null, "verified_context_window_tokens": null, '
+        '"verified_maximum_output_tokens": null, "provider_contract_revision": null, '
+        '"provider_contract_hash": null}]'
+    )
+    session.execute(text(
+        "INSERT INTO model_config_versions (id, model_config_id, version_no, provider, options, behavior_hash, model_contract, created_at) "
+        "VALUES (:id, :mc, 1, 'compatible', '{}'::json, :hash, CAST(:contract AS json), now())"
+    ), {"id": deepseek_version_id, "mc": deepseek_id, "hash": "d" * 64, "contract": contract})
+    session.execute(text(
+        "UPDATE model_configs SET active_version_id = :vid, status = 'active' WHERE id = :mc"
+    ), {"vid": deepseek_version_id, "mc": deepseek_id})
+    session.commit()
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            items = c.get("/api/v1/agents/catalog/models", headers=editor_headers).json()["data"]["items"]
+            deepseek_rows = [i for i in items if i["name"] == "deepseek"]
+            assert len(deepseek_rows) == 2
+            model_names = {r["model_name"] for r in deepseek_rows}
+            assert model_names == {"deepseek-v4-pro", "deepseek-v4-flash"}
+            # both rows share the same version id (what the Agent config API pins)
+            assert {r["id"] for r in deepseek_rows} == {deepseek_version_id}
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_agent_catalog_model_id_is_a_version_id(ctx):
     """Regression (Issue 1): the catalog `id` must be a model_config_versions.id
     (the active version), not the model_configs identity — create/save pin it as
@@ -687,6 +735,12 @@ def test_ontology_tools_exposure_endpoint(ctx):
             assert "query:o-tools" in ids
             assert "logic:rule-1" in ids
             assert "action:action-1" in ids
+            # each descriptor carries the ontology's actual business rule/action
+            # name (not just its opaque id) so the Agent tool-binding UI can
+            # show something a human can read
+            by_id = {t["descriptor_id"]: t for t in data["tools"]}
+            assert by_id["logic:rule-1"]["name"] == "Rule: completeness"
+            assert by_id["action:action-1"]["name"] == "Create Order"
             # a release manifest carries the same descriptors
             release_id = data["release_id"]
             rel = c.get(f"/api/v1/ontologies/o-tools/releases/{release_id}", headers=editor_headers)
@@ -695,6 +749,44 @@ def test_ontology_tools_exposure_endpoint(ctx):
             assert {d["descriptor_id"] for d in projection["tool_descriptors"]} == ids
             assert len(projection["logic_rules"]) == 1
             assert len(projection["actions"]) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ontology_tools_exposure_shows_the_live_name_not_the_publish_time_one(ctx):
+    """A release's `tool_descriptors` are frozen forever (the DB enforces
+    release immutability at the trigger level — this is by design), so a
+    rule renamed after publish must not keep showing its name-at-publish-time
+    in the Agent tool-binding UI. The exposure endpoint looks the name up
+    live by source_id instead of trusting whatever is frozen into the
+    manifest (see `enrich_tool_descriptors`/`_live_names`); the fully-missing-
+    name case (releases published before this field existed) is covered at
+    the unit level in test_tool_categories.py, since a real release can't be
+    mutated to simulate it."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id)
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    # rename the rule/action after publish — the frozen manifest still says
+    # "Rule: completeness"/"Create Order"
+    session.execute(text(
+        "UPDATE v2_ontology_logic_rules SET name = 'Renamed Rule' WHERE id = 'rule-1'"
+    ))
+    session.execute(text(
+        "UPDATE v2_ontology_action_types SET name = 'Renamed Action' WHERE id = 'action-1'"
+    ))
+    session.commit()
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            r = c.get("/api/v1/ontologies/o-tools/tools", headers=editor_headers)
+            assert r.status_code == 200, r.text
+            by_id = {t["descriptor_id"]: t for t in r.json()["data"]["tools"]}
+            assert by_id["logic:rule-1"]["name"] == "Renamed Rule"
+            assert by_id["action:action-1"]["name"] == "Renamed Action"
     finally:
         app.dependency_overrides.clear()
 
@@ -735,6 +827,7 @@ def test_agent_tool_selection_persistence(ctx):
                 "allowlists": {},
                 "selected_tools": ["query:o-tools", "logic:rule-1"],
                 "tool_catalog_limit": None,
+                "entity_search_depth": None,
             }]
             # selecting an unknown tool is rejected
             r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
@@ -778,6 +871,109 @@ def test_agent_tool_selection_persistence(ctx):
             active = next(v for v in listed if v["version_no"] == 2)
             assert sorted(active["ontology_bindings"][0]["selected_tools"]) == \
                 ["action:action-1", "logic:rule-1", "query:o-tools"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_entity_search_depth_persists_and_is_range_validated(ctx):
+    """entity_search_depth follows the same shape as tool_catalog_limit: it
+    round-trips through the immutable version tree, and out-of-range values
+    (outside 1..50) are rejected fail-closed before any row is written."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    _seed_published_tool_ontology(session, editor_id)
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            r = c.post("/api/v1/agents", json={
+                "name": "Depth Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                    "allowlists": {},
+                    "selected_tools": ["query:o-tools"],
+                    "entity_search_depth": 25,
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-depth-create-0000001"})
+            assert r.status_code == 201, r.text
+            agent_id = r.json()["data"]["agent_id"]
+            v1 = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert v1["ontology_bindings"][0]["entity_search_depth"] == 25
+
+            # out of range (>50) is rejected fail-closed
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 1, "name": "Depth Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+                "ontology_bindings": [{
+                    "ontology_id": "o-tools",
+                    "capabilities": ["read_schema", "read_instances", "traverse_relations"],
+                    "selected_tools": ["query:o-tools"],
+                    "entity_search_depth": 51,
+                }],
+            }, headers={**editor_headers, "Idempotency-Key": "ag-depth-save-0000001"})
+            assert r.status_code == 422
+            assert "AGENTS_BINDING_ENTITY_SEARCH_DEPTH_INVALID" in r.text
+            # the rejected save never bumped the version
+            v1_still = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert v1_still["config_hash"] == v1["config_hash"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_max_tool_rounds_persists_and_is_range_validated(ctx):
+    """max_tool_rounds round-trips through the immutable version tree
+    (default 5 when omitted) and out-of-range values (outside 1..20) are
+    rejected fail-closed before any row is written."""
+    from fastapi.testclient import TestClient
+
+    session, editor_id, viewer_id, model_version, app_schema = ctx
+    editor_headers = {"Authorization": f"Bearer {create_access_token({'sub': editor_id, 'role': 'editor'})}"}
+
+    client = next(_client(session))
+    try:
+        with TestClient(client) as c:
+            # omitted on create -> defaults to 5
+            r = c.post("/api/v1/agents", json={
+                "name": "Rounds Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {},
+                "application_state_schema_version_id": app_schema,
+            }, headers={**editor_headers, "Idempotency-Key": "ag-rounds-create-0000001"})
+            assert r.status_code == 201, r.text
+            agent_id = r.json()["data"]["agent_id"]
+            v1 = c.get(f"/api/v1/agents/{agent_id}/versions/1", headers=editor_headers).json()["data"]
+            assert v1["max_tool_rounds"] == 5
+
+            # an explicit, in-range value on save is persisted onto the new version
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 1, "name": "Rounds Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {}, "max_tool_rounds": 12,
+                "application_state_schema_version_id": app_schema,
+            }, headers={**editor_headers, "Idempotency-Key": "ag-rounds-save-0000001"})
+            assert r.status_code == 201, r.text
+            v2 = c.get(f"/api/v1/agents/{agent_id}/versions/2", headers=editor_headers).json()["data"]
+            assert v2["max_tool_rounds"] == 12
+
+            # out of range (>20) is rejected fail-closed, never bumping the version
+            r = c.post(f"/api/v1/agents/{agent_id}/versions", json={
+                "base_version_no": 2, "name": "Rounds Agent", "description": "d",
+                "default_model_config_version_id": model_version, "default_model_name": "gpt-4o",
+                "system_prompt": "p", "memory_settings": {}, "max_tool_rounds": 21,
+                "application_state_schema_version_id": app_schema,
+            }, headers={**editor_headers, "Idempotency-Key": "ag-rounds-save-0000002"})
+            assert r.status_code == 422
+            assert "MAX_TOOL_ROUNDS_INVALID" in r.text
+            v2_still = c.get(f"/api/v1/agents/{agent_id}/versions/2", headers=editor_headers).json()["data"]
+            assert v2_still["config_hash"] == v2["config_hash"]
     finally:
         app.dependency_overrides.clear()
 

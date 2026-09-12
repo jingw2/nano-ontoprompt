@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ReactFlow, MiniMap, Controls, Background,
@@ -25,18 +26,18 @@ const nodeTypes: NodeTypes = {
   transform: TransformNode, output: OutputNode,
 }
 
-const NODE_DEFAULTS: Record<string, { label: string; color: string; config: Record<string, unknown> }> = {
-  connector: { label: '连接器', color: '#3B82F6', config: { source_type: 'file', config_values: {} } },
-  storage: { label: '存储器', color: '#10B981', config: { storage_mode: 'auto' } },
-  transform: { label: '转换器', color: '#F59E0B', config: { path: 'auto', steps: [] } },
-  output: { label: '输出', color: '#8B5CF6', config: { dataset_type: 'curated_dataset', primary_key: [] } },
+const NODE_DEFAULTS: Record<string, { labelKey: string; color: string; config: Record<string, unknown> }> = {
+  connector: { labelKey: 'pipelineBuilder.node_connector', color: '#3B82F6', config: { source_type: 'file', config_values: {} } },
+  storage: { labelKey: 'pipelineBuilder.node_storage', color: '#10B981', config: { storage_mode: 'auto' } },
+  transform: { labelKey: 'pipelineBuilder.node_transform', color: '#F59E0B', config: { path: 'auto', steps: [] } },
+  output: { labelKey: 'pipelineBuilder.node_output', color: '#8B5CF6', config: { dataset_type: 'curated_dataset', primary_key: [] } },
 }
 
 const TOOLS = [
-  { type: 'connector', label: '连接器', desc: '数据源连接' },
-  { type: 'storage', label: '存储器', desc: '原始数据存储' },
-  { type: 'transform', label: '转换器', desc: '数据转换' },
-  { type: 'output', label: '输出', desc: '输出 Curated Dataset' },
+  { type: 'connector', labelKey: 'pipelineBuilder.node_connector', descKey: 'pipelineBuilder.desc_connector' },
+  { type: 'storage', labelKey: 'pipelineBuilder.node_storage', descKey: 'pipelineBuilder.desc_storage' },
+  { type: 'transform', labelKey: 'pipelineBuilder.node_transform', descKey: 'pipelineBuilder.desc_transform' },
+  { type: 'output', labelKey: 'pipelineBuilder.node_output', descKey: 'pipelineBuilder.desc_output' },
 ]
 
 const TYPE_ORDER: Record<string, number> = { connector: 0, storage: 1, transform: 2, output: 3 }
@@ -82,6 +83,7 @@ interface SelectedNodeData {
 }
 
 export default function PipelineBuilderPage() {
+  const { t } = useTranslation()
   const { pipelineId } = useParams<{ pipelineId: string }>()
   const navigate = useNavigate()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
@@ -182,8 +184,8 @@ export default function PipelineBuilderPage() {
     finally { setRunning(false) }
   }
 
-  const handleValidate = async () => { if (!pipelineId) return; try { setValidation(await pipelinesApi.validate(pipelineId)) } catch { setValidation({ valid: false, errors: [], warnings: [{ node_id: '', severity: 'error', message: '校验失败' }] }) } }
-  const handlePublish = async () => { if (!pipelineId) return; try { const r = await pipelinesApi.publish(pipelineId); setPipeline(await pipelinesApi.get(pipelineId)); alert(`已发布 v${r.version}`) } catch (e: unknown) { const err = e as { detail?: unknown }; alert(err?.detail || '发布失败') } }
+  const handleValidate = async () => { if (!pipelineId) return; try { setValidation(await pipelinesApi.validate(pipelineId)) } catch { setValidation({ valid: false, errors: [], warnings: [{ node_id: '', severity: 'error', message: t('pipelineBuilder.validate_failed') }] }) } }
+  const handlePublish = async () => { if (!pipelineId) return; try { const r = await pipelinesApi.publish(pipelineId); setPipeline(await pipelinesApi.get(pipelineId)); alert(t('pipelineBuilder.published_alert', { version: r.version })) } catch (e: unknown) { const err = e as { detail?: unknown }; alert(err?.detail || t('pipelineBuilder.publish_failed')) } }
 
   const onDragStart = useCallback((event: React.DragEvent, nodeType: string) => { event.dataTransfer.setData('application/reactflow', nodeType); event.dataTransfer.effectAllowed = 'move' }, [])
   const onDrop = useCallback((event: React.DragEvent) => {
@@ -191,8 +193,8 @@ export default function PipelineBuilderPage() {
     if (!type || !NODE_DEFAULTS[type]) return
     const pos = reactFlowInstanceRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) || { x: event.clientX - 150, y: event.clientY - 40 }
     const d = NODE_DEFAULTS[type]
-    setNodes(nds => nds.concat({ id: `${type}_${Date.now()}`, type, position: pos, data: { label: `${d.label}_${nodes.length + 1}`, config: { ...d.config } } }))
-  }, [nodes, setNodes])
+    setNodes(nds => nds.concat({ id: `${type}_${Date.now()}`, type, position: pos, data: { label: `${t(d.labelKey)}_${nodes.length + 1}`, config: { ...d.config } } }))
+  }, [nodes, setNodes, t])
   const onDragOver = useCallback((event: React.DragEvent) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }, [])
   const onConnect = useCallback((conn: Connection) => { setEdges(eds => addEdge({ ...conn, id: `edge_${Date.now()}`, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } }, eds)) }, [setEdges])
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => { setSelectedNode({ id: node.id, type: node.type || '', label: (node.data as { label?: string }).label || '', config: ((node.data as { config?: Record<string, unknown> }).config || {}) as Record<string, unknown> }) }, [])
@@ -202,8 +204,8 @@ export default function PipelineBuilderPage() {
     setSelectedNode(prev => prev && prev.id === nodeId ? { ...prev, ...data } : prev)
   }, [setNodes])
 
-  if (loading) return <div className="text-gray-400 text-sm p-8 text-center">加载 Pipeline...</div>
-  if (!pipeline) return <div className="text-gray-400 text-sm p-8 text-center">Pipeline 未找到</div>
+  if (loading) return <div className="text-gray-400 text-sm p-8 text-center">{t('pipelineBuilder.loading')}</div>
+  if (!pipeline) return <div className="text-gray-400 text-sm p-8 text-center">{t('pipelineBuilder.not_found')}</div>
 
   return (
     <ReactFlowProvider>
@@ -214,28 +216,28 @@ export default function PipelineBuilderPage() {
           <span className={`text-xs px-1.5 py-0.5 rounded border ${pipeline.status === 'published' ? 'bg-green-50 text-green-600 border-green-200' : pipeline.status === 'failed' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>{pipeline.status}</span>
           <span className="text-xs text-gray-400">v{pipeline.version || 1}</span>
           <span className="text-xs text-gray-400 font-mono">{pipeline.branch || 'main'}</span>
-          {saveStatus === 'saving' && <span className="text-xs text-amber-500 ml-2">保存中...</span>}
-          {saveStatus === 'saved' && <span className="text-xs text-green-500 ml-2">已保存</span>}
-          {saveStatus === 'unsaved' && <span className="text-xs text-gray-400 ml-2">未保存</span>}
+          {saveStatus === 'saving' && <span className="text-xs text-amber-500 ml-2">{t('pipelineBuilder.status_saving')}</span>}
+          {saveStatus === 'saved' && <span className="text-xs text-green-500 ml-2">{t('pipelineBuilder.status_saved')}</span>}
+          {saveStatus === 'unsaved' && <span className="text-xs text-gray-400 ml-2">{t('pipelineBuilder.status_unsaved')}</span>}
           <div className="flex-1" />
-          <button onClick={saveDefinition} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50"><Save size={13} />保存</button>
-          <button onClick={handleValidate} className="flex items-center gap-1 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50"><CheckCircle size={13} />校验</button>
-          <button onClick={handleRun} disabled={running} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gray-800 text-white rounded-lg hover:bg-black disabled:opacity-50">{running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}运行</button>
-          <button onClick={handlePublish} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-black text-white rounded-lg hover:bg-gray-800">发布</button>
+          <button onClick={saveDefinition} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50"><Save size={13} />{t('pipelineBuilder.save')}</button>
+          <button onClick={handleValidate} className="flex items-center gap-1 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50"><CheckCircle size={13} />{t('pipelineBuilder.validate')}</button>
+          <button onClick={handleRun} disabled={running} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gray-800 text-white rounded-lg hover:bg-black disabled:opacity-50">{running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{t('pipelineBuilder.run')}</button>
+          <button onClick={handlePublish} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-black text-white rounded-lg hover:bg-gray-800">{t('pipelineBuilder.publish')}</button>
         </div>
-        {validation && !validation.valid && (<div className="bg-red-50 border-b border-red-200 px-4 py-2 shrink-0"><AlertTriangle size={12} className="inline mr-1 text-red-600" /><span className="text-xs text-red-600">校验未通过: {validation.errors.map(e => e.message).join('; ')}</span></div>)}
+        {validation && !validation.valid && (<div className="bg-red-50 border-b border-red-200 px-4 py-2 shrink-0"><AlertTriangle size={12} className="inline mr-1 text-red-600" /><span className="text-xs text-red-600">{t('pipelineBuilder.validate_failed_prefix')}{validation.errors.map(e => e.message).join('; ')}</span></div>)}
         <div className="flex flex-1 overflow-hidden">
           <div className={`${toolbarCollapsed ? "w-10" : "w-48"} bg-gray-50 border-r p-1 space-y-1 shrink-0 transition-all duration-200 relative`}>
             <button onClick={() => setToolbarCollapsed(!toolbarCollapsed)}
               className="absolute -right-2 top-2 w-4 h-4 bg-white border rounded-full flex items-center justify-center text-gray-400 hover:text-black z-10">
               {toolbarCollapsed ? <ChevronRight size={10} /> : <ChevronLeft size={10} />}
             </button>
-            {!toolbarCollapsed && <p className="text-xs font-medium text-gray-500 px-2 py-1">节点工具</p>}
-            {TOOLS.map(t => (
-              <div key={t.type} draggable onDragStart={e => onDragStart(e, t.type)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs cursor-grab active:cursor-grabbing hover:bg-white border border-transparent hover:border-gray-200 ${toolbarCollapsed ? "justify-center px-1" : ""}`} title={t.label}>
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: NODE_DEFAULTS[t.type]?.color }} />
-                {!toolbarCollapsed && <div><p className="font-medium">{t.label}</p><p className="text-gray-400">{t.desc}</p></div>}
+            {!toolbarCollapsed && <p className="text-xs font-medium text-gray-500 px-2 py-1">{t('pipelineBuilder.node_tools')}</p>}
+            {TOOLS.map(tool => (
+              <div key={tool.type} draggable onDragStart={e => onDragStart(e, tool.type)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs cursor-grab active:cursor-grabbing hover:bg-white border border-transparent hover:border-gray-200 ${toolbarCollapsed ? "justify-center px-1" : ""}`} title={t(tool.labelKey)}>
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: NODE_DEFAULTS[tool.type]?.color }} />
+                {!toolbarCollapsed && <div><p className="font-medium">{t(tool.labelKey)}</p><p className="text-gray-400">{t(tool.descKey)}</p></div>}
               </div>
             ))}
           </div>
@@ -246,7 +248,7 @@ export default function PipelineBuilderPage() {
           </div>
           <div ref={inspectorRef} className="relative bg-white border-l overflow-y-auto shrink-0" style={{ width: inspectorWidth }}>
             <div onMouseDown={handlePanelResizeStart} className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400 active:bg-blue-500 transition-colors z-10 group"><div className="absolute left-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 bg-gray-300 rounded-full group-hover:bg-white" /></div>
-            {selectedNode ? (<NodeInspector nodeData={selectedNode} onUpdate={(data) => updateNodeData(selectedNode.id, data)} onClose={() => setSelectedNode(null)} pipelineId={pipelineId} />) : (<div className="p-4 text-center text-gray-400 text-xs mt-8">点击节点查看配置</div>)}
+            {selectedNode ? (<NodeInspector nodeData={selectedNode} onUpdate={(data) => updateNodeData(selectedNode.id, data)} onClose={() => setSelectedNode(null)} pipelineId={pipelineId} />) : (<div className="p-4 text-center text-gray-400 text-xs mt-8">{t('pipelineBuilder.click_node_hint')}</div>)}
           </div>
         </div>
       </div>
@@ -264,6 +266,7 @@ type InspectorProps = {
 type InspectorComponent = (props: InspectorProps) => React.ReactElement | null
 
 function NodeInspector({ nodeData, onUpdate, onClose, pipelineId }: { nodeData: SelectedNodeData; onUpdate: (data: Record<string, unknown>) => void; onClose: () => void; pipelineId?: string }) {
+  const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
   const [localConfig, setLocalConfig] = useState<Record<string, unknown>>(nodeData.config || {})
   const [localLabel, setLocalLabel] = useState(nodeData.label)
@@ -299,7 +302,7 @@ function NodeInspector({ nodeData, onUpdate, onClose, pipelineId }: { nodeData: 
       </div>
       <div className="space-y-3">
         <div>
-          <label className="text-xs text-gray-500 mb-1 block">节点名称</label>
+          <label className="text-xs text-gray-500 mb-1 block">{t('pipelineBuilder.node_name')}</label>
           {editing ? (
             <input value={localLabel} onChange={e => setLocalLabel(e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm" />
           ) : (
@@ -310,10 +313,10 @@ function NodeInspector({ nodeData, onUpdate, onClose, pipelineId }: { nodeData: 
       </div>
       <div className="flex gap-2 mt-4">
         {editing ? (<>
-          <button onClick={handleCancel} className="flex-1 px-3 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">取消</button>
-          <button onClick={handleConfirm} className="flex-1 px-3 py-2 bg-black text-white rounded-lg text-sm hover:bg-gray-800">确认</button>
+          <button onClick={handleCancel} className="flex-1 px-3 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">{t('common.cancel')}</button>
+          <button onClick={handleConfirm} className="flex-1 px-3 py-2 bg-black text-white rounded-lg text-sm hover:bg-gray-800">{t('common.confirm')}</button>
         </>) : (
-          <button onClick={() => setEditing(true)} className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border rounded-lg text-sm text-gray-700 hover:bg-gray-50"><Pencil size={13} />编辑</button>
+          <button onClick={() => setEditing(true)} className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border rounded-lg text-sm text-gray-700 hover:bg-gray-50"><Pencil size={13} />{t('common.edit')}</button>
         )}
       </div>
     </div>

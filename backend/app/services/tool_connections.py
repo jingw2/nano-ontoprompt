@@ -10,7 +10,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-PROVIDER_KINDS = ("search", "playwright", "skill", "external_mcp", "ontology_mcp")
+PROVIDER_KINDS = ("search", "playwright", "skill", "external_mcp", "ontology_mcp", "browser_use")
 
 
 class ToolConnectionError(Exception):
@@ -48,9 +48,26 @@ def create_connection(db: Session, *, actor_id: str, provider_id: str) -> dict:
     return {"id": connection_id, "provider_id": provider_id, "status": "active"}
 
 
+def rename_connection(db: Session, *, actor_id: str, connection_id: str, name: str) -> dict:
+    name = name.strip()
+    if not name:
+        raise ToolConnectionError("CONNECTION_NAME_REQUIRED")
+    updated = db.execute(text(
+        "UPDATE tool_connections SET name = :name, updated_at = now() WHERE id = :id RETURNING id"
+    ), {"name": name, "id": connection_id}).scalar_one_or_none()
+    if updated is None:
+        raise ToolConnectionError("CONNECTION_NOT_FOUND")
+    db.commit()
+    return {"id": connection_id, "name": name}
+
+
 def create_connection_version(db: Session, *, actor_id: str, connection_id: str, endpoint: str | None = None,
                               audience: str | None = None, scopes: list | None = None,
-                              credential_reference: str | None = None, allowlists: dict | None = None) -> dict:
+                              credential_reference: str | None = None, allowlists: dict | None = None,
+                              search_provider: str | None = None) -> dict:
+    from app.services.tools.search import SEARCH_PROVIDERS
+    if search_provider is not None and search_provider not in SEARCH_PROVIDERS:
+        raise ToolConnectionError("SEARCH_PROVIDER_INVALID")
     exists = db.execute(text(
         "SELECT 1 FROM tool_connections WHERE id = :id"
     ), {"id": connection_id}).scalar_one_or_none()
@@ -63,14 +80,84 @@ def create_connection_version(db: Session, *, actor_id: str, connection_id: str,
     db.execute(text(
         "INSERT INTO tool_connection_versions "
         "(id, connection_id, version_no, endpoint, audience, scopes, credential_reference, "
-        "allowlists, approval_status, health_status, created_by, created_at) "
+        "allowlists, search_provider, approval_status, health_status, created_by, created_at) "
         "VALUES (:id, :conn, :vno, :endpoint, :audience, CAST(:scopes AS json), :cred, "
-        "CAST(:allow AS json), 'pending', 'unknown', :actor, now())"
+        "CAST(:allow AS json), :sp, 'pending', 'unknown', :actor, now())"
     ), {"id": version_id, "conn": connection_id, "vno": next_version, "endpoint": endpoint,
         "audience": audience, "scopes": _json(scopes or []), "cred": credential_reference,
-        "allow": _json(allowlists or {}), "actor": actor_id})
+        "allow": _json(allowlists or {}), "sp": search_provider, "actor": actor_id})
     db.commit()
     return {"id": version_id, "connection_id": connection_id, "version_no": next_version, "approval_status": "pending"}
+
+
+def update_connection_version(db: Session, *, actor_id: str, version_id: str, endpoint: str | None = None,
+                              audience: str | None = None, scopes: list | None = None,
+                              credential_reference: str | None = None, allowlists: dict | None = None,
+                              search_provider: str | None = None) -> dict:
+    """Edit a version's own fields in place — only while it is still
+    `pending`. Once approved, a version's content is the exact thing an
+    admin reviewed and signed off on (the approval dialog shows it
+    verbatim); editing it after that would silently invalidate that
+    approval, so an approved/rejected version must be superseded by a new
+    one via `create_connection_version` instead. Every argument is
+    optional and only touches the column when the caller actually passed a
+    value — `credential_reference` in particular is never returned by any
+    read endpoint, so the edit form always submits it as "leave blank to
+    keep the existing key", not a value it echoed back."""
+    from app.services.tools.search import SEARCH_PROVIDERS
+    if search_provider is not None and search_provider not in SEARCH_PROVIDERS:
+        raise ToolConnectionError("SEARCH_PROVIDER_INVALID")
+    row = db.execute(text(
+        "SELECT approval_status FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ToolConnectionError("VERSION_NOT_FOUND")
+    if row["approval_status"] != "pending":
+        raise ToolConnectionError("VERSION_NOT_EDITABLE")
+    fields: dict = {}
+    if endpoint is not None:
+        fields["endpoint"] = endpoint
+    if audience is not None:
+        fields["audience"] = audience
+    if scopes is not None:
+        fields["scopes"] = _json(scopes)
+    if credential_reference is not None:
+        fields["credential_reference"] = credential_reference
+    if allowlists is not None:
+        fields["allowlists"] = _json(allowlists)
+    if search_provider is not None:
+        fields["search_provider"] = search_provider
+    if not fields:
+        return {"id": version_id, "approval_status": "pending"}
+    casts = {"scopes": "json", "allowlists": "json"}
+    set_clause = ", ".join(
+        f"{col} = CAST(:{col} AS {casts[col]})" if col in casts else f"{col} = :{col}"
+        for col in fields
+    )
+    db.execute(text(
+        f"UPDATE tool_connection_versions SET {set_clause} WHERE id = :id"
+    ), {**fields, "id": version_id})
+    db.commit()
+    return {"id": version_id, "approval_status": "pending"}
+
+
+def delete_connection_version(db: Session, *, actor_id: str, version_id: str) -> dict:
+    """Delete a version outright — only while it is still `pending`. An
+    approved version is the exact thing an admin reviewed (and may be the
+    connection's active_version_id); once approved it must be superseded by
+    a new version, never removed, so the audit trail stays intact."""
+    row = db.execute(text(
+        "SELECT approval_status FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version_id}).mappings().one_or_none()
+    if row is None:
+        raise ToolConnectionError("VERSION_NOT_FOUND")
+    if row["approval_status"] != "pending":
+        raise ToolConnectionError("VERSION_NOT_DELETABLE")
+    db.execute(text(
+        "DELETE FROM tool_connection_versions WHERE id = :id"
+    ), {"id": version_id})
+    db.commit()
+    return {"id": version_id, "deleted": True}
 
 
 def seed_default_tool_connections(db: Session, *, actor_id: str) -> None:
@@ -141,7 +228,8 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
     exception. The verdict is persisted to the version's `health_status` so
     list views reflect probe results."""
     row = db.execute(text(
-        "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, tp.kind "
+        "SELECT tcv.approval_status, tcv.endpoint, tcv.credential_reference, tcv.allowlists, "
+        "tcv.search_provider, tp.kind "
         "FROM tool_connection_versions tcv "
         "JOIN tool_connections tc ON tc.id = tcv.connection_id "
         "JOIN tool_providers tp ON tp.id = tc.provider_id "
@@ -155,10 +243,18 @@ def test_connection_version(db: Session, *, version_id: str) -> dict:
         from app.services.tools.search import web_search
         try:
             web_search(endpoint=row["endpoint"] or "", api_key=row["credential_reference"],
-                       query="health", result_limit=1)
+                       query="health", result_limit=1, provider=row["search_provider"])
             result = {"status": "healthy", "detail": "search:ok"}
         except Exception as exc:  # probe contract: never raise — non-dict JSON,
             # broken endpoints and network failures all surface as unhealthy
+            result = {"status": "unhealthy", "detail": str(exc)}
+    elif row["kind"] == "browser_use":
+        from app.services.tools.browser_use import run_browser_task
+        try:
+            run_browser_task(endpoint=row["endpoint"] or "", api_key=row["credential_reference"],
+                             task="health check: respond with any short text", timeout_seconds=15)
+            result = {"status": "healthy", "detail": "browser_use:ok"}
+        except Exception as exc:  # probe contract: never raise
             result = {"status": "unhealthy", "detail": str(exc)}
     elif row["kind"] == "playwright":
         allowlists = row["allowlists"] or {}
@@ -326,22 +422,30 @@ def list_providers(db: Session) -> list[dict]:
 
 
 def list_connections(db: Session, provider_id: str | None = None) -> list[dict]:
+    """Every connection also carries its own optional `name` (set via
+    `rename_connection`) and its active version's `endpoint`/`search_provider`
+    (NULL if there is none yet) — the admin UI prefers `name` when set, and
+    otherwise falls back to a label derived from the active version so a
+    connection is never shown as a bare opaque id."""
+    base_query = (
+        "SELECT tc.id, tc.provider_id, tc.status, tc.active_version_id, tc.name, "
+        "av.endpoint AS active_version_endpoint, av.search_provider AS active_version_search_provider "
+        "FROM tool_connections tc "
+        "LEFT JOIN tool_connection_versions av ON av.id = tc.active_version_id "
+    )
     if provider_id is not None:
         rows = db.execute(text(
-            "SELECT id, provider_id, status, active_version_id FROM tool_connections "
-            "WHERE provider_id = :p ORDER BY id"
+            base_query + "WHERE tc.provider_id = :p ORDER BY tc.id"
         ), {"p": provider_id}).mappings().all()
     else:
-        rows = db.execute(text(
-            "SELECT id, provider_id, status, active_version_id FROM tool_connections ORDER BY id"
-        )).mappings().all()
+        rows = db.execute(text(base_query + "ORDER BY tc.id")).mappings().all()
     return [dict(r) for r in rows]
 
 
 def list_connection_versions(db: Session, *, connection_id: str) -> list[dict]:
     rows = db.execute(text(
         "SELECT id, connection_id, version_no, endpoint, audience, scopes, "
-        "allowlists, approval_status, health_status, created_by, created_at "
+        "allowlists, search_provider, approval_status, health_status, created_by, created_at "
         "FROM tool_connection_versions WHERE connection_id = :id ORDER BY version_no DESC"
     ), {"id": connection_id}).mappings().all()
     return [dict(r) for r in rows]

@@ -247,6 +247,47 @@ def test_gateway_traverse_relations(schema):
     s.close()
 
 
+def test_gateway_traverse_relations_walks_multiple_hops_bounded_by_depth(schema):
+    """i-1 -ir-1-> i-2 -ir-2-> i-3: depth=1 sees only the first edge; depth=2
+    walks the second hop too; a third instance two hops further out (i-4) is
+    never reached at depth=2."""
+    release_id = _seed(schema)
+    s = _session(schema)
+    s.execute(text(
+        "INSERT INTO entity_instances (id, entity_id, ontology_id, row_identity, row_data, created_at) "
+        "VALUES ('i-3', 'e-1', 'o-1', 'c', '{\"name\":\"Gamma\"}'::json, now()),"
+        "('i-4', 'e-2', 'o-1', 'd', '{\"name\":\"Delta\"}'::json, now())"
+    ))
+    s.execute(text(
+        "INSERT INTO entity_instance_relations (id, ontology_id, source_instance_id, target_instance_id, "
+        "relation_definition_id, properties, revision, created_at, updated_at) "
+        "VALUES ('ir-2', 'o-1', 'i-2', 'i-3', 'r-1', '{}'::json, 1, now(), now()), "
+        "('ir-3', 'o-1', 'i-3', 'i-4', 'r-1', '{}'::json, 1, now(), now())"
+    ))
+    s.commit()
+    from app.services.tool_gateway import ToolGateway, GatewayRequest
+    gw = ToolGateway(s)
+
+    one_hop = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.traverse_relations", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id,
+                                   "instance_id": "i-1", "depth": 1}),
+        ontology_id="o-1",
+    )
+    assert {e["edge_id"] for e in one_hop.payload["edges"]} == {"ir-1"}
+
+    two_hop = gw.execute(
+        GatewayRequest(agent_id="a-1", user_id="u-1",
+                       descriptor_id="ontology.traverse_relations", operation="read",
+                       parameters={"ontology_id": "o-1", "release_id": release_id,
+                                   "instance_id": "i-1", "depth": 2}),
+        ontology_id="o-1",
+    )
+    assert {e["edge_id"] for e in two_hop.payload["edges"]} == {"ir-1", "ir-2"}
+    s.close()
+
+
 def test_gateway_unknown_descriptor_fails_closed(schema):
     _seed(schema)
     s = _session(schema)

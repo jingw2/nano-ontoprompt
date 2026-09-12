@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { apiClientV2 } from '@/api/client'
 
 type DefinitionKind = 'logic' | 'actions'
@@ -20,11 +21,8 @@ interface Props {
   kind: DefinitionKind
 }
 
-function label(kind: DefinitionKind) {
-  return kind === 'logic' ? '运行时表达式绑定' : '运行时副作用绑定'
-}
-
 export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
+  const { t } = useTranslation()
   const [items, setItems] = useState<Definition[]>([])
   const [selected, setSelected] = useState<Definition | null>(null)
   const [definition, setDefinition] = useState('{}')
@@ -37,7 +35,7 @@ export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
       const rows = await apiClientV2.get<Definition[]>(`/ontologies/${ontologyId}/${kind}`)
       setItems(Array.isArray(rows) ? rows : [])
     } catch {
-      setError('运行时定义加载失败')
+      setError(t('v2def.load_failed'))
     }
   }
 
@@ -56,11 +54,11 @@ export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
     try {
       parsed = JSON.parse(definition) as Record<string, unknown> | unknown[]
     } catch {
-      setError('定义必须是有效 JSON')
+      setError(t('v2def.invalid_json'))
       return
     }
     if ((kind === 'logic' && (Array.isArray(parsed) || parsed === null)) || (kind === 'actions' && !Array.isArray(parsed))) {
-      setError(kind === 'logic' ? '公式必须是 JSON 对象' : '函数 effects 必须是 JSON 数组')
+      setError(kind === 'logic' ? t('v2def.logic_must_be_object') : t('v2def.actions_must_be_array'))
       return
     }
     setSaving(true)
@@ -72,7 +70,7 @@ export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
       await apiClientV2.patch(`/ontologies/${ontologyId}/${kind}/${selected.id}`, body)
       await load()
     } catch {
-      setError('保存失败')
+      setError(t('v2def.save_failed'))
     } finally {
       setSaving(false)
     }
@@ -81,10 +79,10 @@ export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
   return (
     <section className="bg-white border rounded-lg p-4 space-y-3" data-testid={`v2-${kind}-editor`}>
       <div>
-        <h3 className="font-medium text-sm">{label(kind)}</h3>
-        <p className="text-xs text-gray-500 mt-1">修改后会标记为未发布；请在发布生命周期中发布新版本。</p>
+        <h3 className="font-medium text-sm">{kind === 'logic' ? t('v2def.label_logic') : t('v2def.label_actions')}</h3>
+        <p className="text-xs text-gray-500 mt-1">{t('v2def.unpublished_hint')}</p>
       </div>
-      {items.length === 0 ? <p className="text-sm text-gray-400">暂无运行时定义</p> : (
+      {items.length === 0 ? <p className="text-sm text-gray-400">{t('v2def.empty')}</p> : (
         <div className="flex flex-wrap gap-2">
           {items.map(item => <button key={item.id} type="button" onClick={() => select(item)}
             className="px-2 py-1 border rounded text-xs hover:bg-gray-50">{item.name}</button>)}
@@ -94,10 +92,10 @@ export default function V2DefinitionEditor({ ontologyId, kind }: Props) {
         <textarea data-testid={`v2-${kind}-definition`} value={definition} onChange={event => setDefinition(event.target.value)}
           rows={8} className="w-full border rounded p-2 font-mono text-xs" />
         {kind === 'actions' && <input data-testid="v2-actions-function-ref" value={functionRef}
-          onChange={event => setFunctionRef(event.target.value)} placeholder="函数引用（可选）"
+          onChange={event => setFunctionRef(event.target.value)} placeholder={t('v2def.ph_function_ref')}
           className="w-full border rounded px-2 py-1.5 text-sm" />}
         <button data-testid={`v2-${kind}-save`} type="button" disabled={saving} onClick={() => void save()}
-          className="px-3 py-1.5 bg-black text-white rounded text-xs disabled:opacity-50">保存运行时定义</button>
+          className="px-3 py-1.5 bg-black text-white rounded text-xs disabled:opacity-50">{t('v2def.save')}</button>
       </>}
       {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
     </section>

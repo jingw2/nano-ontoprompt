@@ -47,6 +47,51 @@ def _encrypt(plaintext: str) -> str:
     return Fernet(TEST_FERNET_KEY.encode()).encrypt(plaintext.encode()).decode()
 
 
+def _send_chat_response(handler, content: str, tool_calls: list, stream: bool) -> None:
+    """OpenAI-compatible response. The production caller (`llm_service.
+    chat_completion`) always sets `stream=true` now — a `text/event-stream`
+    chunk sequence ending in `data: [DONE]`, matching what `_consume_chat_
+    stream` parses. Plain-JSON stays available for any caller that still
+    asks for it (`stream` absent/false)."""
+    if not stream:
+        resp = {
+            "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+        return
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.end_headers()
+
+    def emit(delta: dict, finish_reason=None):
+        payload = {
+            "id": "mock-chat-1", "object": "chat.completion.chunk", "created": 0, "model": "mock-chat",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        handler.wfile.write(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+
+    if tool_calls:
+        for i, call in enumerate(tool_calls):
+            emit({"tool_calls": [{"index": i, "id": call["id"], "type": "function",
+                                  "function": {"name": call["function"]["name"], "arguments": ""}}]})
+            emit({"tool_calls": [{"index": i, "function": {"arguments": call["function"]["arguments"]}}]})
+        emit({}, finish_reason="tool_calls")
+    else:
+        if content:
+            emit({"content": content})
+        emit({}, finish_reason="stop")
+    handler.wfile.write(b"data: [DONE]\n\n")
+
+
 class MockChatHandler(BaseHTTPRequestHandler):
     """OpenAI-compatible mock chat server: answers differ per question and,
     for a question containing the marker word (default 查询), first emits a
@@ -75,20 +120,7 @@ class MockChatHandler(BaseHTTPRequestHandler):
         else:
             content = f"真实回答：{last_user}"
             tool_calls = []
-        resp = {
-            "id": "mock-chat-1", "object": "chat.completion", "created": 0,
-            "model": "mock-chat",
-            "choices": [{"index": 0, "finish_reason": "stop",
-                         "message": {"role": "assistant", "content": content,
-                                     "tool_calls": tool_calls}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        _send_chat_response(self, content, tool_calls, bool(body.get("stream")))
 
     def log_message(self, *args):
         pass
@@ -817,18 +849,7 @@ class ClarifyThenAnswerHandler(BaseHTTPRequestHandler):
                 "function": {"name": "request_clarification",
                              "arguments": json.dumps({"question": "你说的是哪个订单？"}, ensure_ascii=False)},
             }]
-        resp = {
-            "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
-            "choices": [{"index": 0, "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        _send_chat_response(self, content, tool_calls, bool(body.get("stream")))
 
     def log_message(self, *args):
         pass
@@ -917,18 +938,7 @@ class ProposeActionHandler(BaseHTTPRequestHandler):
         else:
             last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
             content, tool_calls = f"处理结果：{last_user}", []
-        resp = {
-            "id": "mock-chat-1", "object": "chat.completion", "created": 0, "model": "mock-chat",
-            "choices": [{"index": 0, "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        _send_chat_response(self, content, tool_calls, bool(body.get("stream")))
 
     def log_message(self, *args):
         pass

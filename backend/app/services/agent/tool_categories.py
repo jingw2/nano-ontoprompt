@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
+
 # canonical category order (UI toggle order and the runtime vocabulary)
 TOOL_CATEGORIES = ("mcp", "query", "write", "logic", "action")
 
@@ -46,10 +49,55 @@ def tool_category(descriptor: dict) -> str:
     return "action"
 
 
-def enrich_tool_descriptors(tools: list[dict]) -> list[dict]:
-    """Return descriptors with the derived `category` field.  The release
-    manifest bytes are never touched — the category is response-only."""
-    return [{**d, "category": tool_category(d)} for d in tools]
+def _live_names(db: Session, tools: list[dict]) -> dict[str, str]:
+    """Current Logic-rule/Action names keyed by source_id.
+
+    A published release's `tool_descriptors` are frozen at publish time — a
+    release compiled before `name` existed on that collection (or before a
+    rule/action was renamed since) has a stale or absent name baked into its
+    immutable manifest bytes. Looking the live name up by `source_id` at
+    serve time (never by rewriting the manifest) means the Agent
+    tool-binding UI always shows the ontology's current business-rule/action
+    name, including for releases published before this existed."""
+    logic_ids = [d["source_id"] for d in tools if d.get("source_kind") == "logic" and d.get("source_id")]
+    action_ids = [d["source_id"] for d in tools if d.get("source_kind") == "action" and d.get("source_id")]
+    names: dict[str, str] = {}
+    if logic_ids:
+        rows = db.execute(text(
+            "SELECT id, name FROM v2_ontology_logic_rules WHERE id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)), {"ids": logic_ids}).all()
+        names.update({row[0]: row[1] for row in rows})
+    if action_ids:
+        rows = db.execute(text(
+            "SELECT id, name FROM v2_ontology_action_types WHERE id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)), {"ids": action_ids}).all()
+        names.update({row[0]: row[1] for row in rows})
+    return names
+
+
+def enrich_tool_descriptors(tools: list[dict], db: Session | None = None) -> list[dict]:
+    """Return descriptors with the derived `category` field and, when `db` is
+    given, the Logic rule/Action's CURRENT name (overriding whatever name is
+    baked into the frozen manifest, if any — see `_live_names`). The release
+    manifest bytes are never touched — both fields are response-only.
+    `db=None` keeps category-only enrichment for callers that don't have a
+    session handy (there are none in this codebase today, but the parameter
+    is optional rather than widening every caller's signature for a lookup
+    they may not need)."""
+    live_names = _live_names(db, tools) if db is not None else {}
+    enriched = []
+    for d in tools:
+        entry = {**d, "category": tool_category(d)}
+        live_name = live_names.get(d.get("source_id"))
+        if live_name is not None:
+            entry["name"] = live_name
+        elif not entry.get("name") and d.get("source_kind") in ("logic", "action") and d.get("source_id"):
+            # the rule/action row is gone (deleted since this release was
+            # published) and the frozen manifest predates `name` — fall back
+            # to a readable id-based label instead of leaving it unset
+            entry["name"] = f"{d['source_kind']}:{str(d['source_id'])[:8]}"
+        enriched.append(entry)
+    return enriched
 
 
 def validate_categories(categories) -> bool:

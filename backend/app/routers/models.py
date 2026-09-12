@@ -63,17 +63,25 @@ def _serialize_config(config: ModelConfig, db: Session) -> dict:
         "SELECT count(*) FROM model_config_versions WHERE model_config_id = :id"
     ), {"id": config.id}).scalar_one()
     if (config.config_type or "llm") == "llm" and state and state["active_version_id"]:
-        version = db.execute(text(
-            "SELECT version_no, behavior_hash, conservative_input_limit, created_at "
-            "FROM model_config_versions WHERE id = :vid"
-        ), {"vid": state["active_version_id"]}).mappings().one_or_none()
+        version = db.query(ModelConfigVersion).filter(
+            ModelConfigVersion.id == state["active_version_id"]
+        ).first()
         if version:
             out["active_version"] = {
-                "version_no": version["version_no"],
-                "behavior_hash": version["behavior_hash"],
-                "conservative_input_limit": version["conservative_input_limit"],
-                "created_at": version["created_at"],
+                "version_no": version.version_no,
+                "behavior_hash": version.behavior_hash,
+                "conservative_input_limit": version.conservative_input_limit,
+                "created_at": version.created_at,
             }
+            # the active version's contract is the actual source of truth
+            # for which models this identity currently exposes — `config.models`
+            # is a denormalized legacy column that write paths must remember
+            # to keep in sync, so prefer the contract whenever it says something
+            if version.model_contract:
+                out["models"] = [
+                    entry.get("provider_model_revision") for entry in version.model_contract
+                    if entry.get("provider_model_revision")
+                ]
     else:
         # OCR/other responses expose their legacy shape: no version field.
         out.pop("active_version", None)
@@ -190,15 +198,38 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
     )
     if has_behavior:
         contract = legacy_contract_for(body.models) if models_changed else []
-        version = create_next_version(
-            db, model_id,
-            base_version=None,
-            provider=body.provider,
-            api_base=body.api_base if body.api_base is not None else active.api_base,
-            options=body.options if body.options is not None else active.options,
-            model_contract=contract,
-            credential_binding=body.api_key,
-        )
+        try:
+            version = create_next_version(
+                db, model_id,
+                base_version=None,
+                provider=body.provider,
+                api_base=body.api_base if body.api_base is not None else active.api_base,
+                options=body.options if body.options is not None else active.options,
+                model_contract=contract,
+                credential_binding=body.api_key,
+                # this endpoint only ever supplies a legacy_contract_for()
+                # fallback (ModelConfigUpdate has no verified-contract field)
+                # — same trust class create_model()'s bootstrap already
+                # accepts without validation
+                validate_contract=False,
+            )
+        except ModelRevisionConflict as exc:
+            raise HTTPException(409, detail=str(exc))
+        except ModelContractInvalid as exc:
+            raise HTTPException(422, detail=str(exc))
+        except ModelVersionUnavailable as exc:
+            raise HTTPException(409, detail=str(exc))
+        # `ModelConfigOut` (the list/detail view) reads these off the
+        # identity row directly, not off the new version — keep them in
+        # sync or an admin's edit never appears to have taken effect.
+        if body.provider is not None:
+            c.provider = body.provider
+        if body.api_base is not None:
+            c.api_base = body.api_base
+        if body.models is not None:
+            c.models = body.models
+        if body.options is not None:
+            c.options = body.options
         db.commit()
         c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
         return {"data": _serialize_config(c, db)}
@@ -222,7 +253,8 @@ def create_model_version(model_id: str, body: ModelVersionCreate, db: Session = 
     try:
         active = select_active_version(db, model_id)
         contract = [entry.model_dump() for entry in (body.model_contract or [])]
-        if not contract and body.models is not None:
+        is_legacy_fallback = not contract and body.models is not None
+        if is_legacy_fallback:
             contract = legacy_contract_for(body.models)
         version = create_next_version(
             db, model_id,
@@ -232,7 +264,19 @@ def create_model_version(model_id: str, body: ModelVersionCreate, db: Session = 
             options=body.options if body.options is not None else active.options,
             model_contract=contract,
             credential_binding=body.credential_binding,
+            # only an explicit body.model_contract asserts verified data —
+            # the legacy_contract_for() fallback is never validated (same
+            # trust class create_model()'s bootstrap already accepts)
+            validate_contract=not is_legacy_fallback,
         )
+        # `ModelConfigOut` (the list/detail view) reads these off the
+        # identity row directly, not off the new version — keep them in sync.
+        if body.api_base is not None:
+            c.api_base = body.api_base
+        if body.models is not None:
+            c.models = body.models
+        if body.options is not None:
+            c.options = body.options
         db.commit()
     except ModelRevisionConflict as exc:
         raise HTTPException(409, detail=str(exc))

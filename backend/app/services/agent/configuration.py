@@ -23,6 +23,10 @@ from app.services.agent.memory_settings import MemorySettingsError, validate_mem
 
 AGENT_CAPABILITIES = ("discover", "run", "view_config", "edit", "view_audit")
 
+# Must match frontend/src/pages/agents/detail/ToolConfigTab.tsx exactly.
+DEFAULT_MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS_RANGE = (1, 20)
+
 
 class AgentConfigError(Exception):
     """Rejected agent-configuration operation."""
@@ -42,10 +46,11 @@ def _canonical(value) -> str:
 
 def _normalize_binding(binding: dict) -> dict:
     """Canonical binding shape for hashing: always includes ontology_id,
-    capabilities, allowlists and selected_tools; `enabled_categories` and
-    `tool_catalog_limit` are included only when present (their absence keeps
-    legacy behavior unchanged).  Old-version hashes stay byte-identical and
-    new saves are deterministic regardless of client shape."""
+    capabilities, allowlists and selected_tools; `enabled_categories`,
+    `tool_catalog_limit` and `entity_search_depth` are included only when
+    present (their absence keeps legacy behavior unchanged).  Old-version
+    hashes stay byte-identical and new saves are deterministic regardless of
+    client shape."""
     normalized = {
         "ontology_id": binding["ontology_id"],
         "capabilities": list(binding.get("capabilities") or []),
@@ -56,6 +61,8 @@ def _normalize_binding(binding: dict) -> dict:
         normalized["enabled_categories"] = list(binding["enabled_categories"])
     if binding.get("tool_catalog_limit") is not None:
         normalized["tool_catalog_limit"] = binding["tool_catalog_limit"]
+    if binding.get("entity_search_depth") is not None:
+        normalized["entity_search_depth"] = binding["entity_search_depth"]
     return normalized
 
 
@@ -76,6 +83,13 @@ def _audit(db: Session, *, actor_id: str, agent_id: str, operation: str, payload
     })
 
 
+def _validate_max_tool_rounds(value: int) -> int:
+    lo, hi = MAX_TOOL_ROUNDS_RANGE
+    if isinstance(value, bool) or not isinstance(value, int) or not (lo <= value <= hi):
+        raise AgentConfigError(f"MAX_TOOL_ROUNDS_INVALID: must be an integer in [{lo}, {hi}]")
+    return value
+
+
 def _verify_model_version(db: Session, model_config_version_id: str, model_name: str) -> None:
     row = db.execute(text(
         "SELECT v.model_config_id, v.provider FROM model_config_versions v WHERE v.id = :id"
@@ -93,7 +107,7 @@ def _verify_model_version(db: Session, model_config_version_id: str, model_name:
 def _child_tree(db: Session, agent_version_id: str) -> dict:
     bindings = db.execute(text(
         "SELECT ontology_id, capabilities, allowlists, selected_tools, enabled_categories, "
-        "tool_catalog_limit "
+        "tool_catalog_limit, entity_search_depth "
         "FROM agent_ontology_bindings WHERE agent_version_id = :id ORDER BY ontology_id"
     ), {"id": agent_version_id}).mappings().all()
     tools = db.execute(text(
@@ -112,7 +126,7 @@ def _child_tree(db: Session, agent_version_id: str) -> dict:
 
 
 def config_hash(*, name, description, default_model_config_version_id, default_model_name,
-                system_prompt, memory_settings, application_state_schema_version_id,
+                system_prompt, memory_settings, max_tool_rounds, application_state_schema_version_id,
                 prompt_generation_id, child_tree) -> str:
     payload = _canonical({
         "name": name,
@@ -121,6 +135,7 @@ def config_hash(*, name, description, default_model_config_version_id, default_m
         "default_model_name": default_model_name,
         "system_prompt": system_prompt,
         "memory_settings": memory_settings,
+        "max_tool_rounds": max_tool_rounds,
         "application_state_schema_version_id": application_state_schema_version_id,
         "prompt_generation_id": prompt_generation_id,
         **child_tree,
@@ -131,7 +146,9 @@ def config_hash(*, name, description, default_model_config_version_id, default_m
 def create_agent(
     db: Session, *, actor_id: str, name: str, description: str | None,
     default_model_config_version_id: str, default_model_name: str,
-    system_prompt: str | None, memory_settings: dict, application_state_schema_version_id: str,
+    system_prompt: str | None, memory_settings: dict,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+    application_state_schema_version_id: str,
     ontology_bindings: list[dict] | None = None,
 ) -> dict:
     """One transaction: Agent + AgentVersion v1 + owner grant + audit."""
@@ -139,6 +156,7 @@ def create_agent(
         memory_settings = validate_memory_settings(memory_settings or {})
     except MemorySettingsError as exc:
         raise AgentConfigError(str(exc)) from exc
+    max_tool_rounds = _validate_max_tool_rounds(max_tool_rounds)
     _verify_model_version(db, default_model_config_version_id, default_model_name)
     bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent_id = _new_id()
@@ -147,7 +165,7 @@ def create_agent(
         name=name, description=description,
         default_model_config_version_id=default_model_config_version_id,
         default_model_name=default_model_name, system_prompt=system_prompt,
-        memory_settings=memory_settings,
+        memory_settings=memory_settings, max_tool_rounds=max_tool_rounds,
         application_state_schema_version_id=application_state_schema_version_id,
         prompt_generation_id=None,
         child_tree={"ontology_bindings": bindings,
@@ -160,12 +178,12 @@ def create_agent(
     db.execute(text(
         "INSERT INTO agent_versions (id, agent_id, version_no, name, description, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
-        "application_state_schema_version_id, config_hash, created_by, created_at) "
+        "max_tool_rounds, application_state_schema_version_id, config_hash, created_by, created_at) "
         "VALUES (:id, :agent, 1, :name, :desc, :mvid, :mname, :sp, CAST(:mem AS json), "
-        " :asv, :hash, :actor, now())"
+        " :mtr, :asv, :hash, :actor, now())"
     ), {"id": version_id, "agent": agent_id, "name": name, "desc": description,
         "mvid": default_model_config_version_id, "mname": default_model_name,
-        "sp": system_prompt, "mem": _canonical(memory_settings),
+        "sp": system_prompt, "mem": _canonical(memory_settings), "mtr": max_tool_rounds,
         "asv": application_state_schema_version_id, "hash": digest, "actor": actor_id})
     db.execute(text(
         "UPDATE agents SET active_version_id = :vid WHERE id = :aid"
@@ -221,13 +239,14 @@ def _insert_binding(db: Session, agent_version_id: str, binding: dict) -> None:
     passed as canonical strings with an explicit json cast (works on both
     PostgreSQL and SQLite text() execution).  `enabled_categories` NULL keeps
     the legacy selected_tools-only filter for pre-category bindings;
-    `tool_catalog_limit` NULL keeps today's unlimited tool-catalog size."""
+    `tool_catalog_limit` NULL keeps today's unlimited tool-catalog size;
+    `entity_search_depth` NULL keeps the runtime's default traversal depth."""
     db.execute(text(
         "INSERT INTO agent_ontology_bindings "
         "(id, agent_version_id, ontology_id, capabilities, allowlists, selected_tools, "
-        " enabled_categories, tool_catalog_limit, created_at) "
+        " enabled_categories, tool_catalog_limit, entity_search_depth, created_at) "
         "VALUES (:id, :av, :o, CAST(:caps AS json), CAST(:al AS json), CAST(:st AS json), "
-        " :ec, :tcl, now())"
+        " :ec, :tcl, :esd, now())"
     ), {
         "id": _new_id(), "av": agent_version_id, "o": binding["ontology_id"],
         "caps": _canonical(binding.get("capabilities") or []),
@@ -235,6 +254,7 @@ def _insert_binding(db: Session, agent_version_id: str, binding: dict) -> None:
         "st": _canonical(binding.get("selected_tools") or []),
         "ec": _canonical(binding["enabled_categories"]) if binding.get("enabled_categories") is not None else None,
         "tcl": binding.get("tool_catalog_limit"),
+        "esd": binding.get("entity_search_depth"),
     })
 
 
@@ -242,6 +262,7 @@ def save_basic_version(
     db: Session, *, actor_id: str, agent_id: str, base_version_no: int,
     name: str, description: str | None, default_model_config_version_id: str,
     default_model_name: str, system_prompt: str | None, memory_settings: dict,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     application_state_schema_version_id: str, change_note: str | None = None,
     prompt_generation_id: str | None = None,
     ontology_bindings: list[dict] | None = None,
@@ -256,6 +277,7 @@ def save_basic_version(
         memory_settings = validate_memory_settings(memory_settings or {})
     except MemorySettingsError as exc:
         raise AgentConfigError(str(exc)) from exc
+    max_tool_rounds = _validate_max_tool_rounds(max_tool_rounds)
     _verify_model_version(db, default_model_config_version_id, default_model_name)
     bindings = [_normalize_binding(dict(b)) for b in (ontology_bindings or [])]
     agent = db.execute(text(
@@ -277,20 +299,21 @@ def save_basic_version(
         name=name, description=description,
         default_model_config_version_id=default_model_config_version_id,
         default_model_name=default_model_name, system_prompt=system_prompt,
-        memory_settings=memory_settings,
+        memory_settings=memory_settings, max_tool_rounds=max_tool_rounds,
         application_state_schema_version_id=application_state_schema_version_id,
         prompt_generation_id=prompt_generation_id, child_tree=child_tree,
     )
     db.execute(text(
         "INSERT INTO agent_versions (id, agent_id, version_no, name, description, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
-        "application_state_schema_version_id, config_hash, change_note, prompt_generation_id, "
+        "max_tool_rounds, application_state_schema_version_id, config_hash, change_note, prompt_generation_id, "
         "created_by, created_at) "
         "VALUES (:id, :agent, :rev, :name, :desc, :mvid, :mname, :sp, CAST(:mem AS json), "
-        " :asv, :hash, :note, :pg, :actor, now())"
+        " :mtr, :asv, :hash, :note, :pg, :actor, now())"
     ), {"id": version_id, "agent": agent_id, "rev": active["version_no"] + 1,
         "name": name, "desc": description, "mvid": default_model_config_version_id,
         "mname": default_model_name, "sp": system_prompt, "mem": _canonical(memory_settings),
+        "mtr": max_tool_rounds,
         "asv": application_state_schema_version_id, "hash": digest, "note": change_note,
         "pg": prompt_generation_id, "actor": actor_id})
     _clone_child_rows(db, source_version_id, version_id)
@@ -320,7 +343,8 @@ def get_version(db: Session, *, agent_id: str, version_no: int) -> dict | None:
     row = db.execute(text(
         "SELECT id, version_no, name, description, config_hash, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
-        "application_state_schema_version_id, change_note, prompt_generation_id, created_by, created_at "
+        "max_tool_rounds, application_state_schema_version_id, change_note, prompt_generation_id, "
+        "created_by, created_at "
         "FROM agent_versions WHERE agent_id = :id AND version_no = :vno"
     ), {"id": agent_id, "vno": version_no}).mappings().one_or_none()
     if row is None:
@@ -343,7 +367,8 @@ def restore_version(db: Session, *, actor_id: str, agent_id: str, source_version
         raise AgentConfigError("AGENT_NOT_FOUND")
     source = db.execute(text(
         "SELECT id, version_no, name, description, default_model_config_version_id, "
-        "default_model_name, system_prompt, memory_settings, application_state_schema_version_id, "
+        "default_model_name, system_prompt, memory_settings, max_tool_rounds, "
+        "application_state_schema_version_id, "
         "config_hash, prompt_generation_id FROM agent_versions "
         "WHERE agent_id = :id AND version_no = :vno"
     ), {"id": agent_id, "vno": source_version_no}).mappings().one_or_none()
@@ -356,15 +381,16 @@ def restore_version(db: Session, *, actor_id: str, agent_id: str, source_version
     db.execute(text(
         "INSERT INTO agent_versions (id, agent_id, version_no, name, description, "
         "default_model_config_version_id, default_model_name, system_prompt, memory_settings, "
-        "application_state_schema_version_id, config_hash, change_note, prompt_generation_id, "
+        "max_tool_rounds, application_state_schema_version_id, config_hash, change_note, prompt_generation_id, "
         "created_by, created_at) "
         "VALUES (:id, :agent, :rev, :name, :desc, :mvid, :mname, :sp, CAST(:mem AS json), "
-        ":asv, :hash, :note, :pg, :actor, now())"
+        ":mtr, :asv, :hash, :note, :pg, :actor, now())"
     ), {"id": version_id, "agent": agent_id, "rev": next_no,
         "name": source["name"], "desc": source["description"],
         "mvid": source["default_model_config_version_id"],
         "mname": source["default_model_name"], "sp": source["system_prompt"],
         "mem": _canonical(source["memory_settings"] or {}),
+        "mtr": source["max_tool_rounds"],
         "asv": source["application_state_schema_version_id"],
         "hash": source["config_hash"], "note": change_note,
         "pg": source["prompt_generation_id"], "actor": actor_id})
@@ -468,7 +494,7 @@ def list_external_tool_bindings(db: Session, *, agent_version_id: str) -> list[d
     function existed before this — bind/unbind were write-only)."""
     rows = db.execute(text(
         "SELECT aetb.id, aetb.alias, aetb.tool_connection_version_id, tcv.connection_id, "
-        "tcv.version_no, tp.name AS provider_name, tp.kind AS provider_kind, "
+        "tcv.version_no, COALESCE(tc.name, tp.name) AS provider_name, tp.kind AS provider_kind, "
         "tcv.approval_status, tcv.health_status "
         "FROM agent_external_tool_bindings aetb "
         "JOIN tool_connection_versions tcv ON tcv.id = aetb.tool_connection_version_id "

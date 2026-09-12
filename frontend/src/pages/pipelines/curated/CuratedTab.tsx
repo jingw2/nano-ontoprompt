@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp,
   Table2, BarChart3, Database
@@ -39,14 +40,15 @@ const statusIcon = (status: string) => {
   return <Clock size={14} className="text-yellow-400" />
 }
 
-const statusLabel: Record<string, string> = {
-  pending_review: '待审核', approved: '已审批', rejected: '已拒绝',
+const statusLabelKey: Record<string, string> = {
+  pending_review: 'curatedTab.status_pending_review', approved: 'curatedTab.status_approved', rejected: 'curatedTab.status_rejected',
 }
 
 const scoreColor = (s: number) =>
   s >= 0.9 ? 'text-green-600' : s >= 0.7 ? 'text-yellow-500' : 'text-red-500'
 
 export default function CuratedTab() {
+  const { t } = useTranslation()
   const [datasets, setDatasets] = useState<CuratedDataset[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -110,23 +112,23 @@ export default function CuratedTab() {
     } finally { setReviewing(null) }
   }
 
-  if (loading) return <div className="text-gray-400 text-sm p-4">加载中...</div>
+  if (loading) return <div className="text-gray-400 text-sm p-4">{t('common.loading')}</div>
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">Curated 数据集</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Pipeline 输出的清洗后数据，可预览、审核、映射到本体</p>
+          <h2 className="text-lg font-semibold">{t('curatedTab.title')}</h2>
+          <p className="text-xs text-gray-400 mt-0.5">{t('curatedTab.subtitle')}</p>
         </div>
-        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">{datasets.length} 个数据集</span>
+        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">{t('curatedTab.dataset_count', { count: datasets.length })}</span>
       </div>
 
       {datasets.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-10 text-center text-gray-400 space-y-2">
           <Database size={28} className="mx-auto opacity-30" />
-          <p className="text-sm">暂无 Curated 数据集</p>
-          <p className="text-xs">运行 Transforms 流水线后，输出将在此显示</p>
+          <p className="text-sm">{t('curatedTab.empty')}</p>
+          <p className="text-xs">{t('curatedTab.empty_hint')}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -159,16 +161,16 @@ export default function CuratedTab() {
                         Route {routeHint}
                       </span>
                       <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded flex-shrink-0">
-                        {statusLabel[ds.status] ?? ds.status}
+                        {statusLabelKey[ds.status] ? t(statusLabelKey[ds.status]) : ds.status}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       {ds.row_count != null && (
-                        <span className="text-xs text-gray-500">{ds.row_count} 行</span>
+                        <span className="text-xs text-gray-500">{t('curatedTab.rows_count', { count: ds.row_count })}</span>
                       )}
                       {ds.quality_score != null && (
                         <span className={`text-xs font-medium ${scoreColor(ds.quality_score)}`}>
-                          质量 {(ds.quality_score * 100).toFixed(0)}%
+                          {t('curatedTab.quality_score', { pct: (ds.quality_score * 100).toFixed(0) })}
                         </span>
                       )}
                     </div>
@@ -181,12 +183,12 @@ export default function CuratedTab() {
                           onClick={() => handleReview(ds.id, 'approve')}
                           disabled={reviewing === ds.id}
                           className="text-xs px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded hover:bg-green-100 disabled:opacity-50"
-                        >✅ 批准</button>
+                        >✅ {t('curatedTab.approve_button')}</button>
                         <button
                           onClick={() => handleReview(ds.id, 'reject')}
                           disabled={reviewing === ds.id}
                           className="text-xs px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100 disabled:opacity-50"
-                        >❌ 拒绝</button>
+                        >❌ {t('curatedTab.reject_button')}</button>
                       </>
                     )}
                     <button onClick={() => handleExpand(ds.id)} className="p-1 rounded hover:bg-gray-100 text-gray-500">
@@ -206,7 +208,7 @@ export default function CuratedTab() {
                           tab === 'preview' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:text-gray-700'
                         }`}
                       >
-                        <Table2 size={12} /> 数据预览
+                        <Table2 size={12} /> {t('curatedTab.tab_preview')}
                       </button>
                       <button
                         onClick={() => switchTab(ds.id, 'quality')}
@@ -214,7 +216,7 @@ export default function CuratedTab() {
                           tab === 'quality' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:text-gray-700'
                         }`}
                       >
-                        <BarChart3 size={12} /> 质量报告
+                        <BarChart3 size={12} /> {t('curatedTab.tab_quality')}
                       </button>
                     </div>
 
@@ -222,14 +224,14 @@ export default function CuratedTab() {
                     {tab === 'preview' && (
                       <div className="p-4">
                         {!preview ? (
-                          <p className="text-xs text-gray-400">加载中...</p>
+                          <p className="text-xs text-gray-400">{t('common.loading')}</p>
                         ) : preview.error ? (
-                          <p className="text-xs text-red-400">加载失败: {preview.error}</p>
+                          <p className="text-xs text-red-400">{t('curatedTab.load_failed', { error: preview.error })}</p>
                         ) : preview.rows.length === 0 ? (
-                          <p className="text-xs text-gray-400">暂无数据行</p>
+                          <p className="text-xs text-gray-400">{t('curatedTab.no_rows')}</p>
                         ) : (
                           <div className="overflow-x-auto">
-                            <p className="text-xs text-gray-500 mb-2">共 {preview.count} 行，显示前 {preview.rows.length} 行</p>
+                            <p className="text-xs text-gray-500 mb-2">{t('curatedTab.preview_summary', { total: preview.count, shown: preview.rows.length })}</p>
                             <table className="text-xs border rounded overflow-hidden w-full min-w-max">
                               <thead className="bg-gray-100">
                                 <tr>
@@ -239,7 +241,7 @@ export default function CuratedTab() {
                                     </th>
                                   ))}
                                   {Object.keys(preview.rows[0]).length > 8 && (
-                                    <th className="px-3 py-1.5 text-gray-400">+{Object.keys(preview.rows[0]).length - 8} 列</th>
+                                    <th className="px-3 py-1.5 text-gray-400">{t('curatedTab.more_cols', { count: Object.keys(preview.rows[0]).length - 8 })}</th>
                                   )}
                                 </tr>
                               </thead>
@@ -265,15 +267,15 @@ export default function CuratedTab() {
                     {tab === 'quality' && (
                       <div className="p-4 space-y-3">
                         {!report ? (
-                          <p className="text-xs text-gray-400">加载中...</p>
+                          <p className="text-xs text-gray-400">{t('common.loading')}</p>
                         ) : (
                           <>
                             <div className="grid grid-cols-4 gap-3">
                               {([
-                                ['综合', report.overall_score],
-                                ['完整性', report.completeness_score],
-                                ['唯一性', report.uniqueness_score],
-                                ['有效性', report.validity_score],
+                                [t('curatedTab.score_overall'), report.overall_score],
+                                [t('curatedTab.score_completeness'), report.completeness_score],
+                                [t('curatedTab.score_uniqueness'), report.uniqueness_score],
+                                [t('curatedTab.score_validity'), report.validity_score],
                               ] as [string, number][]).map(([label, val]) => (
                                 <div key={label} className="text-center p-2 bg-gray-50 rounded">
                                   <div className={`text-lg font-bold ${scoreColor(val)}`}>{(val * 100).toFixed(0)}%</div>
@@ -282,10 +284,10 @@ export default function CuratedTab() {
                               ))}
                             </div>
                             <div className="flex gap-4 text-xs text-gray-500">
-                              <span>行数：{report.row_count}</span>
-                              <span>列数：{report.column_count}</span>
+                              <span>{t('curatedTab.rows_label', { count: report.row_count })}</span>
+                              <span>{t('curatedTab.cols_label', { count: report.column_count })}</span>
                               {report.duplicate_count > 0 && (
-                                <span className="text-yellow-600">⚠️ 重复：{report.duplicate_count}</span>
+                                <span className="text-yellow-600">{t('curatedTab.duplicate_label', { count: report.duplicate_count })}</span>
                               )}
                             </div>
                             {report.issues.length > 0 && (
@@ -299,10 +301,10 @@ export default function CuratedTab() {
                               <table className="w-full text-xs border rounded">
                                 <thead className="bg-gray-100">
                                   <tr>
-                                    <th className="px-2 py-1 text-left text-gray-600">列名</th>
-                                    <th className="px-2 py-1 text-left text-gray-600">类型</th>
-                                    <th className="px-2 py-1 text-right text-gray-600">空值率</th>
-                                    <th className="px-2 py-1 text-right text-gray-600">唯一值</th>
+                                    <th className="px-2 py-1 text-left text-gray-600">{t('curatedTab.col_name')}</th>
+                                    <th className="px-2 py-1 text-left text-gray-600">{t('curatedTab.col_type')}</th>
+                                    <th className="px-2 py-1 text-right text-gray-600">{t('curatedTab.col_null_pct')}</th>
+                                    <th className="px-2 py-1 text-right text-gray-600">{t('curatedTab.col_distinct')}</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y">

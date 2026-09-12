@@ -73,6 +73,31 @@ describe('P4A-CONVERSATION', () => {
     expect(bubble.className).toContain('bg-blue-600')
   })
 
+  it('shows the model\'s answer live while thinking, polling the answer-stream endpoint', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockImplementation((url: string) => {
+      if (url.includes('/answer-stream')) return Promise.resolve({ text: '正在生成的答案…' } as never)
+      return Promise.resolve({ items: [] } as never)
+    })
+    try {
+      render(<ConversationPanel messages={[]} stream={{ ...initialStreamState, phase: 'streaming' }} clarification={null}
+        pendingApprovalId={null} onSend={() => {}} onAnswerClarification={() => {}}
+        onApprovalResolved={() => {}} onRetry={() => {}} turnId="t-1" />)
+      expect(await screen.findByTestId('thinking-live-text')).toHaveTextContent('正在生成的答案…')
+      expect(get).toHaveBeenCalledWith(expect.stringContaining('/agent-turns/t-1/answer-stream'))
+    } finally {
+      get.mockRestore()
+    }
+  })
+
+  it('shows only the spinner (no live-text bubble) before the first chunk arrives', () => {
+    const messages: AgentMessage[] = []
+    render(<ConversationPanel messages={messages} stream={{ ...initialStreamState, phase: 'connecting' }} clarification={null}
+      pendingApprovalId={null} onSend={() => {}} onAnswerClarification={() => {}}
+      onApprovalResolved={() => {}} onRetry={() => {}} turnId="t-1" />)
+    expect(screen.getByTestId('thinking-panel')).toBeTruthy()
+    expect(screen.queryByTestId('thinking-live-text')).toBeNull()
+  })
+
   it('renders the persisted business-journey process in sequence without payload content', async () => {
     const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ items: [
       { id: 'e1', turn_id: 't-1', sequence: 1, event_type: 'turn_started', payload: {} },

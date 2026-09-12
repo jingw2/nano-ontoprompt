@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import type { AgentMessage } from '@/api/agentSessions'
 import type { StreamState } from '@/api/agentStream'
 import { apiClient } from '@/api/client'
@@ -8,6 +8,8 @@ import { renderMarkdown } from '@/security/sanitize'
 import ActionApprovalCard, { GovernedPlanPanel } from './ActionApprovalCard'
 import type { ApprovalResolutionResult } from '@/api/agentApprovals'
 import type { RuntimeEventRecord } from './ExecutionTracePanel'
+
+const ANSWER_STREAM_POLL_INTERVAL_MS = 400
 
 interface Props {
   messages: AgentMessage[]
@@ -55,86 +57,24 @@ function modelCallFrom(payload: Record<string, unknown>): ModelCallInfo | null {
   }
 }
 
-/** `tool_executed.payload.descriptor_id` is one of `query:<ontology>`,
- * `logic:<id>`, `action:<id>`, or a fixed `external.*` id — translate the
- * prefix into a short human label rather than showing the raw id (which
- * leaks internal ontology/rule ids for no benefit to the reader). */
-function friendlyToolLabel(t: (key: string, fallback?: string) => string, descriptorId: string): string {
-  if (descriptorId.startsWith('query:')) return t('agent.app.thinking_tool_query', '查询本体数据')
-  if (descriptorId.startsWith('logic:')) return t('agent.app.thinking_tool_logic', '执行逻辑规则')
-  if (descriptorId.startsWith('action:')) return t('agent.app.thinking_tool_action', '预览动作')
-  if (descriptorId === 'external.playwright') return t('agent.app.thinking_tool_playwright', '浏览网页')
-  if (descriptorId === 'external.search') return t('agent.app.thinking_tool_search', '网页搜索')
-  if (descriptorId === 'external.mcp') return t('agent.app.thinking_tool_mcp', '调用外部工具')
-  return descriptorId
-}
-
-interface ThinkingStep {
-  key: string
-  label: string
-}
-
-/** Turns the same persisted runtime events already driving the (advanced,
- * opt-in) evidence block below into a friendly, chronological "thinking"
- * timeline — the model-agnostic equivalent of the step-by-step progress
- * other chat UIs show while a turn is still in flight (tool calls, retrieval,
- * etc.), not raw internal event/descriptor ids. */
-function thinkingStepsFrom(
-  events: RuntimeEventRecord[], t: (key: string, fallback?: string, opts?: Record<string, unknown>) => string,
-): ThinkingStep[] {
-  const steps: ThinkingStep[] = []
-  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
-    if (event.event_type === 'resolve_snapshot') {
-      steps.push({ key: `${event.id}`, label: t('agent.app.thinking_step_resolve_snapshot', '定位知识本体版本') })
-    } else if (event.event_type === 'assemble_context') {
-      steps.push({ key: `${event.id}`, label: t('agent.app.thinking_step_assemble_context', '组装上下文') })
-    } else if (event.event_type === 'model_call') {
-      const round = event.payload.round
-      steps.push({
-        key: `${event.id}`,
-        label: t('agent.app.thinking_step_model_call', '调用模型思考（第 {{round}} 轮）', { round: round ?? '' }),
-      })
-    } else if (event.event_type === 'tool_executed') {
-      const descriptorId = String(event.payload.descriptor_id ?? '')
-      steps.push({
-        key: `${event.id}`,
-        label: t('agent.app.thinking_step_tool_executed', '调用工具：{{tool}}', { tool: friendlyToolLabel(t, descriptorId) }),
-      })
-    }
-  }
-  return steps
-}
-
-function ThinkingPanel({ steps, toolCallCount, active, visible }: {
-  steps: ThinkingStep[]; toolCallCount: number; active: boolean; visible: boolean
-}) {
+/** Shows the model's answer as it's actually generated (polling `/agent-
+ * turns/{turnId}/answer-stream`, the live preview `_call_model` publishes
+ * to while streaming — see `app.services.runtime.answer_stream`), not a
+ * static spinner. The panel unmounts entirely once the turn finishes —
+ * nothing worth showing here once the real answer has landed. */
+function ThinkingPanel({ liveText, visible }: { liveText: string; visible: boolean }) {
   const { t } = useTranslation()
-  const [expanded, setExpanded] = useState(false)
   if (!visible) return null
   return (
     <div className="flex justify-start">
-      <div className="max-w-[75%] text-xs" data-testid="thinking-panel">
-        <button type="button" onClick={() => steps.length > 0 && setExpanded(v => !v)}
-          disabled={steps.length === 0}
-          className="flex items-center gap-1.5 text-gray-500 hover:text-black disabled:hover:text-gray-500" data-testid="thinking-toggle">
-          {steps.length > 0 && (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)}
-          {active
-            ? <Loader2 size={12} className="animate-spin" />
-            : null}
-          <span>
-            {active
-              ? t('agent.app.thinking_active', '思考中…')
-              : toolCallCount > 0
-                ? t('agent.app.thinking_done_count', '已完成思考 · 调用了 {{count}} 次工具', { count: toolCallCount })
-                : t('agent.app.thinking_done', '已完成思考')}
-          </span>
-        </button>
-        {expanded && steps.length > 0 && (
-          <ol className="mt-1.5 ml-4 space-y-1 border-l border-gray-200 pl-3" data-testid="thinking-steps">
-            {steps.map(step => (
-              <li key={step.key} className="text-gray-500">{step.label}</li>
-            ))}
-          </ol>
+      <div className="max-w-[75%]" data-testid="thinking-panel">
+        <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+          <Loader2 size={12} className="animate-spin" />
+          <span>{t('agent.app.thinking_active', '思考中…')}</span>
+        </div>
+        {liveText && (
+          <div className="rounded-lg px-3 py-2 text-sm bg-gray-100 markdown-body" data-testid="thinking-live-text"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(liveText) }} />
         )}
       </div>
     </div>
@@ -200,14 +140,31 @@ export default function ConversationPanel({
   const journeyProcess = [...journeyEvents]
     .sort((left, right) => left.sequence - right.sequence)
     .map(event => event.event_type)
-  const thinkingSteps = thinkingStepsFrom(journeyEvents, t)
-  const thinkingToolCallCount = journeyEvents.filter(e => e.event_type === 'tool_executed').length
   // Mirrors the composer's own disabled condition exactly (both must flip at
   // the same instant) — journeyEvents/finalEvent come from a separate poll
   // and can resolve before or after stream.phase does, so they must not
-  // gate the active/done transition here.
+  // gate the panel's visibility here. The panel disappears the instant
+  // thinking ends — there is nothing to show once the answer is in.
   const isThinking = stream.phase === 'streaming' || stream.phase === 'connecting'
-  const showThinkingPanel = isThinking || journeyEvents.length > 0
+
+  // Live preview of the model's answer while it's still generating (see
+  // `app.services.runtime.answer_stream`) — polled on its own fast cadence
+  // rather than piggybacking on the slower journeyEvents poll above, since
+  // this is what actually needs to feel live.
+  const [liveAnswerText, setLiveAnswerText] = useState('')
+  useEffect(() => {
+    setLiveAnswerText('')
+    if (!turnId || !isThinking) return
+    let cancelled = false
+    const poll = () => {
+      apiClient.get<{ text: string } | null>(`/agent-turns/${turnId}/answer-stream`)
+        .then(res => { if (!cancelled && res) setLiveAnswerText(res.text) })
+        .catch(() => {})
+    }
+    poll()
+    const interval = setInterval(poll, ANSWER_STREAM_POLL_INTERVAL_MS)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [turnId, isThinking])
 
   const submit = () => {
     if (!draft.trim()) return
@@ -245,11 +202,7 @@ export default function ConversationPanel({
             )}
           </div>
         ))}
-        {/* key={turnId}: a fresh instance per turn so the collapsed/expanded
-           toggle doesn't carry over from a previous turn's panel — every new
-           turn's thinking panel must default to collapsed. */}
-        <ThinkingPanel key={turnId ?? 'none'} steps={thinkingSteps} toolCallCount={thinkingToolCallCount}
-          active={isThinking} visible={showThinkingPanel} />
+        <ThinkingPanel liveText={liveAnswerText} visible={isThinking} />
         {stream.events.filter(e => e.event === 'message' || e.event === 'final_response').map((e, i) => (
           <div key={`evt-${i}`} className="flex justify-start">
             <div className="bg-gray-100 rounded-lg px-3 py-2 text-sm markdown-body"

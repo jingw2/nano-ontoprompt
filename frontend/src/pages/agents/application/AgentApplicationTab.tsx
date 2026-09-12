@@ -280,7 +280,7 @@ export default function AgentApplicationTab({ agentId }: Props) {
   }, [reconnectTick, stream.terminal, activeSessionId])
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-220px)] border rounded-lg overflow-hidden relative" data-testid="agent-application-tab">
+    <div className="flex flex-col lg:flex-row h-[calc(100vh-170px)] border rounded-lg overflow-hidden relative" data-testid="agent-application-tab">
       <div className="flex flex-col flex-1 min-w-0">
         <div className="flex items-center justify-end px-3 py-1.5 border-b bg-gray-50 shrink-0">
           <button type="button" onClick={() => setTraceOpen(o => !o)} disabled={!lastTurnId}

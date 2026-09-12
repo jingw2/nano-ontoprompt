@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { apiClientV2 } from '@/api/client'
 
 export default function StorageInspector({ config, onChange, readOnly = false, pipelineId }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void; readOnly?: boolean; pipelineId?: string }) {
+  const { t } = useTranslation()
   const schemaOn = config.schema_inference !== false
   const [runtimeData, setRuntimeData] = useState<{ columns: string[]; rows_in: number; sample: Record<string, unknown> } | null>(null)
 
@@ -33,15 +35,15 @@ export default function StorageInspector({ config, onChange, readOnly = false, p
     return (
       <div className="space-y-3">
         <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-xs">
-          <p className="text-emerald-700 font-medium mb-1">📦 存储配置</p>
-          <p className="text-emerald-600">模式: {String(config.storage_mode || 'auto') === 'auto' ? '自动检测' : String(config.storage_mode)}</p>
-          <p className="text-emerald-600">版本: {String(config.versioning || 'snapshot')}</p>
-          <p className="text-emerald-600">Schema推断: {schemaOn ? '✅ 启用' : '关闭'}</p>
+          <p className="text-emerald-700 font-medium mb-1">📦 {t('storageInspector.config_title')}</p>
+          <p className="text-emerald-600">{t('storageInspector.mode_label')}: {String(config.storage_mode || 'auto') === 'auto' ? t('storageInspector.mode_auto') : String(config.storage_mode)}</p>
+          <p className="text-emerald-600">{t('storageInspector.version_label')}: {String(config.versioning || 'snapshot')}</p>
+          <p className="text-emerald-600">{t('storageInspector.schema_inference_label')}: {schemaOn ? t('storageInspector.schema_enabled') : t('storageInspector.schema_disabled')}</p>
         </div>
         {runtimeData && (
           <div className="bg-white border rounded-lg p-3 text-xs">
-            <p className="font-medium text-gray-700 mb-2">运行时检测结果</p>
-            <p className="text-gray-500 mb-1">行数: {runtimeData.rows_in} · 列数: {runtimeData.columns.length}</p>
+            <p className="font-medium text-gray-700 mb-2">{t('storageInspector.runtime_detection_title')}</p>
+            <p className="text-gray-500 mb-1">{t('storageInspector.rows_cols_summary', { rows: runtimeData.rows_in, cols: runtimeData.columns.length })}</p>
             <div className="space-y-0.5 max-h-40 overflow-y-auto">
               {runtimeData.columns.map((col: string, i: number) => (
                 <div key={i} className="flex justify-between text-gray-600">
@@ -57,12 +59,12 @@ export default function StorageInspector({ config, onChange, readOnly = false, p
   }
   return (
     <>
-      <div><label className="text-xs text-gray-500 mb-1 block">存储模式</label><select value={String(config.storage_mode || 'auto')} onChange={e => onChange('storage_mode', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="auto">自动检测</option><option value="raw_dataset">Raw Dataset</option><option value="media_set">Media Set</option></select></div>
-      <div><label className="text-xs text-gray-500 mb-1 block">版本化</label><select value={String(config.versioning || 'snapshot')} onChange={e => onChange('versioning', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="snapshot">SNAPSHOT</option><option value="append">APPEND</option></select></div>
-      <div><label className="text-xs text-gray-500 mb-1 block">Schema 推断</label><label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={schemaOn} onChange={e => onChange('schema_inference', e.target.checked)} className="accent-black" /><span className="text-xs">自动推断 Schema</span></label></div>
+      <div><label className="text-xs text-gray-500 mb-1 block">{t('storageInspector.storage_mode_label')}</label><select value={String(config.storage_mode || 'auto')} onChange={e => onChange('storage_mode', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="auto">{t('storageInspector.mode_auto')}</option><option value="raw_dataset">Raw Dataset</option><option value="media_set">Media Set</option></select></div>
+      <div><label className="text-xs text-gray-500 mb-1 block">{t('storageInspector.versioning_label')}</label><select value={String(config.versioning || 'snapshot')} onChange={e => onChange('versioning', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="snapshot">SNAPSHOT</option><option value="append">APPEND</option></select></div>
+      <div><label className="text-xs text-gray-500 mb-1 block">{t('storageInspector.schema_inference_full_label')}</label><label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={schemaOn} onChange={e => onChange('schema_inference', e.target.checked)} className="accent-black" /><span className="text-xs">{t('storageInspector.schema_inference_hint')}</span></label></div>
       {schemaOn && (<div className="pl-3 border-l-2 border-gray-100 space-y-3">
-        <div><label className="text-xs text-gray-500 mb-1 block">采样行数</label><input type="number" value={String(config.sample_size || 10000)} onChange={e => onChange('sample_size', parseInt(e.target.value) || 10000)} className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">列类型检测</label><select value={String(config.type_detection || 'auto')} onChange={e => onChange('type_detection', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="auto">自动</option><option value="strict">严格</option><option value="text_only">全文本</option></select></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{t('storageInspector.sample_size_label')}</label><input type="number" value={String(config.sample_size || 10000)} onChange={e => onChange('sample_size', parseInt(e.target.value) || 10000)} className="w-full border rounded-lg px-3 py-1.5 text-sm" /></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{t('storageInspector.type_detection_label')}</label><select value={String(config.type_detection || 'auto')} onChange={e => onChange('type_detection', e.target.value)} className="w-full border rounded-lg px-3 py-1.5 text-sm"><option value="auto">{t('storageInspector.type_detection_auto')}</option><option value="strict">{t('storageInspector.type_detection_strict')}</option><option value="text_only">{t('storageInspector.type_detection_text_only')}</option></select></div>
       </div>)}
     </>
   )

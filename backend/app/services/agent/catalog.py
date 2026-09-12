@@ -41,7 +41,15 @@ def agent_catalog_ontologies(session: Session, user_id: str, agent_capabilities:
 def agent_catalog_models(session: Session, agent_capabilities: frozenset[str]) -> list[dict]:
     """Redacted active LLM identities with an immutable active version;
     blocked/archived/unversioned identities are excluded.  Never returns
-    secrets or credentials."""
+    secrets or credentials.
+
+    Flattened one row per specific model in the active version's contract
+    (e.g. a "deepseek" identity configured with both `deepseek-v4-pro` and
+    `deepseek-v4-flash` yields two catalog rows) so an Agent can pin the
+    exact model string it calls, not just the identity — `id` (the version
+    id) is shared across a identity's rows and is what the Agent
+    configuration API expects as `default_model_config_version_id`;
+    `model_name` is the specific string to send as `default_model_name`."""
     if not ceiling_intersection(agent_capabilities, None) and "discover" not in agent_capabilities:
         return []
     rows = session.execute(text(
@@ -50,13 +58,33 @@ def agent_catalog_models(session: Session, agent_capabilities: frozenset[str]) -
         # identity (model_configs.id) here made create/save fail with
         # MODEL_VERSION_UNAVAILABLE and would store a non-version id in the
         # immutable version row.
-        "SELECT v.id AS id, mc.name, mc.provider, v.version_no, v.behavior_hash, v.conservative_input_limit "
+        "SELECT v.id AS id, mc.name, mc.provider, v.version_no, v.behavior_hash, "
+        "v.conservative_input_limit, v.model_contract "
         "FROM model_configs mc "
         "JOIN model_config_versions v ON v.id = mc.active_version_id "
         "WHERE mc.config_type = 'llm' AND mc.status = 'active' AND mc.active_version_id IS NOT NULL "
         "ORDER BY mc.name"
     )).mappings().all()
-    return [dict(row) for row in rows]
+    catalog: list[dict] = []
+    for row in rows:
+        contract = row["model_contract"] or []
+        if isinstance(contract, str):
+            import json
+            contract = json.loads(contract)
+        model_names = [
+            entry.get("provider_model_revision") for entry in contract
+            if isinstance(entry, dict) and entry.get("provider_model_revision")
+        ]
+        if not model_names:
+            model_names = [row["name"]]  # no per-model contract yet: fall back to the identity name
+        for model_name in model_names:
+            catalog.append({
+                "id": row["id"], "name": row["name"], "model_name": model_name,
+                "provider": row["provider"], "version_no": row["version_no"],
+                "behavior_hash": row["behavior_hash"],
+                "conservative_input_limit": row["conservative_input_limit"],
+            })
+    return catalog
 
 
 def validate_agent_tools(capabilities: frozenset[str], operation_capabilities: frozenset[str]) -> bool:
@@ -99,7 +127,7 @@ def ontology_tool_catalog(db: Session, ontology_id: str) -> dict:
             "ontology_id": ontology_id,
             "published": True,
             "release_id": release["release_id"],
-            "tools": enrich_tool_descriptors(list(projection.get("tool_descriptors", []))),
+            "tools": enrich_tool_descriptors(list(projection.get("tool_descriptors", [])), db),
         }
     return {
         "ontology_id": ontology_id,
@@ -118,6 +146,7 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
         "version": 1,
         "source_kind": "builtin",
         "source_id": "query",
+        "name": "本体查询",
         "input_schema": {
             "query": {"type": "string", "description": "关键词，匹配实例数据（可选）"},
             "entity_type": {"type": "string",
@@ -135,6 +164,25 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
         "timeout_ms": 10_000,
         "result_limit": 10,
         "descriptor_hash": hashlib.sha256(f"query:{ontology_id}".encode()).hexdigest(),
+    }, {
+        "descriptor_id": f"traverse:{ontology_id}",
+        "version": 1,
+        "source_kind": "builtin",
+        "source_id": "traverse",
+        "name": "实体关系遍历",
+        "input_schema": {
+            "instance_id": {"type": "string",
+                            "description": "起始实例 ID（通常来自本体查询工具的返回结果）"},
+            "depth": {"type": "integer",
+                      "description": "遍历深度（跳数）。数值越大搜索范围越广、耗时越长、消耗上下文越多，"
+                                     "由管理员配置了上限（可选，默认使用配置的上限）"},
+            "limit": {"type": "integer", "description": "返回边数上限，默认 20（可选）"},
+        },
+        "output_schema": {"edges": {"type": "array"}},
+        "capability": "traverse_relations",
+        "timeout_ms": 10_000,
+        "result_limit": 50,
+        "descriptor_hash": hashlib.sha256(f"traverse:{ontology_id}".encode()).hexdigest(),
     }]
     logic = db.execute(text(
         "SELECT id, name, version FROM v2_ontology_logic_rules "
@@ -143,7 +191,7 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
     for rule in logic:
         descriptors.append({
             "descriptor_id": f"logic:{rule['id']}", "version": rule["version"],
-            "source_kind": "logic", "source_id": rule["id"],
+            "source_kind": "logic", "source_id": rule["id"], "name": rule["name"],
             "input_schema": {"entity_type": {"type": "string"}, "parameters": {"type": "object"}},
             "output_schema": {"result": {"type": "object"}},
             "capability": "execute_read_logic", "timeout_ms": 10_000, "result_limit": 1,
@@ -156,13 +204,13 @@ def _working_copy_tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
     for action in actions:
         descriptors.append({
             "descriptor_id": f"action:{action['id']}", "version": action["version"],
-            "source_kind": "action", "source_id": action["id"],
+            "source_kind": "action", "source_id": action["id"], "name": action["name"],
             "input_schema": {"parameters": {"type": "object"}},
             "output_schema": {"result": {"type": "object"}},
             "capability": "execute_instance_action", "timeout_ms": 30_000, "result_limit": 1,
             "descriptor_hash": hashlib.sha256(f"action:{action['id']}".encode()).hexdigest(),
         })
-    return enrich_tool_descriptors(descriptors)
+    return enrich_tool_descriptors(descriptors, db)
 
 
 def validate_binding_tools(db: Session, ontology_id: str, selected_tools: list[str]) -> bool:
@@ -175,19 +223,23 @@ def validate_binding_tools(db: Session, ontology_id: str, selected_tools: list[s
 
 
 def agent_external_tool_catalog(db: Session) -> list[dict]:
-    """Search/Playwright/External-MCP connections an Agent may bind to: the
-    active version of each active connection, already admin-approved via
-    P7-UI — matches bind_external_tool's own approval check
-    (configuration.py:379-385) so nothing shown here can fail to bind."""
+    """Search/Playwright/External-MCP/Browser-Use connections an Agent may
+    bind to: the active version of each active connection, already
+    admin-approved via P7-UI — matches bind_external_tool's own approval
+    check (configuration.py:379-385) so nothing shown here can fail to
+    bind. `provider_name` prefers the connection's own custom name (set via
+    rename_connection) over the provider's name — several connections of
+    the same kind (e.g. three separate search connections) would otherwise
+    be indistinguishable in the binding picker."""
     rows = db.execute(text(
         "SELECT tcv.id AS tool_connection_version_id, tcv.connection_id, tcv.version_no, "
-        "tp.id AS provider_id, tp.name AS provider_name, tp.kind AS provider_kind, "
+        "tp.id AS provider_id, COALESCE(tc.name, tp.name) AS provider_name, tp.kind AS provider_kind, "
         "tcv.health_status "
         "FROM tool_connections tc "
         "JOIN tool_connection_versions tcv ON tcv.id = tc.active_version_id "
         "JOIN tool_providers tp ON tp.id = tc.provider_id "
         "WHERE tc.status = 'active' AND tcv.approval_status = 'approved' "
-        "AND tp.kind IN ('search', 'playwright', 'external_mcp') "
+        "AND tp.kind IN ('search', 'playwright', 'external_mcp', 'browser_use') "
         "ORDER BY tp.name, tc.id"
     )).mappings().all()
     return [dict(r) for r in rows]

@@ -34,7 +34,7 @@ export default function AgentCreateWizard() {
   const [releasePickerOpen, setReleasePickerOpen] = useState(false)
   const [toolPickerOpen, setToolPickerOpen] = useState(false)
 
-  const { bindings, toolsByOntology, bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit } =
+  const { bindings, toolsByOntology, bindOntology, unbindOntology, toggleCategory, toggleTool, setToolCatalogLimit, setEntitySearchDepth } =
     useOntologyToolSelection(ontologies)
   const boundOntologyId = bindings[0]?.ontology_id ?? null
 
@@ -99,7 +99,7 @@ export default function AgentCreateWizard() {
   const submit = useCallback(async (event: React.FormEvent) => {
     event.preventDefault()
     if (createdAgentId) return
-    const model = models.find(m => m.id === modelId)
+    const model = models.find(m => `${m.id}::${m.model_name}` === modelId)
     if (!name.trim() || !model) return
     setSaving(true)
     setError('')
@@ -109,7 +109,7 @@ export default function AgentCreateWizard() {
         name: name.trim(),
         description: description.trim() || null,
         default_model_config_version_id: model.id,
-        default_model_name: model.name,
+        default_model_name: model.model_name,
         system_prompt: systemPrompt || null,
         memory_settings: {},
         ontology_bindings: bindings,
@@ -165,7 +165,9 @@ export default function AgentCreateWizard() {
             className="w-full border rounded-lg px-3 py-2 text-sm">
             <option value="">{t('agent.create.select_model', '选择模型…')}</option>
             {models.map(m => (
-              <option key={m.id} value={m.id}>{m.name} · v{m.version_no ?? '—'}</option>
+              <option key={`${m.id}::${m.model_name}`} value={`${m.id}::${m.model_name}`}>
+                {m.name} · {m.model_name} · v{m.version_no ?? '—'}
+              </option>
             ))}
           </select>
         </div>
@@ -180,7 +182,7 @@ export default function AgentCreateWizard() {
           <OntologyToolSelector ontologies={ontologies} bindings={bindings} toolsByOntology={toolsByOntology}
             canEdit onBind={bindOntology} onUnbind={unbindOntology}
             onToggleCategory={toggleCategory} onToggleTool={toggleTool}
-            onSetToolCatalogLimit={setToolCatalogLimit} />
+            onSetToolCatalogLimit={setToolCatalogLimit} onSetEntitySearchDepth={setEntitySearchDepth} />
         </div>
         <div>
           <label className="block text-sm text-gray-600 mb-1">{t('agent.create.release', '本体发布版本')}</label>
@@ -229,12 +231,9 @@ export default function AgentCreateWizard() {
             </ul>
           )}
         </div>
-        <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">{t('agent.tools.external', '外部工具')}</h3>
-          <ExternalToolCard bindings={pendingExternalTools} canEdit
-            onBind={bindPendingExternal} onUnbind={unbindPendingExternal}
-            skillBindings={pendingSkills} onBindSkill={bindPendingSkill} onUnbindSkill={unbindPendingSkill} />
-        </div>
+        <ExternalToolCard bindings={pendingExternalTools} canEdit
+          onBind={bindPendingExternal} onUnbind={unbindPendingExternal}
+          skillBindings={pendingSkills} onBindSkill={bindPendingSkill} onUnbindSkill={unbindPendingSkill} />
         {error && <p className="text-sm text-red-500">{error}</p>}
         {bindFailures.length > 0 && createdAgentId && (
           <div className="border border-amber-300 bg-amber-50 rounded-lg p-3 text-sm text-amber-700">

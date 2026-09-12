@@ -58,8 +58,8 @@ function detailHandlers() {
       HttpResponse.json({
         data: {
           items: [
-            { id: 'm-1', name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
-            { id: 'm-2', name: 'deepseek', provider: 'compatible', version_no: 1, behavior_hash: 'i' + '0'.repeat(63) },
+            { id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
+            { id: 'm-2', name: 'deepseek', model_name: 'deepseek', provider: 'compatible', version_no: 1, behavior_hash: 'i' + '0'.repeat(63) },
           ], next_cursor: null, has_more: false,
         }, message: 'ok',
       })),
@@ -140,13 +140,64 @@ describe('P2C-DETAIL', () => {
     await screen.findAllByText('Support Agent')
     const model = screen.getByLabelText('模型') as HTMLSelectElement
     await waitFor(() => expect(model.options.length).toBeGreaterThanOrEqual(2))
-    await userEvent.selectOptions(model, 'm-2')
+    await userEvent.selectOptions(model, 'm-2::deepseek')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(savedBody).not.toBeNull())
     expect(savedBody).toMatchObject({
       base_version_no: 1,
       default_model_config_version_id: 'm-2',
       default_model_name: 'deepseek',
+    })
+  })
+
+  it('lets an Agent pin a specific model from a config exposing several', async () => {
+    setRole('editor')
+    server.use(
+      http.get('*/api/v1/agents/a-1', () => HttpResponse.json({ data: AGENT, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/versions', () =>
+        HttpResponse.json({ data: { items: [VERSION], next_cursor: null, has_more: false }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/models', () =>
+        HttpResponse.json({
+          data: {
+            items: [
+              { id: 'm-1', name: 'gpt-4o', model_name: 'gpt-4o', provider: 'openai', version_no: 3, behavior_hash: 'h' + '0'.repeat(63) },
+              // one config ("deepseek"), two selectable models — both share id m-3
+              { id: 'm-3', name: 'deepseek', model_name: 'deepseek-v4-pro', provider: 'compatible', version_no: 1, behavior_hash: 'j' + '0'.repeat(63) },
+              { id: 'm-3', name: 'deepseek', model_name: 'deepseek-v4-flash', provider: 'compatible', version_no: 1, behavior_hash: 'j' + '0'.repeat(63) },
+            ], next_cursor: null, has_more: false,
+          }, message: 'ok',
+        })),
+      http.get('*/api/v1/agents/catalog/external-tools', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/versions/v-1/external-tools', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+      http.get('*/api/v1/agents/catalog/skills', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+      http.get('*/api/v1/agents/a-1/versions/v-1/skills', () =>
+        HttpResponse.json({ data: { items: [] }, message: 'ok' })),
+    )
+    let savedBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('*/api/v1/agents/a-1/versions', async ({ request }) => {
+        savedBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ data: { version_id: 'v-2', version_no: 2, config_hash: 'd' + '0'.repeat(63) }, message: 'ok' }, { status: 201 })
+      }),
+    )
+    await renderDetail()
+    await screen.findAllByText('Support Agent')
+    const model = screen.getByLabelText('模型') as HTMLSelectElement
+    await waitFor(() => expect(model.options.length).toBe(3))
+    // both models under the same config are distinct, selectable options
+    const labels = [...model.options].map(o => o.textContent)
+    expect(labels.some(l => l?.includes('deepseek-v4-pro'))).toBe(true)
+    expect(labels.some(l => l?.includes('deepseek-v4-flash'))).toBe(true)
+
+    await userEvent.selectOptions(model, 'm-3::deepseek-v4-flash')
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(savedBody).not.toBeNull())
+    expect(savedBody).toMatchObject({
+      default_model_config_version_id: 'm-3',
+      default_model_name: 'deepseek-v4-flash',
     })
   })
 

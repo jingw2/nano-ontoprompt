@@ -98,6 +98,7 @@ def _tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
         "version": 1,
         "source_kind": "builtin",
         "source_id": "query",
+        "name": "本体查询",
         "input_schema": {
             "query": {"type": "string", "description": "关键词，匹配实例数据（可选）"},
             "entity_type": {"type": "string",
@@ -116,6 +117,26 @@ def _tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
         "result_limit": 10,
         "descriptor_hash": hashlib.sha256(f"query:{ontology_id}".encode()).hexdigest(),
     })
+    descriptors.append({
+        "descriptor_id": f"traverse:{ontology_id}",
+        "version": 1,
+        "source_kind": "builtin",
+        "source_id": "traverse",
+        "name": "实体关系遍历",
+        "input_schema": {
+            "instance_id": {"type": "string",
+                            "description": "起始实例 ID（通常来自本体查询工具的返回结果）"},
+            "depth": {"type": "integer",
+                      "description": "遍历深度（跳数）。数值越大搜索范围越广、耗时越长、消耗上下文越多，"
+                                     "由管理员配置了上限（可选，默认使用配置的上限）"},
+            "limit": {"type": "integer", "description": "返回边数上限，默认 20（可选）"},
+        },
+        "output_schema": {"edges": {"type": "array"}},
+        "capability": "traverse_relations",
+        "timeout_ms": 10_000,
+        "result_limit": 50,
+        "descriptor_hash": hashlib.sha256(f"traverse:{ontology_id}".encode()).hexdigest(),
+    })
     logic = db.execute(
         sa.text(
             "SELECT id, name, description, target_entity_type, expression, enabled, version "
@@ -130,6 +151,7 @@ def _tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
             "version": rule["version"],
             "source_kind": "logic",
             "source_id": rule_id,
+            "name": rule["name"],
             "input_schema": {
                 "entity_type": {"type": "string"},
                 "parameters": {"type": "object"},
@@ -154,6 +176,7 @@ def _tool_descriptors(db: Session, ontology_id: str) -> list[dict]:
             "version": action["version"],
             "source_kind": "action",
             "source_id": action_id,
+            "name": action["name"],
             "input_schema": {"parameters": {"type": "object"}},
             "output_schema": {"result": {"type": "object"}},
             "capability": "execute_instance_action",

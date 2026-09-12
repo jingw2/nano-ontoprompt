@@ -77,7 +77,8 @@ def _load_turn_dispatch_row(db, *, turn_id: str):
     `agent_turn_execute` itself requires."""
     return db.execute(text(
         "SELECT t.session_id, s.agent_id, s.owner_user_id, a.active_version_id, "
-        "v.default_model_config_version_id, v.default_model_name, mcv.options AS model_config_options, "
+        "v.default_model_config_version_id, v.default_model_name, v.max_tool_rounds, "
+        "mcv.options AS model_config_options, "
         "m.content AS user_message "
         "FROM agent_turns t "
         "JOIN agent_sessions s ON s.id = t.session_id "
@@ -95,7 +96,7 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
     import app.models  # noqa: F401 — register all tables
     from app.database import SessionLocal
     from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter, assemble_turn_context
-    from app.runtime.langgraph_runtime import LangGraphRuntime
+    from app.runtime.langgraph_runtime import DEFAULT_MAX_TOOL_ROUNDS, LangGraphRuntime
     from app.services.runtime.context import resolve_pinned_context
     from app.services.runtime.dispatch import claim_turn, heartbeat_turn
     from app.services.runtime import events as events_service
@@ -123,7 +124,8 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
             user_message=row["user_message"] or "",
             release_id=pinned.release_id,
             model_config_version_id=row["default_model_config_version_id"],
-            model_name=row["default_model_name"], runtime_artifact_id=worker_artifact_id,
+            model_name=row["default_model_name"], max_tool_rounds=row["max_tool_rounds"],
+            runtime_artifact_id=worker_artifact_id,
             ontology_bindings=[dict(b) for b in pinned.ontology_tool_selection],
             external_tool_bindings=[dict(b) for b in pinned.tool_bindings],
             skill_bindings=[dict(b) for b in pinned.skill_bindings],
@@ -133,7 +135,9 @@ def agent_turn_execute(self, turn_id: str, dispatch_generation: int,
         # the runtime executes the model + governed tools for this user
         context.extra["user_id"] = row["owner_user_id"]
         context.extra["claim_token"] = claim_token
-        runtime = LangGraphRuntime(db)
+        runtime = LangGraphRuntime(
+            db, max_tool_rounds=context.max_tool_rounds or DEFAULT_MAX_TOOL_ROUNDS,
+        )
         adapter = LangGraphRuntimeAdapter(runtime=runtime)
         heartbeat_stop = threading.Event()
         heartbeat_errors = []

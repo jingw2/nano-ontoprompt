@@ -18,6 +18,7 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
   const [description, setDescription] = useState(activeVersion?.description ?? '')
   const [models, setModels] = useState<CatalogModel[]>([])
   const [modelId, setModelId] = useState(activeVersion?.default_model_config_version_id ?? '')
+  const [modelName, setModelName] = useState(activeVersion?.default_model_name ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState('')
@@ -35,6 +36,7 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
       setName(activeVersion?.name ?? '')
       setDescription(activeVersion?.description ?? '')
       setModelId(activeVersion?.default_model_config_version_id ?? '')
+      setModelName(activeVersion?.default_model_name ?? '')
       setError('')
       setConflict('')
     })
@@ -43,15 +45,15 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
 
   const dirty = name !== (activeVersion?.name ?? '') || description !== (activeVersion?.description ?? '')
     || modelId !== (activeVersion?.default_model_config_version_id ?? '')
+    || modelName !== (activeVersion?.default_model_name ?? '')
   useEffect(() => {
     onDirtyChange(dirty)
   }, [dirty, onDirtyChange])
 
   const save = useCallback(async () => {
     if (!activeVersion) return
-    const model = models.find(m => m.id === modelId)
     const mvid = modelId || activeVersion.default_model_config_version_id || ''
-    const mname = model?.name ?? activeVersion.default_model_name ?? ''
+    const mname = modelName || activeVersion.default_model_name || ''
     if (!mvid) return
     setSaving(true)
     setError('')
@@ -65,6 +67,7 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
         default_model_name: mname,
         system_prompt: activeVersion.system_prompt ?? null,
         memory_settings: activeVersion.memory_settings ?? {},
+        max_tool_rounds: activeVersion.max_tool_rounds ?? 5,
         application_state_schema_version_id: activeVersion.application_state_schema_version_id ?? null,
         change_note: t('agent.info.change_note_basic', 'Basic 信息更新'),
       })
@@ -76,7 +79,7 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
     } finally {
       setSaving(false)
     }
-  }, [agentId, activeVersion, name, description, modelId, models, onSaved, t])
+  }, [agentId, activeVersion, name, description, modelId, modelName, onSaved, t])
 
   if (!activeVersion) {
     return <div className="p-6 text-gray-400">{t('common.loading', '加载中...')}</div>
@@ -100,14 +103,20 @@ export default function AgentInfoTab({ agentId, activeVersion, versions, canEdit
       </div>
       <div>
         <label className="block text-xs text-gray-500 mb-1" htmlFor="info-model">{t('agent.info.model', '模型')}</label>
-        <select id="info-model" value={modelId} disabled={!canEdit}
-          onChange={e => setModelId(e.target.value)}
+        <select id="info-model" value={`${modelId}::${modelName}`} disabled={!canEdit}
+          onChange={e => {
+            const [id, name] = e.target.value.split('::')
+            setModelId(id)
+            setModelName(name)
+          }}
           className="w-full max-w-md border rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500">
-          {models.length === 0 && <option value={activeVersion.default_model_config_version_id ?? ''}>
+          {models.length === 0 && <option value={`${activeVersion.default_model_config_version_id ?? ''}::${activeVersion.default_model_name ?? ''}`}>
             {activeVersion.default_model_name ?? '—'}
           </option>}
           {models.map(m => (
-            <option key={m.id} value={m.id}>{m.name} · v{m.version_no ?? '—'}</option>
+            <option key={`${m.id}::${m.model_name}`} value={`${m.id}::${m.model_name}`}>
+              {m.name} · {m.model_name} · v{m.version_no ?? '—'}
+            </option>
           ))}
         </select>
         <p className="text-xs text-gray-400 mt-1">{t('agent.info.model_hint', '更换模型将生成新版本')}</p>
