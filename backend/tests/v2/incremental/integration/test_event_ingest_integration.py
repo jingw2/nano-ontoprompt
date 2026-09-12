@@ -109,15 +109,21 @@ def _pre_refresh_tables() -> MetaData:
         Column("created_by", String(36), nullable=False),
     )
     # Referenced by runtime_plans/sandbox_simulations/managed_action_bindings
-    # (0030, 0032, 0033) as the Action a writable plan proposes. Task
-    # 0042 drops execution_rule/function_code on this table, so both must
-    # be present for that migration to succeed.
+    # (0030, 0032, 0033) as the Action a writable plan proposes. 0042 drops
+    # execution_rule/function_code; 0046 backfills v2_ontology_action_types
+    # from the remaining columns by name.
     Table(
         "actions", metadata,
         Column("id", String(36), primary_key=True),
         Column("ontology_id", String(36), nullable=False),
+        Column("name_cn", String(200), nullable=False),
+        Column("description", Text, nullable=True),
         Column("execution_rule", Text, nullable=True),
         Column("function_code", Text, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
     )
     # Referenced by governed_turn_plans (0035) as the Agent turn/tool-call an
     # in-conversation governed action proposal is created from.
@@ -145,11 +151,19 @@ def _pre_refresh_tables() -> MetaData:
         Column("id", String(36), primary_key=True),
     )
     # Referenced by 0042, which drops the pre-existing `formula` column
-    # after backfilling `definition` from it.
+    # after backfilling `definition` from it; 0046 backfills
+    # v2_ontology_logic_rules from the remaining columns by name.
     Table(
         "logic_rules", metadata,
         Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name_cn", String(200), nullable=False),
+        Column("description", Text, nullable=True),
         Column("formula", Text, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
     )
     # Referenced by 0050 (adds scan_report).
     Table(
@@ -182,6 +196,41 @@ def _pre_refresh_tables() -> MetaData:
     Table(
         "v2_curated_reviews", metadata,
         Column("id", String(36), primary_key=True),
+    )
+    # Referenced by 0046, which backfills mirror rows from logic_rules/
+    # actions into these two v2 tables (INSERT ... SELECT by column name).
+    Table(
+        "v2_ontology_logic_rules", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name", String(200), nullable=False),
+        Column("logic_type", String(50), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("expression", JSON, nullable=False),
+        Column("severity", String(20), nullable=False),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
+    )
+    Table(
+        "v2_ontology_action_types", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("ontology_id", String(36), nullable=False),
+        Column("name", String(200), nullable=False),
+        Column("description", Text, nullable=True),
+        Column("action_category", String(50), nullable=False),
+        Column("parameters", JSON, nullable=False),
+        Column("submission_criteria", JSON, nullable=True),
+        Column("effects", JSON, nullable=False),
+        Column("side_effects", JSON, nullable=True),
+        Column("permission_rules", JSON, nullable=True),
+        Column("enabled", Boolean, nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("updated_at", DateTime(timezone=True), nullable=False),
     )
     for table_name, columns in {
         "v2_connections": [
