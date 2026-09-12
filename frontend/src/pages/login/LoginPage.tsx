@@ -42,16 +42,16 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="w-full max-w-sm bg-white rounded-lg shadow p-8">
         <h1 className="text-2xl font-semibold mb-2">Ontexus</h1>
-        <p className="text-gray-500 text-sm mb-6">本体知识工程平台</p>
+        <p className="text-gray-500 text-sm mb-6">{t('auth.tagline')}</p>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">{t('auth.username')}</label>
-            <input {...register('username', { required: true })} placeholder="用户名"
+            <input {...register('username', { required: true })} placeholder={t('auth.ph_username')}
               className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">{t('auth.password')}</label>
-            <input {...register('password', { required: true })} type="password" placeholder="密码"
+            <input {...register('password', { required: true })} type="password" placeholder={t('auth.ph_password')}
               className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
           </div>
           {error && <p className="text-red-500 text-sm">{error}</p>}

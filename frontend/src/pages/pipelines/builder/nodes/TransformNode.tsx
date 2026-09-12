@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Cpu, Loader2, CheckCircle, XCircle } from 'lucide-react'
 
@@ -9,7 +10,8 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function TransformNode({ data, selected }: NodeProps) {
-  const label = (data.label as string) || '转换器'
+  const { t } = useTranslation()
+  const label = (data.label as string) || t('pipelineBuilder.node_transform')
   const status = (data.status as string) || 'idle'
   const steps = ((data.config as { steps?: unknown[] } | undefined)?.steps || [])
 
@@ -32,7 +34,7 @@ function TransformNode({ data, selected }: NodeProps) {
         <Cpu size={13} className="text-amber-500" />
         <span className="font-medium text-amber-700">{label}</span>
       </div>
-      <p className="text-gray-400 mt-0.5">{steps.length > 0 ? `${steps.length} 个步骤` : '转换器'}</p>
+      <p className="text-gray-400 mt-0.5">{steps.length > 0 ? t('pipelineBuilder.node_steps_count', { count: steps.length }) : t('pipelineBuilder.node_transform')}</p>
     </div>
   )
 }

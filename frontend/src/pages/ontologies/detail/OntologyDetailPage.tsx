@@ -19,10 +19,10 @@ const GraphTab = lazy(() => import('./tabs/GraphTabV2'))
 type Tab = 'info' | 'graph' | 'entities' | 'logic' | 'actions' | 'files' | 'extract' |  'audit' | 'curated'
 
 class GraphErrorBoundary extends React.Component<
-  { children: React.ReactNode; fallbackLabel?: string },
+  { children: React.ReactNode; fallbackLabel?: string; retryLabel?: string },
   { hasError: boolean; error: string }
 > {
-  constructor(props: { children: React.ReactNode; fallbackLabel?: string }) {
+  constructor(props: { children: React.ReactNode; fallbackLabel?: string; retryLabel?: string }) {
     super(props)
     this.state = { hasError: false, error: '' }
   }
@@ -33,12 +33,12 @@ class GraphErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
-          <p className="text-red-600 font-medium mb-2">{this.props.fallbackLabel || '图表加载失败'}</p>
+          <p className="text-red-600 font-medium mb-2">{this.props.fallbackLabel || 'Chart failed to load'}</p>
           <p className="text-red-400 text-sm font-mono">{this.state.error}</p>
           <button
             onClick={() => this.setState({ hasError: false, error: '' })}
             className="mt-4 px-3 py-1.5 text-sm border border-red-300 text-red-500 rounded-lg hover:bg-red-100">
-            重试
+            {this.props.retryLabel || 'Retry'}
           </button>
         </div>
       )
@@ -91,7 +91,7 @@ export default function OntologyDetailPage() {
     { key: 'actions', label: t('ontology.tabs.actions') },
     { key: 'audit', label: t('ontology.tabs.audit') },
     isPipelineMode
-      ? { key: 'curated', label: 'Curated 数据集' }
+      ? { key: 'curated', label: t('ontology.tabs.curated') }
       : { key: 'files', label: t('ontology.tabs.files') },
   ]
 
@@ -130,7 +130,7 @@ export default function OntologyDetailPage() {
         {activeTab === 'files' && <FilesTab ontologyId={id!} />}
         {activeTab === 'curated' && <CuratedDatasetsTab ontologyId={id!} />}
         {activeTab === 'graph' && (
-          <GraphErrorBoundary fallbackLabel="知识图谱渲染失败">
+          <GraphErrorBoundary fallbackLabel={t('ontology.graph_render_failed')} retryLabel={t('common.retry')}>
             <Suspense fallback={<div className="text-gray-400 py-8 text-center">{t('common.loading')}</div>}>
               <GraphTab ontologyId={id!} />
             </Suspense>

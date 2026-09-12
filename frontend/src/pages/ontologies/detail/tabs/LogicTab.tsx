@@ -77,13 +77,13 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
-            placeholder="搜索规则名称 / 定义…"
+            placeholder={t('logic.ph_search')}
             className="w-full border rounded-lg pl-8 pr-3 py-2 text-sm" />
         </div>
         <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
           className="flex items-center gap-1.5 px-3 py-2 bg-green-700 text-white rounded-lg text-sm disabled:opacity-50">
           {publishMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
-          发布全部
+          {t('logic.publish_all')}
         </button>
         <button onClick={() => { setShowCreate(true); reset() }}
           className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-lg text-sm">
@@ -98,15 +98,15 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
             <table className="w-full text-sm min-w-max">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">类型</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">定义</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">置信度</th>
-                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
-                  <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">操作</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_name')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_type')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_definition')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_desc')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_linked_entities')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_status')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('logic.col_confidence')}</th>
+                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">{t('logic.col_enabled')}</th>
+                  <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">{t('logic.col_actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -160,7 +160,7 @@ export default function LogicTab({ ontologyId }: { ontologyId: string }) {
             </table>
           </div>
         )}
-        {!isLoading && filtered.length === 0 && <p className="text-center text-gray-400 py-8">{searchQ ? '无匹配结果' : t('logic.empty')}</p>}
+        {!isLoading && filtered.length === 0 && <p className="text-center text-gray-400 py-8">{searchQ ? t('logic.no_match') : t('logic.empty')}</p>}
       </div>
 
       {showCreate && (

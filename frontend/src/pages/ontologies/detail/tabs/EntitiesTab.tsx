@@ -135,7 +135,7 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
-              placeholder="搜索名称 / 类型…"
+              placeholder={t('entities.ph_search')}
               className="w-56 border rounded-lg pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
           </div>
           <button onClick={() => { setShowCreate(true); reset() }}
@@ -194,7 +194,7 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
           </div>
         )}
         {!isLoading && displayedEntities.length === 0 && (
-          <p className="text-center text-gray-400 py-8">{searchQ || typeFilter ? '无匹配结果' : t('entities.empty')}</p>
+          <p className="text-center text-gray-400 py-8">{searchQ || typeFilter ? t('entities.no_match') : t('entities.empty')}</p>
         )}
         {!isLoading && entityList.length > 0 && displayedEntities.length === 0 && (
           <p className="text-center text-gray-400 py-8">{t('entities.no_match')}</p>
@@ -209,8 +209,8 @@ export default function EntitiesTab({ ontologyId }: { ontologyId: string }) {
               <input {...register('name_cn', { required: true })} placeholder={t('entities.ph_name_cn')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input {...register('name_abbr')} placeholder={t('entities.ph_abbr')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input {...register('name_en')} placeholder={t('entities.ph_name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <input {...register('snomed_id')} placeholder="SNOMED-CT ID（如 366979004）" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
-              <input {...register('canonical_id')} placeholder="Canonical ID（如 symptom:depressed_mood）" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+              <input {...register('snomed_id')} placeholder={t('entities.ph_snomed')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+              <input {...register('canonical_id')} placeholder={t('entities.ph_canonical')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
               <input {...register('type')} placeholder={t('entities.ph_type')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <textarea {...register('description')} placeholder={t('entities.ph_desc')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
               <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" placeholder={t('entities.ph_confidence')} className="w-full border rounded-lg px-3 py-2 text-sm" />

@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Database, Loader2, CheckCircle, XCircle } from 'lucide-react'
 
@@ -9,7 +10,8 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function ConnectorNode({ data, selected }: NodeProps) {
-  const label = (data.label as string) || '连接器'
+  const { t } = useTranslation()
+  const label = (data.label as string) || t('pipelineBuilder.node_connector')
   const status = (data.status as string) || 'idle'
 
   return (
@@ -31,7 +33,7 @@ function ConnectorNode({ data, selected }: NodeProps) {
         <Database size={13} className="text-blue-500" />
         <span className="font-medium text-blue-700">{label}</span>
       </div>
-      <p className="text-gray-400 mt-0.5">连接器</p>
+      <p className="text-gray-400 mt-0.5">{t('pipelineBuilder.node_connector')}</p>
     </div>
   )
 }

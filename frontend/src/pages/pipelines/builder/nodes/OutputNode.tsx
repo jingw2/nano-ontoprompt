@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Database, Loader2, CheckCircle, XCircle } from 'lucide-react'
 
@@ -9,7 +10,8 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function OutputNode({ data, selected }: NodeProps) {
-  const label = (data.label as string) || '输出'
+  const { t } = useTranslation()
+  const label = (data.label as string) || t('pipelineBuilder.node_output')
   const status = (data.status as string) || 'idle'
   const count = ((data.config as { curated_dataset_ids?: unknown[] } | undefined)?.curated_dataset_ids || []).length
 

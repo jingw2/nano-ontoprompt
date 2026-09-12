@@ -20,11 +20,6 @@ const PIPELINE_STATUS_STYLE: Record<string, string> = {
   published: 'bg-green-50 text-green-600',
 }
 
-const PIPELINE_STATUS_LABEL: Record<string, string> = {
-  draft: '草稿', editing: '编辑中', running: '运行中',
-  failed: '失败', published: '已发布',
-}
-
 const CURATED_STATUS_ICON = (status: string) => {
   if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
   if (status === 'rejected') return <AlertTriangle size={13} className="text-red-400" />
@@ -59,7 +54,12 @@ export default function DataManagementPage() {
     return acc
   }, {})
 
-  if (loading) return <p className="text-gray-400 text-sm p-6">加载中...</p>
+  const pipelineStatusLabel: Record<string, string> = {
+    draft: t('data.status_draft'), editing: t('data.status_editing'), running: t('data.status_running'),
+    failed: t('data.status_failed'), published: t('data.status_published'),
+  }
+
+  if (loading) return <p className="text-gray-400 text-sm p-6">{t('common.loading')}</p>
 
   return (
     <div className="space-y-6">
@@ -96,7 +96,7 @@ export default function DataManagementPage() {
               {Object.entries(pipelineByStatus).map(([status, count]) => (
                 <div key={status} className="flex items-center justify-between text-sm">
                   <span className={`text-xs px-2 py-0.5 rounded ${PIPELINE_STATUS_STYLE[status] || 'bg-gray-100 text-gray-600'}`}>
-                    {PIPELINE_STATUS_LABEL[status] || status}
+                    {pipelineStatusLabel[status] || status}
                   </span>
                   <span className="font-medium text-gray-700">{count}</span>
                 </div>
@@ -115,7 +115,7 @@ export default function DataManagementPage() {
                 >
                   <FileEdit size={11} className="text-gray-400 shrink-0" />
                   <span className="flex-1 truncate text-gray-700">{p.name}</span>
-                  <span className="text-gray-400">{p.domain || '通用'}</span>
+                  <span className="text-gray-400">{p.domain || t('data.domain_general')}</span>
                 </div>
               ))}
             </div>
@@ -147,9 +147,9 @@ export default function DataManagementPage() {
           ) : (
             <div className="space-y-2">
               {[
-                ['pending_review', '待审核'],
-                ['approved', '已审核'],
-                ['rejected', '已拒绝'],
+                ['pending_review', t('data.status_pending')],
+                ['approved', t('data.status_approved')],
+                ['rejected', t('data.status_rejected')],
               ].map(([key, label]) =>
                 curatedByStatus[key] ? (
                   <div key={key} className="flex items-center justify-between text-sm">
@@ -176,7 +176,7 @@ export default function DataManagementPage() {
                   {CURATED_STATUS_ICON(c.status)}
                   <span className="flex-1 truncate text-gray-700">{c.name}</span>
                   {c.row_count != null && (
-                    <span className="text-gray-400">{c.row_count} 行</span>
+                    <span className="text-gray-400">{t('curatedMapping.rows_suffix', { count: c.row_count })}</span>
                   )}
                 </div>
               ))}

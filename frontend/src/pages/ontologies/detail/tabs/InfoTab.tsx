@@ -79,7 +79,7 @@ function ValidationReportCard({ report }: { report: ValidationReport }) {
             const Icon = cfg.icon
             return (
               <div key={sev} className={`rounded-lg border ${cfg.border} ${cfg.bg} p-3`}>
-                <p className={`text-xs font-semibold ${cfg.text} mb-1.5`}>{cfg.label} · {issues.length} 项</p>
+                <p className={`text-xs font-semibold ${cfg.text} mb-1.5`}>{cfg.label} · {t('extract.issues_count', { count: issues.length })}</p>
                 <ul className="space-y-1">
                   {issues.map((issue, i) => (
                     <li key={i} className={`flex items-start gap-1.5 text-xs ${cfg.text}`}>
@@ -133,16 +133,18 @@ function saveTask(oid: string, data: SavedTask) {
 
 function StructuredDataLink() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   return (
     <button
       onClick={() => navigate('/data/structured')}
       className="text-xs text-blue-600 hover:underline"
     >
-      → 查看结构数据
+      {t('ontology.view_structured_data')}
     </button>
   )
 }
 function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
+  const { t } = useTranslation()
   const [mappings, setMappings] = useState<PipelineMapping[]>([])
   useEffect(() => {
     import('@/api/client').then(({ apiClientV2 }) => {
@@ -155,11 +157,11 @@ function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
   return (
     <div className="bg-white rounded-xl border p-6 space-y-4">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">Pipeline Mapping 状态</span>
-        <span className="px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700">🔄 Pipeline 模式</span>
+        <span className="text-sm font-semibold">{t('ontology.pipeline_mapping_status')}</span>
+        <span className="px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700">🔄 {t('ontology.pipeline_mode_badge')}</span>
       </div>
       {mappings.length === 0 ? (
-        <p className="text-sm text-gray-400">暂无 Mapping 配置。请先在 Pipelines → Curated Datasets 中审批数据，然后在新建本体时配置 Mapping。</p>
+        <p className="text-sm text-gray-400">{t('ontology.no_mapping_config')}</p>
       ) : (
         <div className="space-y-2">
           {mappings.map(m => (
@@ -311,11 +313,11 @@ export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
           <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.version')}</dt><dd className="font-mono">{ontology.version}</dd></div>
           <div><dt className="text-xs text-gray-500 mb-0.5">{t('ontology.status')}</dt><dd>{ontology.status}</dd></div>
           <div>
-            <dt className="text-xs text-gray-500 mb-0.5">构建方式</dt>
+            <dt className="text-xs text-gray-500 mb-0.5">{t('ontology.build_mode')}</dt>
             <dd>
               {isPipelineMode
                 ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-blue-50 border border-blue-200 text-blue-700">🔄 Pipeline Mapping</span>
-                : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-50 border border-amber-200 text-amber-700">⚡ 简易 LLM 提取</span>
+                : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-amber-50 border border-amber-200 text-amber-700">⚡ {t('ontology.build_mode_simple_llm_full')}</span>
               }
             </dd>
           </div>

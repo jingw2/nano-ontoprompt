@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   X, CheckCircle, AlertTriangle, Clock,
   Save, Trash2, Loader2, Pencil,
@@ -14,12 +15,6 @@ interface Props {
   onClose: () => void
   onStatusChange: (id: string, status: string) => void
   onDeleted: (id: string) => void
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: '待审核',
-  approved:       '已审核',
-  rejected:       '已拒绝',
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -40,6 +35,7 @@ export default function CuratedDetailPanel({
   datasetId, datasetName, datasetStatus, pipelineName,
   onClose, onStatusChange, onDeleted,
 }: Props) {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<Record<string, string>[]>([])
   const [cols, setCols] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -50,6 +46,7 @@ export default function CuratedDetailPanel({
   const [pendingEdits, setPendingEdits] = useState<Map<CellKey, { old: string; val: string }>>(new Map())
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [saveMsgIsError, setSaveMsgIsError] = useState(false)
   const editInputRef = useRef<HTMLInputElement>(null)
 
   const [approving, setApproving] = useState(false)
@@ -65,7 +62,7 @@ export default function CuratedDetailPanel({
         setRows(rowArr)
         setCols(rowArr.length > 0 ? Object.keys(rowArr[0]) : [])
       })
-      .catch(() => setLoadError('数据加载失败'))
+      .catch(() => setLoadError(t('curatedDetail.load_error')))
       .finally(() => setLoading(false))
   }, [datasetId])
 
@@ -124,9 +121,11 @@ export default function CuratedDetailPanel({
         return updated
       })
       setPendingEdits(new Map())
-      setSaveMsg(`已保存 ${edits.length} 处修改`)
+      setSaveMsgIsError(false)
+      setSaveMsg(t('curatedDetail.save_msg_success', { count: edits.length }))
     } catch {
-      setSaveMsg('保存失败，请重试')
+      setSaveMsgIsError(true)
+      setSaveMsg(t('curatedDetail.save_msg_failed'))
     } finally {
       setSaving(false)
     }
@@ -183,10 +182,13 @@ export default function CuratedDetailPanel({
                 <h2 className="font-semibold text-base truncate">{datasetName}</h2>
                 <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                   {STATUS_ICON(status)}
-                  {STATUS_LABEL[status] || status}
+                  {status === 'pending_review' ? t('data.status_pending')
+                    : status === 'approved' ? t('data.status_approved')
+                    : status === 'rejected' ? t('data.status_rejected')
+                    : status}
                 </span>
               </div>
-              <p className="text-xs text-gray-400 mt-0.5">来自管道：{pipelineName}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{t('curatedDetail.from_pipeline', { name: pipelineName })}</p>
             </div>
             <button
               onClick={onClose}
@@ -205,7 +207,7 @@ export default function CuratedDetailPanel({
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
               >
                 {approving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                批准
+                {t('data.approve_title')}
               </button>
             )}
             {status !== 'rejected' && (
@@ -215,7 +217,7 @@ export default function CuratedDetailPanel({
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
               >
                 {approving ? <Loader2 size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
-                拒绝
+                {t('curatedDetail.reject')}
               </button>
             )}
 
@@ -223,11 +225,11 @@ export default function CuratedDetailPanel({
 
             {hasPending && (
               <span className="text-xs text-amber-600 flex items-center gap-1">
-                <Pencil size={11} /> {pendingEdits.size} 处未保存
+                <Pencil size={11} /> {t('curatedDetail.unsaved_edits', { count: pendingEdits.size })}
               </span>
             )}
             {saveMsg && (
-              <span className={`text-xs ${saveMsg.includes('失败') ? 'text-red-500' : 'text-green-600'}`}>
+              <span className={`text-xs ${saveMsgIsError ? 'text-red-500' : 'text-green-600'}`}>
                 {saveMsg}
               </span>
             )}
@@ -237,13 +239,13 @@ export default function CuratedDetailPanel({
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-100 disabled:opacity-40"
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              保存编辑
+              {t('curatedDetail.save_edits')}
             </button>
             <button
               onClick={() => setShowDeleteConfirm(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 text-red-500 rounded-lg hover:bg-red-50"
             >
-              <Trash2 size={12} /> 删除
+              <Trash2 size={12} /> {t('common.delete')}
             </button>
           </div>
 
@@ -251,16 +253,16 @@ export default function CuratedDetailPanel({
           <div className="flex-1 overflow-auto">
             {loading ? (
               <div className="flex items-center justify-center h-48 text-gray-400 text-sm gap-2">
-                <Loader2 size={16} className="animate-spin" /> 加载中...
+                <Loader2 size={16} className="animate-spin" /> {t('common.loading')}
               </div>
             ) : loadError ? (
               <div className="p-6 text-sm text-red-400">{loadError}</div>
             ) : rows.length === 0 ? (
-              <div className="p-8 text-center text-sm text-gray-400">暂无数据行</div>
+              <div className="p-8 text-center text-sm text-gray-400">{t('curatedDetail.no_rows')}</div>
             ) : (
               <>
                 <p className="px-6 py-2 text-xs text-gray-400 bg-gray-50 border-b shrink-0">
-                  共 {rows.length} 行 · 双击单元格可编辑
+                  {t('curatedDetail.row_count_hint', { count: rows.length })}
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs min-w-max">
@@ -326,9 +328,9 @@ export default function CuratedDetailPanel({
 
       <ConfirmDialog
         open={showDeleteConfirm}
-        title="删除数据集"
-        message={`确认删除「${datasetName}」？此操作不可撤销，数据将永久删除。`}
-        confirmLabel={deleting ? '删除中...' : '确认删除'}
+        title={t('data.delete_dataset_title')}
+        message={t('curatedDetail.delete_dataset_msg_permanent', { name: datasetName })}
+        confirmLabel={deleting ? t('data.deleting') : t('common.confirm_delete')}
         onConfirm={handleDelete}
         onCancel={() => setShowDeleteConfirm(false)}
       />

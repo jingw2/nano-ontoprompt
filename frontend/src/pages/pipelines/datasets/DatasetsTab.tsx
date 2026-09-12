@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Database, BarChart3, ChevronDown, ChevronUp, Eye, GitBranch } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
@@ -23,14 +24,15 @@ interface Version {
 
 type SubTab = 'schema' | 'preview' | 'versions'
 
-const KIND_META: Record<string, { label: string; color: string }> = {
-  structured:   { label: '结构化',   color: 'bg-blue-50 text-blue-600 border-blue-200' },
-  semi:         { label: '半结构化', color: 'bg-amber-50 text-amber-600 border-amber-200' },
-  unstructured: { label: '非结构化', color: 'bg-purple-50 text-purple-600 border-purple-200' },
-  curated:      { label: 'Curated',  color: 'bg-green-50 text-green-600 border-green-200' },
+const KIND_META: Record<string, { labelKey: string; color: string }> = {
+  structured:   { labelKey: 'datasetsTab.kind_structured',   color: 'bg-blue-50 text-blue-600 border-blue-200' },
+  semi:         { labelKey: 'datasetsTab.kind_semi', color: 'bg-amber-50 text-amber-600 border-amber-200' },
+  unstructured: { labelKey: 'datasetsTab.kind_unstructured', color: 'bg-purple-50 text-purple-600 border-purple-200' },
+  curated:      { labelKey: '', color: 'bg-green-50 text-green-600 border-green-200' },
 }
 
 export default function DatasetsTab() {
+  const { t } = useTranslation()
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -95,17 +97,17 @@ export default function DatasetsTab() {
     await loadSubTab(id, tab)
   }
 
-  if (loading) return <div className="text-gray-400 text-sm p-4">加载中...</div>
+  if (loading) return <div className="text-gray-400 text-sm p-4">{t('common.loading')}</div>
 
   if (datasets.length === 0) return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">原始数据集</h2>
+        <h2 className="text-lg font-semibold">{t('datasetsTab.title')}</h2>
       </div>
       <div className="border-2 border-dashed rounded-xl p-8 text-center text-gray-400">
         <BarChart3 size={28} className="mx-auto mb-2 opacity-30" />
-        <p className="text-sm">暂无原始数据集</p>
-        <p className="text-xs mt-1">在 Connections 中上传文件后，数据将在此显示</p>
+        <p className="text-sm">{t('datasetsTab.empty')}</p>
+        <p className="text-xs mt-1">{t('datasetsTab.empty_hint')}</p>
       </div>
     </div>
   )
@@ -114,14 +116,15 @@ export default function DatasetsTab() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">原始数据集</h2>
-          <p className="text-xs text-gray-400 mt-0.5">{datasets.length} 个数据集</p>
+          <h2 className="text-lg font-semibold">{t('datasetsTab.title')}</h2>
+          <p className="text-xs text-gray-400 mt-0.5">{t('datasetsTab.dataset_count', { count: datasets.length })}</p>
         </div>
       </div>
 
       <div className="border rounded-xl overflow-hidden">
         {datasets.map(ds => {
-          const meta = KIND_META[ds.kind] ?? { label: ds.kind, color: 'bg-gray-50 text-gray-600 border-gray-200' }
+          const meta = KIND_META[ds.kind] ?? { labelKey: '', color: 'bg-gray-50 text-gray-600 border-gray-200' }
+          const kindLabel = meta.labelKey ? t(meta.labelKey) : (ds.kind === 'curated' ? 'Curated' : ds.kind)
           const isOpen = expanded === ds.id
           const tab = activeSub[ds.id] ?? 'schema'
 
@@ -139,7 +142,7 @@ export default function DatasetsTab() {
                   <p className="text-xs text-gray-400 font-mono">{ds.id.slice(0, 8)}</p>
                 </div>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded border ${meta.color}`}>
-                  {meta.label}
+                  {kindLabel}
                 </span>
                 {isOpen
                   ? <ChevronUp size={14} className="text-gray-400 shrink-0" />
@@ -152,8 +155,8 @@ export default function DatasetsTab() {
                   <div className="flex border-b bg-white">
                     {([
                       ['schema', 'Schema', <BarChart3 size={12} />],
-                      ['preview', '数据预览', <Eye size={12} />],
-                      ['versions', '版本历史', <GitBranch size={12} />],
+                      ['preview', t('datasetsTab.tab_preview'), <Eye size={12} />],
+                      ['versions', t('datasetsTab.tab_versions'), <GitBranch size={12} />],
                     ] as [SubTab, string, React.ReactNode][]).map(([k, label, icon]) => (
                       <button
                         key={k}
@@ -170,15 +173,15 @@ export default function DatasetsTab() {
                     {tab === 'schema' && (
                       <div>
                         {(schemas[ds.id] ?? []).length === 0
-                          ? <p className="text-xs text-gray-400">暂无 Schema 信息</p>
+                          ? <p className="text-xs text-gray-400">{t('datasetsTab.no_schema')}</p>
                           : (
                             <div className="overflow-x-auto">
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="border-b text-gray-500">
-                                    <th className="text-left py-1 pr-6 font-medium">列名</th>
-                                    <th className="text-left py-1 pr-6 font-medium">类型</th>
-                                    <th className="text-left py-1 font-medium">样本值</th>
+                                    <th className="text-left py-1 pr-6 font-medium">{t('datasetsTab.col_name')}</th>
+                                    <th className="text-left py-1 pr-6 font-medium">{t('datasetsTab.col_type')}</th>
+                                    <th className="text-left py-1 font-medium">{t('datasetsTab.col_sample_values')}</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -200,7 +203,7 @@ export default function DatasetsTab() {
                     {tab === 'preview' && (
                       <div>
                         {(previews[ds.id] ?? []).length === 0
-                          ? <p className="text-xs text-gray-400">暂无预览数据</p>
+                          ? <p className="text-xs text-gray-400">{t('datasetsTab.no_preview')}</p>
                           : (
                             <div className="overflow-x-auto">
                               <table className="text-xs w-full min-w-max">
@@ -232,11 +235,11 @@ export default function DatasetsTab() {
                     {tab === 'versions' && (
                       <div className="space-y-2">
                         {(versions[ds.id] ?? []).length === 0
-                          ? <p className="text-xs text-gray-400">暂无版本记录</p>
+                          ? <p className="text-xs text-gray-400">{t('datasetsTab.no_versions')}</p>
                           : (versions[ds.id] ?? []).map(v => (
                             <div key={v.id} className="flex items-center gap-3 text-xs bg-white border rounded-lg px-3 py-2">
                               <span className="text-gray-500 font-medium">v{v.version_no}</span>
-                              <span className="text-gray-700">{v.rowcount != null ? `${v.rowcount} 行` : '行数未知'}</span>
+                              <span className="text-gray-700">{v.rowcount != null ? t('datasetsTab.rows_count', { count: v.rowcount }) : t('datasetsTab.rows_unknown')}</span>
                               <span className="text-gray-400 truncate">{v.storage_uri}</span>
                             </div>
                           ))

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
@@ -22,6 +23,7 @@ function ChipEditor({
   onAdd: (id: string) => void
   color: 'blue' | 'orange' | 'purple'
 }) {
+  const { t } = useTranslation()
   const [addId, setAddId] = useState('')
   const cls = {
     blue:   { chip: 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100', del: 'text-blue-400 hover:text-blue-700' },
@@ -30,7 +32,7 @@ function ChipEditor({
   }[color]
 
   if (!editing) {
-    if (items.length === 0) return <p className="text-sm text-gray-400">暂无</p>
+    if (items.length === 0) return <p className="text-sm text-gray-400">{t('common.none')}</p>
     return (
       <div className="flex flex-wrap gap-2">
         {items.map(item => (
@@ -59,14 +61,14 @@ function ChipEditor({
         <div className="flex items-center gap-2">
           <select value={addId} onChange={e => setAddId(e.target.value)}
             className="flex-1 border rounded-lg px-2 py-1.5 text-xs">
-            <option value="">— 选择添加 —</option>
+            <option value="">{t('detailPage.select_to_add')}</option>
             {availableOptions.map(o => (
               <option key={o.id} value={o.id}>{o.label}</option>
             ))}
           </select>
           <button disabled={!addId} onClick={() => { if (addId) { onAdd(addId); setAddId('') } }}
             className="flex items-center gap-1 px-2.5 py-1.5 bg-black text-white rounded-lg text-xs disabled:opacity-40">
-            <Plus size={12} /> 添加
+            <Plus size={12} /> {t('detailPage.add')}
           </button>
         </div>
       )}
@@ -75,6 +77,7 @@ function ChipEditor({
 }
 
 export default function EntityDetailPage() {
+  const { t } = useTranslation()
   const { id: oid, eid } = useParams<{ id: string; eid: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -171,8 +174,8 @@ export default function EntityDetailPage() {
     },
   })
 
-  if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
-  if (!entity) return <div className="p-6 text-red-500">实体未找到</div>
+  if (isLoading) return <div className="p-6 text-gray-400">{t('common.loading')}</div>
+  if (!entity) return <div className="p-6 text-red-500">{t('entityDetail.not_found')}</div>
 
   const { labelCn, abbr } = parseEntityDisplay(entity)
 
@@ -246,29 +249,29 @@ export default function EntityDetailPage() {
       <div className="flex items-center justify-between">
         <button onClick={() => navigate(`/ontologies/${oid}?tab=entities`)}
           className="flex items-center gap-2 text-gray-500 hover:text-black text-sm">
-          <ArrowLeft size={16} /> 返回实体列表
+          <ArrowLeft size={16} /> {t('entityDetail.back_to_list')}
         </button>
         <div className="flex items-center gap-2">
           {editing ? (
             <>
               <button onClick={() => setEditing(false)}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-                <X size={14} /> 取消
+                <X size={14} /> {t('common.cancel')}
               </button>
               <button onClick={handleSubmit(d => updateMut.mutate(d))}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white rounded-lg text-sm">
-                <Save size={14} /> 保存
+                <Save size={14} /> {t('common.save')}
               </button>
             </>
           ) : (
             <>
               <button onClick={() => { reset(entity); setEditing(true) }}
                 className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-                <Pencil size={14} /> 编辑
+                <Pencil size={14} /> {t('common.edit')}
               </button>
               <button onClick={() => setShowDeleteConfirm(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50">
-                <Trash2 size={14} /> 删除
+                <Trash2 size={14} /> {t('common.delete')}
               </button>
             </>
           )}
@@ -277,66 +280,66 @@ export default function EntityDetailPage() {
 
       {/* Basic Info */}
       <div className="bg-white border rounded-xl p-6">
-        <h3 className="font-semibold mb-4">基本信息</h3>
+        <h3 className="font-semibold mb-4">{t('detailPage.basic_info')}</h3>
         {editing ? (
           <form className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">中文名 *</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('entities.ph_name_cn')}</label>
                 <input {...register('name_cn', { required: true })} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">英文缩写</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('entities.col_abbr')}</label>
                 <input {...register('name_abbr')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">英文名</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('entities.col_name_en')}</label>
                 <input {...register('name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">SNOMED-CT ID</label>
-                <input {...register('snomed_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="如 366979004" />
+                <input {...register('snomed_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder={t('entities.ph_snomed')} />
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Canonical ID</label>
-                <input {...register('canonical_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="如 symptom:depressed_mood" />
+                <input {...register('canonical_id')} className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder={t('entities.ph_canonical')} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">类型</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('detailPage.type')}</label>
                 <input {...register('type')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">置信度 (0-1)</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('detailPage.confidence')} (0-1)</label>
                 <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" className="w-full border rounded-lg px-3 py-2 text-sm" />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">描述</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('detailPage.description')}</label>
               <textarea {...register('description')} rows={3} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
             </div>
           </form>
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <div><p className="text-xs text-gray-500 mb-1">中文名</p><p className="text-sm font-medium">{labelCn}</p></div>
-              <div><p className="text-xs text-gray-500 mb-1">英文缩写</p><p className="text-sm font-mono">{entity.name_abbr?.trim() || abbr || '—'}</p></div>
-              <div><p className="text-xs text-gray-500 mb-1">英文名</p><p className="text-sm">{entity.name_en || '—'}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('entities.col_name_cn')}</p><p className="text-sm font-medium">{labelCn}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('entities.col_abbr')}</p><p className="text-sm font-mono">{entity.name_abbr?.trim() || abbr || '—'}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('entities.col_name_en')}</p><p className="text-sm">{entity.name_en || '—'}</p></div>
               <div><p className="text-xs text-gray-500 mb-1">SNOMED-CT ID</p><p className="text-sm font-mono text-blue-600">{entity.snomed_id || '—'}</p></div>
               <div className="col-span-2"><p className="text-xs text-gray-500 mb-1">Canonical ID</p><p className="text-sm font-mono text-green-700">{entity.canonical_id || '—'}</p></div>
-              <div><p className="text-xs text-gray-500 mb-1">类型</p><p className="text-sm">{entity.type || '—'}</p></div>
-              <div><p className="text-xs text-gray-500 mb-1">版本</p><p className="text-sm font-mono">{entity.version}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('detailPage.type')}</p><p className="text-sm">{entity.type || '—'}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('detailPage.version')}</p><p className="text-sm font-mono">{entity.version}</p></div>
             </div>
             <div>
-              <p className="text-xs text-gray-500 mb-1">置信度</p>
+              <p className="text-xs text-gray-500 mb-1">{t('detailPage.confidence')}</p>
               <div className="flex items-center gap-3">
                 <div className="w-40"><ConfidenceBar value={entity.confidence} /></div>
                 <span className="text-sm text-gray-600">{Math.round(entity.confidence * 100)}%</span>
               </div>
             </div>
-            <div><p className="text-xs text-gray-500 mb-1">描述</p><p className="text-sm text-gray-700">{entity.description || '—'}</p></div>
+            <div><p className="text-xs text-gray-500 mb-1">{t('detailPage.description')}</p><p className="text-sm text-gray-700">{entity.description || '—'}</p></div>
             <div className="grid grid-cols-2 gap-4 pt-2 border-t">
-              <div><p className="text-xs text-gray-500 mb-1">创建时间</p><p className="text-xs text-gray-600">{formatDate(entity.created_at)}</p></div>
-              <div><p className="text-xs text-gray-500 mb-1">更新时间</p><p className="text-xs text-gray-600">{formatDate(entity.updated_at)}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('detailPage.created_at')}</p><p className="text-xs text-gray-600">{formatDate(entity.created_at)}</p></div>
+              <div><p className="text-xs text-gray-500 mb-1">{t('detailPage.updated_at')}</p><p className="text-xs text-gray-600">{formatDate(entity.updated_at)}</p></div>
             </div>
           </div>
         )}
@@ -345,18 +348,18 @@ export default function EntityDetailPage() {
       {/* Properties — inline add/delete */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">实体属性</h3>
+          <h3 className="font-semibold">{t('entityDetail.properties_title')}</h3>
           <button onClick={() => setPropEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${propEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {propEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {propEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
         {Object.keys(props).length > 0 ? (
           <table className="w-full text-sm mb-3">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">属性名</th>
-                <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">值</th>
+                <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">{t('entityDetail.property_name_col')}</th>
+                <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">{t('entityDetail.value_col')}</th>
                 {propEditing && <th className="w-8" />}
               </tr>
             </thead>
@@ -377,17 +380,17 @@ export default function EntityDetailPage() {
             </tbody>
           </table>
         ) : (
-          <p className="text-sm text-gray-400 mb-3">暂无属性</p>
+          <p className="text-sm text-gray-400 mb-3">{t('entityDetail.no_properties')}</p>
         )}
         {propEditing && (
           <div className="flex items-center gap-2 border-t pt-3">
-            <input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="属性名"
+            <input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder={t('entityDetail.property_name_col')}
               className="flex-1 border rounded-lg px-2 py-1.5 text-xs" onKeyDown={e => e.key === 'Enter' && addProp()} />
-            <input value={newVal} onChange={e => setNewVal(e.target.value)} placeholder="值"
+            <input value={newVal} onChange={e => setNewVal(e.target.value)} placeholder={t('entityDetail.value_col')}
               className="flex-1 border rounded-lg px-2 py-1.5 text-xs" onKeyDown={e => e.key === 'Enter' && addProp()} />
             <button onClick={addProp} disabled={!newKey.trim()}
               className="flex items-center gap-1 px-2.5 py-1.5 bg-black text-white rounded-lg text-xs disabled:opacity-40">
-              <Plus size={12} /> 添加
+              <Plus size={12} /> {t('detailPage.add')}
             </button>
           </div>
         )}
@@ -401,14 +404,14 @@ export default function EntityDetailPage() {
          concept/instance extraction — not missing data — so it must say so
          explicitly rather than silently disappear, which reads as broken. */}
       <div className="bg-white border rounded-xl p-6">
-        <h3 className="font-semibold mb-4">实例数据（{instances.length}）</h3>
+        <h3 className="font-semibold mb-4">{t('entityDetail.instances_title', { count: instances.length })}</h3>
         {instances.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">名称</th>
-                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">属性</th>
+                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">{t('detailPage.name')}</th>
+                  <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">{t('entityDetail.attributes_col')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -431,7 +434,7 @@ export default function EntityDetailPage() {
             </table>
           </div>
         ) : (
-          <p className="text-sm text-gray-400">暂无实例数据 — 源文档中未提及该概念的具体命名对象</p>
+          <p className="text-sm text-gray-400">{t('entityDetail.no_instances')}</p>
         )}
       </div>
 
@@ -439,12 +442,12 @@ export default function EntityDetailPage() {
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="font-semibold">关联实体（图关系）</h3>
-            <p className="text-xs text-gray-400 mt-0.5">编辑后同步至知识图谱</p>
+            <h3 className="font-semibold">{t('entityDetail.related_entities_title')}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{t('entityDetail.sync_to_graph_hint')}</p>
           </div>
           <button onClick={() => setGraphEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${graphEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {graphEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {graphEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
 
@@ -452,7 +455,7 @@ export default function EntityDetailPage() {
           {/* Incoming edges (read-only — other entities point here, edit from their side) */}
           {incomingEdges.length > 0 && (
             <div>
-              <p className="text-xs text-gray-500 mb-2">上游（其他实体指向此实体，在源实体页编辑）</p>
+              <p className="text-xs text-gray-500 mb-2">{t('entityDetail.upstream_label')}</p>
               <div className="flex flex-wrap gap-2">
                 {incomingEdges.map(e => (
                   <Link key={e.data.id} to={`/ontologies/${oid}/entities/${e.data.source}`}
@@ -466,9 +469,9 @@ export default function EntityDetailPage() {
 
           {/* Outgoing edges — editable */}
           <div>
-            <p className="text-xs text-gray-500 mb-2">下游（此实体指向其他实体）</p>
+            <p className="text-xs text-gray-500 mb-2">{t('entityDetail.downstream_label')}</p>
             {outgoingEdges.length === 0 && !graphEditing && (
-              <p className="text-sm text-gray-400">暂无下游关系</p>
+              <p className="text-sm text-gray-400">{t('entityDetail.no_downstream')}</p>
             )}
             <div className="flex flex-wrap gap-2">
               {outgoingEdges.map(e => (
@@ -495,15 +498,15 @@ export default function EntityDetailPage() {
               <div className="flex items-center gap-2 mt-3 pt-3 border-t">
                 <select value={newRelTarget} onChange={e => setNewRelTarget(e.target.value)}
                   className="flex-1 border rounded-lg px-2 py-1.5 text-xs">
-                  <option value="">— 选择目标实体 —</option>
+                  <option value="">{t('entityDetail.select_target_entity')}</option>
                   {nodes.filter(n => n.data.id !== eid).map(n => (
                     <option key={n.data.id} value={n.data.id}>{n.data.label}</option>
                   ))}
                 </select>
                 <select value={newRelType} onChange={e => setNewRelType(e.target.value)}
                   className="border rounded-lg px-2 py-1.5 text-xs w-36">
-                  {['关联','IS-A','PART-OF','INSTANCE-OF','supply','stores','processes'].map(t => (
-                    <option key={t} value={t}>{t}</option>
+                  {['关联','IS-A','PART-OF','INSTANCE-OF','supply','stores','processes'].map(rt => (
+                    <option key={rt} value={rt}>{rt}</option>
                   ))}
                 </select>
                 <button
@@ -514,14 +517,14 @@ export default function EntityDetailPage() {
                     setNewRelTarget('')
                   }}
                   className="flex items-center gap-1 px-2.5 py-1.5 bg-black text-white rounded-lg text-xs disabled:opacity-40">
-                  <Plus size={12} /> 添加
+                  <Plus size={12} /> {t('detailPage.add')}
                 </button>
               </div>
             )}
           </div>
 
           {incomingEdges.length === 0 && outgoingEdges.length === 0 && !graphEditing && (
-            <p className="text-sm text-gray-400">暂无关联实体</p>
+            <p className="text-sm text-gray-400">{t('entityDetail.no_related_entities')}</p>
           )}
         </div>
       </div>
@@ -529,10 +532,10 @@ export default function EntityDetailPage() {
       {/* Related Logic Rules — inline link management */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">关联逻辑规则</h3>
+          <h3 className="font-semibold">{t('entityDetail.related_logic_title')}</h3>
           <button onClick={() => setLogicLinkEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${logicLinkEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {logicLinkEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {logicLinkEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
         <ChipEditor
@@ -548,10 +551,10 @@ export default function EntityDetailPage() {
       {/* Related Actions — inline link management */}
       <div className="bg-white border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">关联动作</h3>
+          <h3 className="font-semibold">{t('entityDetail.related_actions_title')}</h3>
           <button onClick={() => setActionLinkEditing(v => !v)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border ${actionLinkEditing ? 'bg-black text-white border-black' : 'text-gray-500 hover:bg-gray-50'}`}>
-            {actionLinkEditing ? <><Check size={11} /> 完成</> : <><Pencil size={11} /> 编辑</>}
+            {actionLinkEditing ? <><Check size={11} /> {t('detailPage.done')}</> : <><Pencil size={11} /> {t('common.edit')}</>}
           </button>
         </div>
         <ChipEditor
@@ -568,11 +571,11 @@ export default function EntityDetailPage() {
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 w-80">
-            <h3 className="font-semibold mb-2">确认删除</h3>
-            <p className="text-sm text-gray-600 mb-4">确定要删除实体「{entity.name_cn}」吗？此操作不可撤销。</p>
+            <h3 className="font-semibold mb-2">{t('common.confirm_delete')}</h3>
+            <p className="text-sm text-gray-600 mb-4">{t('entities.delete_confirm', { name: entity.name_cn })}</p>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 border rounded-lg text-sm">取消</button>
-              <button onClick={() => deleteMut.mutate()} className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm">删除</button>
+              <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 border rounded-lg text-sm">{t('common.cancel')}</button>
+              <button onClick={() => deleteMut.mutate()} className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm">{t('common.delete')}</button>
             </div>
           </div>
         </div>

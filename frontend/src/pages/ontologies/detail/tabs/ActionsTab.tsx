@@ -48,7 +48,7 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
         <button onClick={() => publishMut.mutate()} disabled={publishMut.isPending}
           className="flex items-center gap-1.5 px-3 py-2 bg-green-700 text-white rounded-lg text-sm disabled:opacity-50">
           {publishMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
-          发布全部
+          {t('actions.publish_all')}
         </button>
         <button onClick={() => { setShowCreate(true); reset() }}
           className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-lg text-sm">
@@ -61,13 +61,13 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
             <table className="w-full text-sm min-w-max">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">名称</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">规则</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">描述</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">关联实体</th>
-                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">状态</th>
-                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">启用</th>
-                    <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">操作</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('actions.col_name')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('actions.col_rule')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('actions.col_desc')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('actions.col_linked_entities')}</th>
+                  <th className="px-4 py-3 text-left text-gray-500 text-xs font-medium">{t('actions.col_status')}</th>
+                  <th className="px-4 py-3 text-center text-gray-500 text-xs font-medium">{t('actions.col_enabled')}</th>
+                    <th className="px-4 py-3 text-right text-gray-500 text-xs font-medium sticky right-0 bg-gray-50 z-10 border-l border-gray-200">{t('actions.col_actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -127,11 +127,11 @@ export default function ActionsTab({ ontologyId }: { ontologyId: string }) {
               <input {...register('name_cn', { required: true })} placeholder={t('entities.ph_name_cn')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input {...register('name_en')} placeholder={t('entities.ph_name_en')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <textarea {...register('description')} placeholder={t('entities.ph_desc')} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm resize-none" />
-              <p className="text-xs text-gray-400">参数 / 规则 / 提交条件 / 副作用可在创建后进入详情页编辑</p>
+              <p className="text-xs text-gray-400">{t('actions.create_hint')}</p>
               <input {...register('confidence', { valueAsNumber: true })} type="number" step="0.01" min="0" max="1" placeholder={t('entities.ph_confidence')} className="w-full border rounded-lg px-3 py-2 text-sm" />
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={() => { setShowCreate(false); reset() }} className="px-4 py-2 border rounded-lg text-sm">取消</button>
-                <button type="submit" className="px-4 py-2 bg-black text-white rounded-lg text-sm">保存</button>
+                <button type="button" onClick={() => { setShowCreate(false); reset() }} className="px-4 py-2 border rounded-lg text-sm">{t('common.cancel')}</button>
+                <button type="submit" className="px-4 py-2 bg-black text-white rounded-lg text-sm">{t('common.save')}</button>
               </div>
             </form>
           </div>

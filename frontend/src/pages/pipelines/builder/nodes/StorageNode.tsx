@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { HardDrive, Loader2, CheckCircle, XCircle } from 'lucide-react'
 
@@ -9,7 +10,8 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 }
 
 function StorageNode({ data, selected }: NodeProps) {
-  const label = (data.label as string) || '存储器'
+  const { t } = useTranslation()
+  const label = (data.label as string) || t('pipelineBuilder.node_storage')
   const status = (data.status as string) || 'idle'
 
   return (
@@ -31,7 +33,7 @@ function StorageNode({ data, selected }: NodeProps) {
         <HardDrive size={13} className="text-emerald-500" />
         <span className="font-medium text-emerald-700">{label}</span>
       </div>
-      <p className="text-gray-400 mt-0.5">存储器</p>
+      <p className="text-gray-400 mt-0.5">{t('pipelineBuilder.node_storage')}</p>
     </div>
   )
 }

@@ -60,7 +60,7 @@ function nodeColor(labels: string[]): string {
 
 export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
 
@@ -324,16 +324,16 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       }
     } catch (err: unknown) {
       const e = err as { detail?: unknown; message?: unknown }
-      setQueryResult([{ error: e?.detail || e?.message || '查询失败' }])
+      setQueryResult([{ error: e?.detail || e?.message || t('graphV2.query_failed') }])
     } finally {
       setQueryLoading(false)
     }
   }
 
-  if (loading) return <div className="text-gray-400 text-sm py-8 text-center">加载中...</div>
+  if (loading) return <div className="text-gray-400 text-sm py-8 text-center">{t('graphV2.loading')}</div>
 
   const neo4jOk = graphData?.neo4j_available
-  const graphSource = neo4jOk ? 'Neo4j 已连接' : graphData?.fallback === 'sqlite' ? 'SQLite 图谱' : 'Neo4j 未连接'
+  const graphSource = neo4jOk ? t('graphV2.neo4j_connected') : graphData?.fallback === 'sqlite' ? t('graphV2.sqlite_graph') : t('graphV2.neo4j_disconnected')
   const graphSourceOk = Boolean(neo4jOk || graphData?.fallback === 'sqlite')
   const nodes = graphData?.nodes ?? []
   const edges = graphData?.edges ?? []
@@ -365,22 +365,22 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
           <span className={`w-1.5 h-1.5 rounded-full ${graphSourceOk ? 'bg-green-500' : 'bg-gray-300'}`} />
           {graphSource}
         </span>
-        <span>节点 {nodes.length}</span>
-        <span>边 {edges.length}</span>
+        <span>{t('graphV2.nodes_count', { count: nodes.length })}</span>
+        <span>{t('graphV2.edges_count', { count: edges.length })}</span>
         {quality && (
           <>
             <span className={`px-2 py-1 rounded-full border ${quality.quality_score >= 0.8 ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-              图质量 {(quality.quality_score * 100).toFixed(0)}%
+              {t('graphV2.quality_score', { pct: (quality.quality_score * 100).toFixed(0) })}
             </span>
-            <span>重复名 {quality.duplicate_display_name_count}</span>
-            <span>孤立 {quality.isolated_node_count}</span>
-            <span>孤儿关系 {quality.orphan_relation_count}</span>
+            <span>{t('graphV2.duplicate_names', { count: quality.duplicate_display_name_count })}</span>
+            <span>{t('graphV2.isolated_nodes', { count: quality.isolated_node_count })}</span>
+            <span>{t('graphV2.orphan_relations', { count: quality.orphan_relation_count })}</span>
           </>
         )}
         {integrations && (
           <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${integrations.chroma.available ? 'border-green-200 bg-green-50 text-green-700' : 'border-gray-200 bg-gray-50'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${integrations.chroma.available ? 'bg-green-500' : 'bg-gray-300'}`} />
-            {integrations.chroma.available ? `Chroma ${integrations.chroma.entity_count}` : 'Chroma 未连接'}
+            {integrations.chroma.available ? t('graphV2.chroma_connected', { count: integrations.chroma.entity_count }) : t('graphV2.chroma_disconnected')}
           </span>
         )}
         {isolatedCount > 0 && (
@@ -388,7 +388,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
             onClick={() => setHideIsolated(h => !h)}
             className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors"
           >
-            {hideIsolated ? `显示 ${isolatedCount} 个孤立节点` : `隐藏 ${isolatedCount} 个孤立节点`}
+            {hideIsolated ? t('graphV2.show_isolated', { count: isolatedCount }) : t('graphV2.hide_isolated', { count: isolatedCount })}
           </button>
         )}
       </div>
@@ -411,7 +411,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       ) : (
         <div className="border rounded-xl bg-gray-50 h-64 flex items-center justify-center">
           <p className="text-sm text-gray-400">
-            {graphSourceOk ? '该本体暂无图谱数据' : '启动 Neo4j 服务后图谱将在此显示'}
+            {graphSourceOk ? t('graphV2.no_graph_data') : t('graphV2.start_neo4j_hint')}
           </p>
         </div>
       )}
@@ -429,12 +429,12 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
                     queryMode === m ? 'bg-black text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                   }`}
                 >
-                  {m === 'natural' ? '自然语言' : 'Cypher'}
+                  {m === 'natural' ? t('graphV2.mode_natural') : 'Cypher'}
                 </button>
               ))}
             </div>
             <span className="text-xs text-gray-400">
-              {queryMode === 'natural' ? '用中文提问，自动转为图查询' : '直接输入 Cypher 语句'}
+              {queryMode === 'natural' ? t('graphV2.mode_natural_hint') : t('graphV2.mode_cypher_hint')}
             </span>
           </div>
 
@@ -444,8 +444,8 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleQuery()}
               placeholder={queryMode === 'natural'
-                ? '例: 华为的供应链上下游有哪些？'
-                : 'MATCH (n) WHERE n.ontology_id = $ontology_id RETURN n LIMIT 10'}
+                ? t('graphV2.ph_natural_example')
+                : t('graphV2.ph_cypher_example')}
               className={`flex-1 border rounded-lg px-3 py-2 text-sm ${queryMode === 'cypher' ? 'font-mono' : ''}`}
             />
             <button
@@ -454,7 +454,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
               className="px-3 py-2 bg-black text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1.5"
             >
               {queryLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-              <span className="text-sm">查询</span>
+              <span className="text-sm">{t('graphV2.query')}</span>
             </button>
           </div>
 
@@ -469,7 +469,7 @@ export default function GraphTabV2({ ontologyId }: { ontologyId: string }) {
       {/* 语义搜索 */}
       {neo4jOk && (
         <div className="bg-white border rounded-xl p-4">
-          <p className="text-xs font-medium text-gray-600 mb-3">语义搜索</p>
+          <p className="text-xs font-medium text-gray-600 mb-3">{t('graphV2.semantic_search')}</p>
           <OntologySearchBox ontologyId={ontologyId} />
         </div>
       )}
