@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user, require_editor
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
+from app.services.publication.legacy_sync import delete_logic_rule_mirror, sync_logic_rule_to_v2
 from app.models.logic import LogicRule
 from app.schemas.logic import LogicRuleCreate, LogicRuleUpdate, LogicRuleOut
 import uuid
@@ -20,6 +21,10 @@ def create_logic(ontology_id: str, body: LogicRuleCreate, db: Session = Depends(
         data = {k: v for k, v in body.model_dump().items() if v is not None}
         r = LogicRule(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
         db.add(r); db.flush()
+        # mirror into v2_ontology_logic_rules: publication and the Agent tool
+        # catalog read only the v2 table, never this one (see legacy_sync.py)
+        sync_logic_rule_to_v2(db, ontology_id, r)
+        db.flush()
         return {"data": LogicRuleOut.model_validate(r).model_dump()}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="logic.create", callback=_write)
 
@@ -39,6 +44,8 @@ def update_logic(ontology_id: str, logic_id: str, body: LogicRuleUpdate, db: Ses
         for k, v in body.model_dump(exclude_none=True).items():
             setattr(r, k, v)
         db.flush()
+        sync_logic_rule_to_v2(db, ontology_id, r)
+        db.flush()
         return {"data": LogicRuleOut.model_validate(r).model_dump()}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="logic.update", callback=_write)
 
@@ -48,6 +55,7 @@ def delete_logic(ontology_id: str, logic_id: str, db: Session = Depends(get_db),
     if not r:
         raise HTTPException(404, "Not found")
     def _write():
+        delete_logic_rule_mirror(db, ontology_id, r)
         db.delete(r); db.flush()
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="logic.delete", callback=_write)
 
@@ -60,18 +68,8 @@ def toggle_logic(ontology_id: str, logic_id: str, db: Session = Depends(get_db),
         raise HTTPException(404, "Not found")
     def _write():
         r.enabled = not getattr(r, 'enabled', True)
-        try:
-            from app.models.v2.logic import OntologyLogicRule
-            v2 = db.query(OntologyLogicRule).filter(
-                OntologyLogicRule.ontology_id == ontology_id,
-                OntologyLogicRule.name == r.name_cn,
-            ).first()
-            if v2:
-                v2.enabled = r.enabled
-                if not r.enabled and v2.status != "published":
-                    v2.status = "disabled"
-        except Exception:
-            pass
+        sync_logic_rule_to_v2(db, ontology_id, r)
+        db.flush()
         return {"enabled": r.enabled}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="logic.toggle", callback=_write)
 

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user, require_editor
 from app.models.user import User
 from app.services.publication.working_copy import OntologyWorkingCopyService
+from app.services.publication.legacy_sync import delete_action_mirror, sync_action_to_v2
 from app.models.action import Action
 from app.schemas.action import ActionCreate, ActionUpdate, ActionOut
 import uuid
@@ -20,6 +21,10 @@ def create_action(ontology_id: str, body: ActionCreate, db: Session = Depends(ge
         data = {k: v for k, v in body.model_dump().items() if v is not None}
         a = Action(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
         db.add(a); db.flush()
+        # mirror into v2_ontology_action_types: publication and the Agent tool
+        # catalog read only the v2 table, never this one (see legacy_sync.py)
+        sync_action_to_v2(db, ontology_id, a)
+        db.flush()
         return {"data": ActionOut.model_validate(a).model_dump()}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="action.create", callback=_write)
 
@@ -39,6 +44,8 @@ def update_action(ontology_id: str, action_id: str, body: ActionUpdate, db: Sess
         for k, v in body.model_dump(exclude_none=True).items():
             setattr(a, k, v)
         db.flush()
+        sync_action_to_v2(db, ontology_id, a)
+        db.flush()
         return {"data": ActionOut.model_validate(a).model_dump()}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="action.update", callback=_write)
 
@@ -48,6 +55,7 @@ def delete_action(ontology_id: str, action_id: str, db: Session = Depends(get_db
     if not a:
         raise HTTPException(404, "Not found")
     def _write():
+        delete_action_mirror(db, ontology_id, a)
         db.delete(a); db.flush()
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="action.delete", callback=_write)
 
@@ -59,18 +67,8 @@ def toggle_action(ontology_id: str, action_id: str, db: Session = Depends(get_db
         raise HTTPException(404, "Not found")
     def _write():
         a.enabled = not getattr(a, 'enabled', True)
-        try:
-            from app.models.v2.action import OntologyActionType
-            v2 = db.query(OntologyActionType).filter(
-                OntologyActionType.ontology_id == ontology_id,
-                OntologyActionType.name == a.name_cn,
-            ).first()
-            if v2:
-                v2.enabled = a.enabled
-                if not a.enabled and v2.status != "published":
-                    v2.status = "disabled"
-        except Exception:
-            pass
+        sync_action_to_v2(db, ontology_id, a)
+        db.flush()
         return {"enabled": a.enabled}
     return OntologyWorkingCopyService.mutate(db, ontology_id=ontology_id, actor_id=current_user.id, operation="action.toggle", callback=_write)
 
