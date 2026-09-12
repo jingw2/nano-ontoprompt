@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -309,12 +310,24 @@ def test_runtime_tools_route_through_runtime_service_and_ignore_identity_argumen
             "UPDATE ontology_projects SET latest_published_release_id = :rid WHERE id = :oid"
         ), {"rid": release_id, "oid": ontology_id})
         snapshot_id = str(uuid.uuid4())
+        # Task 20 freshness gate: a snapshot with no governed refresh
+        # context defaults to freshness_state='unknown' and is denied
+        # outright by the Runtime freshness gate (see tests/runtime/
+        # test_runtime_api.py) — this e2e test exercises the ALLOW path,
+        # so the snapshot must carry real (fresh) freshness pins.
+        source_cursor = json.dumps({
+            "source_id": "e2e-runtime-source", "resource": "default",
+            "contract": "watermark_primary_key", "watermark": None, "primary_key": "1",
+            "opaque_value": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        })
         session.execute(text(
             "INSERT INTO semantic_snapshots (id, ontology_release_id, quality_summary, evidence_summary, "
-            "materialization_hash, status, created_by, created_at) "
-            "VALUES (:id, :rid, :quality, :evidence, :mhash, 'materialized', :uid, now())"
+            "materialization_hash, status, freshness_state, freshness_lag_seconds, source_cursor, "
+            "created_by, created_at) "
+            "VALUES (:id, :rid, :quality, :evidence, :mhash, 'materialized', 'fresh', 60, "
+            "CAST(:cursor AS json), :uid, now())"
         ), {"id": snapshot_id, "rid": release_id, "quality": '{"row_count": 0}', "evidence": '{"citations": []}',
-            "mhash": "a" * 64, "uid": admin_id})
+            "mhash": "a" * 64, "cursor": source_cursor, "uid": admin_id})
         session.execute(text(
             "INSERT INTO ontology_data_grants (id, ontology_id, user_id, capabilities, status, created_at, revision, created_by) "
             "VALUES (:id, :o, :u, :cap, 'active', now(), 1, :created_by)"
